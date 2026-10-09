@@ -32,7 +32,7 @@ Windows 托盘程序，专门接收 Claude Code 会话发给你的东西：
 
 ### 自动更新
 
-和 [agent-management](https://github.com/tsljgj/agent-management) 一样：CI 每次在 `main` 或 `claude/*` 分支上构建通过，就发布一个 `build-<N>` release（附 `ClaudeDesk.exe` 和 `.sha256`）。程序启动约 45 秒后检查一次，之后每 6 小时一次；发现新版本就下载、校验 SHA-256，然后把自己改名为 `ClaudeDesk.exe.old`（Windows 允许给运行中的 exe 改名），新文件放到原位置并启动，旧进程退出。
+和 [agent-management](https://github.com/tsljgj/agent-management) 一样：CI 每次在 `main` 上构建通过，就发布一个 `build-<N>` release（附 `ClaudeDesk.exe` 和 `.sha256`）。程序启动约 45 秒后检查一次，之后每 6 小时一次；发现新版本就下载、校验 SHA-256，然后把自己改名为 `ClaudeDesk.exe.old`（Windows 允许给运行中的 exe 改名），新文件放到原位置并启动，旧进程退出。
 
 - 窗口开着时不会打断你：等你把窗口关回托盘再装；左下角会出现"更新到 build N"，点一下立刻更新。
 - 设置（左上角的滑块图标）或托盘菜单里可以关掉"自动更新"，也可以手动"检查更新"。

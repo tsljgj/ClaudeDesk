@@ -30,7 +30,7 @@ Windows 10/11 (Edge WebView2 is built in).
 
 Upgrading from 1.x: quit the old app from the tray, drop the new `ClaudeDesk.exe` into the old folder; `data\` carries over and the old `_internal\` folder can go.
 
-**Self-update** works like [agent-management](https://github.com/tsljgj/agent-management): every green CI build on `main` or `claude/*` is published as a `build-<N>` release with `ClaudeDesk.exe` and its `.sha256`. The app checks ~45 s after start and then every 6 hours, downloads and verifies the new exe, renames itself to `ClaudeDesk.exe.old` (Windows allows renaming a running exe), puts the new one in place, starts it and exits. It never restarts under you while the window is open: it waits until you close it to the tray, or you click "更新到 build N" in the bottom-left corner. The bundled `desk.py` is refreshed at the same time. Turn it off under Settings or in the tray menu.
+**Self-update** works like [agent-management](https://github.com/tsljgj/agent-management): every green CI build on `main` is published as a `build-<N>` release with `ClaudeDesk.exe` and its `.sha256`. The app checks ~45 s after start and then every 6 hours, downloads and verifies the new exe, renames itself to `ClaudeDesk.exe.old` (Windows allows renaming a running exe), puts the new one in place, starts it and exits. It never restarts under you while the window is open: it waits until you close it to the tray, or you click "更新到 build N" in the bottom-left corner. The bundled `desk.py` is refreshed at the same time. Turn it off under Settings or in the tray menu.
 
 ## Using it
 
