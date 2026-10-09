@@ -1,7 +1,8 @@
 name: build
 
-# Every green push to main or a claude/* branch is published as a GitHub release tagged
-# build-<run_number>; installed ClaudeDesk.exe copies pick it up through the self-updater.
+# Every green push to main is published as a GitHub release tagged build-<run_number>;
+# installed ClaudeDesk.exe copies pick it up through the self-updater. Other branches
+# (claude/*, pull requests) are built and tested only.
 on:
   push:
     branches: ["main", "claude/**"]
@@ -155,7 +156,7 @@ jobs:
             dist/ClaudeDesk.exe.sha256
 
       - name: Publish release (auto-update channel)
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/claude/'))
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
