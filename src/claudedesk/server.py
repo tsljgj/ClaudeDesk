@@ -84,7 +84,7 @@ class DeskServer:
     def snapshot(self) -> dict:
         st = self.store
         with st.lock:
-            return {"version": st.version, "messages": st.summaries(), "counts": st.counts(),
+            return {"version": st.version, "messages": st.summaries(), "counts": st.counts(), "aliases": dict(st.aliases),
                     "settings": self.settings(), "meta": self.meta}
 
     def action(self, body: dict):
@@ -97,6 +97,8 @@ class DeskServer:
             return st.mark_all_read(body.get("project") or None)
         if name == "archive":
             return st.archive(ids, bool(body.get("on", True)))
+        if name == "alias":
+            return st.set_alias(str(body.get("from") or ""), body.get("to"))
         if name == "resolve":
             return st.resolve(ids)
         if name == "archive_handled":

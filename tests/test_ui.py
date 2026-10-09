@@ -228,35 +228,50 @@ def test_hover_actions_and_checkbox_bulk(env):
 
 def test_projects_are_separated(env):
     d, store, server, page, errors = env
-    a = post(d, kind="decision", source="osworld", title="OS 决定", options=["A"])
-    b = post(d, kind="answer", source="osworld/eval", title="OS 回答")
-    c = post(d, kind="answer", source="cn-equity-research", title="A 股回答")
+    mk = lambda kind, source, title, repo=None, **kw: desk.post_message(  # noqa: E731
+        desk.make_message(kind, source, title, repo=repo, **kw), d)
+    a = mk("decision", "run-3", "OS 决定", repo="osworld", options=["A"])
+    b = mk("answer", "osworld/eval", "OS 旧回答")  # 旧消息：来源能对上 osworld
+    c = mk("answer", "x", "A 股回答", repo="cn-equity-research")
+    o = mk("info", "数据清洗", "没认出来的")  # 旧消息：对不上任何仓库 -> 其他
     store.poll()
     page.goto(server.url)
     page.click('[data-view="all"]')
-    page.wait_for_selector(".pchip")
-    # 全部项目：按项目分组，同一项目的消息挨在一起
-    assert page.locator(".group-label .gname").all_inner_texts() == ["osworld", "cn-equity-research"]
+    page.wait_for_selector(".ptab")
+    names = [t.split("\n")[0] for t in page.locator(".ptab .pname").all_inner_texts()]
+    assert names == ["全部", "osworld", "cn-equity-research", "其他"]
+    # 全部：按项目分组，同一项目挨在一起；对不上的在最后、标着"未识别"
+    assert page.locator(".group-label .gname").all_inner_texts() == ["osworld", "cn-equity-research", "数据清洗"]
     order = page.evaluate("deskTest.S.visible")
-    assert order.index(c) == 2 and set(order[:2]) == {a, b}
-    # 只看一个项目：列表和视图计数都跟着变
-    page.click('.pchip[data-project="cn-equity-research"]')
+    assert set(order[:2]) == {a, b} and order[2:] == [c, o]
+    assert page.locator(".group-label.other .gtag").count() == 1
+    # 点标签：只看它；视图计数跟着变；再点一次取消
+    page.click('.ptab[data-project="cn-equity-research"]')
     page.wait_for_function("() => document.querySelectorAll('.item').length === 1")
-    assert page.locator(".item").get_attribute("data-id") == c
+    assert page.inner_text('.tab[data-view="decide"]').strip() == "决定"
     assert page.locator(".group-label").count() == 0
-    assert page.inner_text('.tab[data-view="decide"]').strip() == "决定"  # 这个项目没有待决定
-    # 列表菜单"全部标为已读"只动这个项目
+    page.click('.ptab[data-project="cn-equity-research"]')
+    page.wait_for_function("() => document.querySelectorAll('.item').length === 4")
+    # Ctrl + 点：同时看两个
+    page.click('.ptab[data-project="cn-equity-research"]')
+    page.click('.ptab[data-project="__other__"]', modifiers=["Control"])
+    page.wait_for_function("() => document.querySelectorAll('.item').length === 2")
+    assert page.locator(".ptab.on").count() == 2
+    # 列表菜单"全部标为已读"只动选中的项目
     page.click("#listMenuBtn")
     page.click('[data-l="read_all"]')
     page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{c}\"].unread')")
-    assert store.is_unread(store.msgs[a]) and not store.is_unread(store.msgs[c])
-    # 点组标题 = 只看那个项目；[ ] 切换
-    page.click('.pchip[data-project=""]')
-    page.click('.group-label[data-project="osworld"]')
-    page.wait_for_function("() => document.querySelectorAll('.item').length === 2")
+    assert store.is_unread(store.msgs[a]) and not store.is_unread(store.msgs[o])
+    # 把"未识别"的来源归到 osworld
+    page.click('.ptab[data-project=""]')
+    page.locator('.group-label.other .gmerge').click()
+    page.click('.popover [data-to="osworld"]')
+    page.wait_for_function("() => !document.querySelector('.ptab[data-project=\"__other__\"]')")
+    assert store.aliases == {"数据清洗": "osworld"}
+    assert store.summary(store.msgs[o])["project"] == "osworld"
+    # [ ] 切换；从通知打开别的项目的消息：自动切过去
     page.keyboard.press("]")
-    page.wait_for_function("() => deskTest.S.project === 'cn-equity-research'")
-    # 从通知打开别的项目的消息：自动切过去
-    page.evaluate(f"deskOpen('{a}')")
-    page.wait_for_function("() => deskTest.S.project === 'osworld'")
+    page.wait_for_function("() => deskTest.S.projects.size === 1")
+    page.evaluate(f"deskOpen('{c}')")
+    page.wait_for_function("() => deskTest.S.projects.has('cn-equity-research')")
     assert errors == []

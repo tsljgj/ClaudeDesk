@@ -58,11 +58,12 @@
 
   var S = {
     version: -1, msgs: [], byId: {}, counts: {}, settings: BOOT.settings || {}, meta: {},
-    view: load("view", "decide"), project: load("project", ""), query: "", searchIds: null,
+    view: load("view", "decide"), projects: loadSet("projects"), query: "", searchIds: null,
     current: null, multi: new Set(), anchor: null, choice: null,
     details: {}, shownKey: null, visible: [],
   };
 
+  function loadSet(k) { try { var v = JSON.parse(load(k, "[]")); return new Set(Array.isArray(v) ? v : []); } catch (e) { return new Set(); } }
   function load(k, d) { try { var v = localStorage.getItem("desk." + k); return v == null ? d : v; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem("desk." + k, v); } catch (e) { /* 隐私模式等 */ } }
 
@@ -109,6 +110,7 @@
     S.msgs.forEach(function (m) { S.byId[m.id] = m; });
     S.counts = st.counts || {};
     S.meta = st.meta || {};
+    S.aliases = st.aliases || {};
     if (st.settings) applySettings(st.settings);
     S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
     if (S.current && !S.byId[S.current]) S.current = null;
@@ -130,22 +132,43 @@
     if (v === "answer") return m.kind === "answer";
     return true;
   }
-  // ---- 项目（repo）：source 里第一个 / 之前的部分
+  // ---- 项目（仓库）。项目名由服务端给：desk.py 发消息时识别出的 git 仓库；旧消息按来源对到已知仓库，
+  // 对不上的归"其他"（project_kind = other），可以右键"归到项目"。
+  var OTHER = "__other__";
   // 项目颜色：避开橙 / 红（界面里橙色表示"要你处理"）
-  var PCOLORS = ["#1C7ED6", "#2F9E44", "#9C36B5", "#0C8599", "#5F3DC4", "#C2255C", "#66A80F", "#1864AB", "#087F5B", "#862E9C"];
-  function projectOf(m) { return m.project || String(m.source || "unknown").split("/")[0] || "unknown"; }
+  var PCOLORS = ["#1C7ED6", "#2F9E44", "#9C36B5", "#0C8599", "#C2255C", "#5F3DC4", "#66A80F", "#495057"];
+  var pcolorMap = (function () { try { return JSON.parse(load("pcolors", "{}")) || {}; } catch (e) { return {}; } })();
+  function projectOf(m) { return m.project || "unknown"; }
+  function tabKey(m) { return m.project_kind === "other" ? OTHER : projectOf(m); }
   function pcolor(name) {
-    var h = 0;
-    for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-    return PCOLORS[h % PCOLORS.length];
+    if (name === OTHER) return "var(--ink-4)";
+    if (!(name in pcolorMap)) { // 新项目：给第一个还没人用的颜色，记下来，以后不变
+      var used = {};
+      Object.keys(pcolorMap).forEach(function (k) { used[pcolorMap[k]] = 1; });
+      var i = 0;
+      while (i < PCOLORS.length && used[i]) i++;
+      if (i === PCOLORS.length) { // 都用过了：按名字散列
+        i = 0;
+        for (var j = 0; j < name.length; j++) i = (i * 31 + name.charCodeAt(j)) >>> 0;
+        i %= PCOLORS.length;
+      }
+      pcolorMap[name] = i;
+      save("pcolors", JSON.stringify(pcolorMap));
+    }
+    return PCOLORS[pcolorMap[name]];
   }
-  function inScope(m) { return !S.project || projectOf(m) === S.project; }
-  // 所有项目：有待决定的排前面，其余按最近一条消息的时间
+  function inScope(m) { return !S.projects.size || S.projects.has(tabKey(m)); }
+  function onlyProject() { // 只选了一个真正的仓库时返回它的名字
+    if (S.projects.size !== 1) return "";
+    var k = S.projects.values().next().value;
+    return k === OTHER ? "" : k;
+  }
+  // 标签：仓库按"有待决定的在前，再按最近一条消息"排，"其他"永远在最后
   function projectList() {
     var map = {};
     S.msgs.forEach(function (m) {
-      var p = projectOf(m);
-      var e = map[p] || (map[p] = { name: p, open: 0, unread: 0, last: "", total: 0 });
+      var k = tabKey(m);
+      var e = map[k] || (map[k] = { key: k, name: k === OTHER ? "其他" : k, open: 0, unread: 0, last: "", total: 0 });
       if (m.ts > e.last) e.last = m.ts;
       if (m.archived) return;
       e.total++;
@@ -153,18 +176,33 @@
       if (m.unread) e.unread++;
     });
     return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
-      return (b.open > 0) - (a.open > 0) || (b.last > a.last ? 1 : b.last < a.last ? -1 : 0);
+      return (a.key === OTHER) - (b.key === OTHER) || (b.open > 0) - (a.open > 0) ||
+        (b.last > a.last ? 1 : b.last < a.last ? -1 : 0);
     });
   }
-  function grouped() { return !S.project && projectList().length > 1; }
+  function groupOrder() { // 分组顺序：仓库按标签顺序，"其他"里的各来源按最近时间
+    var order = {}, n = 0, others = {};
+    projectList().forEach(function (p) { if (p.key !== OTHER) order[p.key] = n++; });
+    S.msgs.forEach(function (m) {
+      if (m.project_kind === "other" && (!others[projectOf(m)] || m.ts > others[projectOf(m)])) others[projectOf(m)] = m.ts;
+    });
+    Object.keys(others).sort(function (a, b) { return others[b] > others[a] ? 1 : -1; })
+      .forEach(function (k) { if (!(k in order)) order[k] = n++; });
+    return order;
+  }
+  function grouped() {
+    if (onlyProject()) return false;
+    var seen = {}, n = 0;
+    S.msgs.forEach(function (m) { if (inScope(m) && !seen[projectOf(m)]) { seen[projectOf(m)] = 1; n++; } });
+    return n > 1;
+  }
 
   function viewItems() {
     var v = S.view;
     var items = S.msgs.filter(function (m) { return inView(m, v) && inScope(m); });
     if (S.searchIds) items = items.filter(function (m) { return S.searchIds.has(m.id); });
     if (grouped()) { // 按项目分组，组内仍按时间倒序（服务端给的顺序）
-      var order = {};
-      projectList().forEach(function (p, i) { order[p.name] = i; });
+      var order = groupOrder();
       items = items.map(function (m, i) { return [m, i]; }).sort(function (a, b) {
         return order[projectOf(a[0])] - order[projectOf(b[0])] || a[1] - b[1];
       }).map(function (x) { return x[0]; });
@@ -182,12 +220,25 @@
     return c;
   }
 
-  function setProject(p) {
-    S.project = p || "";
-    save("project", S.project);
+  // 点标签：只看这个；再点一次（它是唯一选中的）= 取消，回到全部。Ctrl / Shift + 点 = 加选 / 减选
+  function clickTab(key, multi) {
+    if (!key) S.projects = new Set();
+    else if (multi) { if (S.projects.has(key)) S.projects.delete(key); else S.projects.add(key); }
+    else if (S.projects.size === 1 && S.projects.has(key)) S.projects = new Set();
+    else S.projects = new Set([key]);
+    applyProjects();
+  }
+  function applyProjects() {
+    save("projects", JSON.stringify(Array.from(S.projects)));
     S.multi.clear();
     if (S.current && S.byId[S.current] && !inScope(S.byId[S.current])) S.current = null;
     renderAll();
+  }
+  function setProject(p) { S.projects = p ? new Set([p]) : new Set(); applyProjects(); } // 测试 / 通知用
+  function scopeLabel() {
+    if (!S.projects.size) return "";
+    if (S.projects.size === 1) { var k = S.projects.values().next().value; return k === OTHER ? "其他" : k; }
+    return S.projects.size + " 个项目";
   }
 
   function dayKey(d) { return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); }
@@ -228,21 +279,51 @@
 
   function renderProjects() {
     var ps = projectList();
-    if (S.project && !ps.some(function (p) { return p.name === S.project; })) { S.project = ""; save("project", ""); }
-    var box = $("projects");
-    box.hidden = ps.length < 2 && !S.project;
-    if (box.hidden) return;
-    var chip = function (name, label, p) {
+    var keys = {};
+    ps.forEach(function (p) { keys[p.key] = 1; });
+    var gone = Array.from(S.projects).filter(function (k) { return !keys[k]; });
+    if (gone.length && S.msgs.length) { gone.forEach(function (k) { S.projects.delete(k); }); save("projects", JSON.stringify(Array.from(S.projects))); }
+    var tab = function (p) {
+      var on = p ? S.projects.has(p.key) : !S.projects.size;
       var badge = p ? (p.open ? '<span class="n hot">' + p.open + "</span>" : p.unread ? '<span class="n">' + p.unread + "</span>" : "") : "";
-      return '<button class="pchip' + (S.project === name ? " on" : "") + '" data-project="' + esc(name) + '" role="tab"' +
-        (p ? ' title="' + esc(name) + (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "") + '"' : "") + ">" +
-        (p ? '<span class="pdot" style="background:' + pcolor(name) + '"></span>' : "") + esc(label) + badge + "</button>";
+      var tip = p ? (p.key === OTHER ? "没认出仓库的消息（旧消息，或不在 git 仓库里发的）。右键分组标题可以归到某个项目" : p.name +
+        (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "")) +
+        "\n点：只看它（再点取消）· Ctrl/Shift + 点：多选 · 右键：归到别的项目" : "所有项目";
+      return '<button class="ptab' + (on ? " on" : "") + (p && p.key === OTHER ? " other" : "") + '" data-project="' + esc(p ? p.key : "") +
+        '" role="tab" aria-selected="' + on + '" title="' + esc(tip) + '">' +
+        (p ? '<span class="pdot" style="background:' + pcolor(p.key) + '"></span>' : "") +
+        '<span class="pname">' + esc(p ? p.name : "全部") + "</span>" + badge + "</button>";
     };
-    box.innerHTML = chip("", "全部项目", null) + ps.map(function (p) { return chip(p.name, p.name, p); }).join("");
-    var on = box.querySelector(".pchip.on");
+    var box = $("projects");
+    box.innerHTML = tab(null) + ps.map(tab).join("");
+    var on = box.querySelector(".ptab.on");
     if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) {
       box.scrollLeft = on.offsetLeft - 8;
     }
+  }
+
+  // 右键标签 / 分组标题：把这个项目（或没认出来的来源）归到另一个项目下
+  function mergeMenu(x, y, from) {
+    var targets = projectList().filter(function (p) { return p.key !== OTHER && p.key !== from; });
+    var undo = Object.keys(S.aliases || {}).filter(function (k) { return S.aliases[k] === from; });
+    var html = '<div class="menu-label">把「' + esc(from) + "」归到：</div>" +
+      (targets.length ? targets.map(function (p) {
+        return '<button class="menu-item" data-to="' + esc(p.key) + '"><span class="pdot" style="background:' + pcolor(p.key) + '"></span>' + esc(p.name) + "</button>";
+      }).join("") : '<div class="menu-label">（还没有别的项目）</div>') +
+      (undo.length ? '<div class="menu-sep"></div>' + undo.map(function (k) {
+        return '<button class="menu-item" data-undo="' + esc(k) + '">' + icon("x") + "把「" + esc(k) + "」拆出来</button>";
+      }).join("") : "");
+    var fake = { getBoundingClientRect: function () { return { left: x, right: x + 1, top: y, bottom: y }; } };
+    openPopover(fake, html, "", function (ev) {
+      var b = ev.target.closest("[data-to],[data-undo]");
+      if (!b) return;
+      closePopover();
+      var body = b.dataset.to ? { action: "alias", from: from, to: b.dataset.to } : { action: "alias", from: b.dataset.undo, to: "" };
+      act(body).then(function () {
+        toast(b.dataset.to ? "已把「" + from + "」归到「" + b.dataset.to + "」" : "已拆出「" + b.dataset.undo + "」");
+        return refreshNow();
+      }).catch(function (e) { toast(e.message, { bad: true }); });
+    });
   }
 
   function renderList() {
@@ -252,17 +333,19 @@
     var list = $("list");
     if (!items.length) {
       list.innerHTML = '<div class="list-empty"><b>' +
-        (S.query ? "没有找到「" + esc(S.query) + "」" : (S.project ? esc(S.project) + "：" : "") + v.empty) + "</b>" +
+        (S.query ? "没有找到「" + esc(S.query) + "」" : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + v.empty) + "</b>" +
         (S.query ? "换个关键词试试" : v.emptySub) + "</div>";
     } else if (grouped()) {
       var html = "", last = null, counts = {};
       items.forEach(function (m) { var p = projectOf(m); counts[p] = (counts[p] || 0) + 1; });
       items.forEach(function (m) {
-        var p = projectOf(m);
+        var p = projectOf(m), other = m.project_kind === "other";
         if (p !== last) {
-          html += '<button class="group-label" data-project="' + esc(p) + '" title="只看 ' + esc(p) + '">' +
-            '<span class="pdot" style="background:' + pcolor(p) + '"></span><span class="gname">' + esc(p) + "</span>" +
-            '<span class="gcount">' + counts[p] + "</span></button>";
+          html += '<div class="group-label' + (other ? " other" : "") + '" data-project="' + esc(p) + '" data-tab="' + esc(tabKey(m)) + '">' +
+            '<span class="pdot" style="background:' + pcolor(other ? OTHER : p) + '"></span>' +
+            '<button class="gname" title="' + (other ? "只看「其他」" : "只看 " + esc(p)) + '">' + esc(p) + "</button>" +
+            '<span class="gcount">' + counts[p] + "</span>" + (other ? '<span class="gtag">未识别</span>' : "") +
+            '<button class="gmerge" title="归到某个项目下">归到…</button></div>';
           last = p;
         }
         html += itemHtml(m);
@@ -279,8 +362,8 @@
     var cls = "item" + (m.unread ? " unread" : "") + (m.open ? " open" : "") +
       (m.id === S.current ? " selected" : "") + (checked ? " multi" : "");
     var hot = m.open || (m.priority === "high" && m.unread);
-    var p = projectOf(m);
-    var src = (S.project || grouped()) ? (m.source === p ? "" : m.source.slice(p.length + 1) || m.source) : m.source;
+    var p = projectOf(m), sl = m.source.toLowerCase(), pl = p.toLowerCase();
+    var src = sl === pl ? "" : sl.indexOf(pl + "/") === 0 ? m.source.slice(p.length + 1) : m.source;
     var st = "";
     if (m.open) st = '<span class="st open">' + (m.priority === "high" ? "紧急 · " : "") + "待决定</span> · ";
     else if (m.kind === "decision" && m.resolved) st = '<span class="st done">✓ 已解决</span> · ';
@@ -755,6 +838,12 @@
         '<button class="menu-item" data-app="check_update">' + icon("refresh") + "检查更新<span class=\"sub\">" + (BOOT.build ? "build " + BOOT.build : "源码运行") + "</span></button>" +
         '<button class="menu-item" data-app="open_data">' + icon("folder") + "打开数据目录</button>";
     }
+    var al = Object.keys(S.aliases || {});
+    if (al.length) {
+      h += '<div class="menu-sep"></div><div class="set-row"><div class="menu-label">项目归类（点 × 拆出来）</div></div>' + al.map(function (k) {
+        return '<button class="menu-item" data-unalias="' + esc(k) + '">' + esc(k) + ' → ' + esc(S.aliases[k]) + '<span class="sub">×</span></button>';
+      }).join("");
+    }
     h += '<button class="menu-item" data-app="shortcuts">' + icon("keyboard") + "快捷键<span class=\"sub\">?</span></button>";
     return h;
   }
@@ -769,6 +858,11 @@
         act({ action: "settings", values: vals }).catch(function () {});
         $("popover").innerHTML = settingsHtml();
         if (S.current) { S.shownKey = null; renderReader(); } // 字号变了，公式重排
+        return;
+      }
+      if (b.dataset.unalias) {
+        act({ action: "alias", from: b.dataset.unalias, to: "" }).then(function () { return refreshNow(); })
+          .then(function () { $("popover").innerHTML = settingsHtml(); });
         return;
       }
       var a = b.dataset.app;
@@ -792,7 +886,7 @@
   function showShortcuts() {
     var rows = [["↑ ↓ / J K", "上一条 / 下一条"], ["1 – 9", "选择第 N 个选项"], ["Ctrl + Enter", "提交回复"],
       ["E", "归档 / 移出归档"], ["Delete", "删除"], ["U", "标为已读 / 未读"], ["R", "标为已解决"], ["X", "勾选当前这条"], ["C", "复制 Markdown"],
-      ["Ctrl + P", "导出 PDF"], ["/", "搜索"], ["[ ]", "切换项目"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"], ["Esc", "取消选择 / 关闭"]];
+      ["Ctrl + P", "导出 PDF"], ["/", "搜索"], ["[ ]", "切换项目（顶部标签）"], ["Ctrl + 点标签", "同时看几个项目"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"], ["Esc", "取消选择 / 关闭"]];
     $("modalTitle").textContent = "快捷键";
     $("modalText").innerHTML = '<span class="kbd-table">' + rows.map(function (r) {
       return "<span>" + r[0].split(" ").map(function (k) { return /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
@@ -808,8 +902,14 @@
   function bind() {
     paintIcons();
     $("projects").addEventListener("click", function (e) {
-      var b = e.target.closest(".pchip");
-      if (b) setProject(b.dataset.project);
+      var b = e.target.closest(".ptab");
+      if (b) clickTab(b.dataset.project, e.ctrlKey || e.metaKey || e.shiftKey);
+    });
+    $("projects").addEventListener("contextmenu", function (e) {
+      var b = e.target.closest(".ptab");
+      if (!b || !b.dataset.project || b.dataset.project === OTHER) return;
+      e.preventDefault();
+      mergeMenu(e.clientX, e.clientY, b.dataset.project);
     });
     $("nav").addEventListener("click", function (e) {
       var b = e.target.closest(".tab");
@@ -817,7 +917,13 @@
     });
     $("list").addEventListener("click", function (e) {
       var gl = e.target.closest(".group-label");
-      if (gl) return setProject(gl.dataset.project);
+      if (gl) {
+        if (e.target.closest(".gmerge")) {
+          var r = e.target.closest(".gmerge").getBoundingClientRect();
+          return mergeMenu(r.left, r.bottom, gl.dataset.project);
+        }
+        return clickTab(gl.dataset.tab, false);
+      }
       var it = e.target.closest(".item");
       if (!it) return;
       var id = it.dataset.id;
@@ -845,6 +951,8 @@
       select(id);
     });
     $("list").addEventListener("contextmenu", function (e) {
+      var gl = e.target.closest(".group-label");
+      if (gl) { e.preventDefault(); return mergeMenu(e.clientX, e.clientY, gl.dataset.project); }
       var it = e.target.closest(".item");
       if (!it) return;
       e.preventDefault();
@@ -883,7 +991,7 @@
       if (b.dataset.bulk === "delete") doDelete(ids);
     });
     $("listMenuBtn").addEventListener("click", function () {
-      var scope = S.project ? "（" + esc(S.project) + "）" : "";
+      var scope = scopeLabel() ? "（" + esc(scopeLabel()) + "）" : "";
       var html = '<button class="menu-item" data-l="read_all">' + icon("checks") + "全部标为已读" + scope + "</button>" +
         '<button class="menu-item" data-l="archive_handled">' + icon("archive") + "归档所有已处理的" + scope + "<span class=\"sub\">已读且不用决定</span></button>" +
         '<button class="menu-item" data-l="select_all">' + icon("check") + "全选当前列表<span class=\"sub\">Ctrl+A</span></button>";
@@ -892,7 +1000,11 @@
         if (!b) return;
         closePopover();
         if (b.dataset.l === "select_all") return selectAll();
-        act({ action: b.dataset.l, project: S.project }).then(function (n) {
+        var mine = S.msgs.filter(function (m) { return !m.archived && inScope(m); });
+        var req = b.dataset.l === "read_all"
+          ? { action: "read", ids: mine.filter(function (m) { return m.unread; }).map(function (m) { return m.id; }) }
+          : { action: "archive", ids: mine.filter(function (m) { return !m.unread && !m.open; }).map(function (m) { return m.id; }) };
+        act(req).then(function (n) {
           toast(b.dataset.l === "read_all" ? "已全部标为已读" : n ? "已归档 " + n + " 条" : "没有可以归档的");
           refreshNow();
         });
@@ -989,10 +1101,14 @@
     if (k === "ArrowUp" || k === "k") { e.preventDefault(); move(-1); return; }
     if (k === "/") { e.preventDefault(); $("search").focus(); return; }
     if (k === "[" || k === "]") {
-      var names = [""].concat(projectList().map(function (p) { return p.name; }));
+      var names = [""].concat(projectList().map(function (p) { return p.key; }));
       if (names.length > 2) {
-        var i = names.indexOf(S.project);
-        setProject(names[(i + (k === "]" ? 1 : names.length - 1)) % names.length]);
+        var cur = S.projects.size === 1 ? S.projects.values().next().value : "";
+        var i = Math.max(0, names.indexOf(cur));
+        S.projects = new Set();
+        var nk = names[(i + (k === "]" ? 1 : names.length - 1)) % names.length];
+        if (nk) S.projects.add(nk);
+        applyProjects();
       }
       return;
     }
@@ -1021,7 +1137,7 @@
     var go = function () {
       if (!S.byId[id]) return false;
       var m = S.byId[id];
-      if (!inScope(m)) setProject(projectOf(m));
+      if (!inScope(m)) { S.projects = new Set([tabKey(m)]); applyProjects(); }
       if (!inView(m, S.view)) setView(view || (m.archived ? "archive" : m.kind === "decision" ? "decide" : m.kind === "answer" ? "answer" : "all"));
       if (S.query) { $("search").value = ""; S.query = ""; S.searchIds = null; renderAll(); }
       select(id);

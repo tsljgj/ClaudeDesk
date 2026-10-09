@@ -22,7 +22,7 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 1. **需要用户决定的事：一律 `post --kind decision`，然后后台 `wait`。不要用 AskUserQuestion。**
 2. **回答用户的问题：对话里照常回答，同时 `post --kind answer`**，`--question` 放用户原问题（原文），正文放完整回答。用户下达的是任务而不是提问时不用发；"好的 / 收到"这类也不用发。
 3. **进展通知 `--kind info`：少用。** 只用于用户明确在等的事：长任务完成、跑挂了需要人管、额度或机器出问题。
-4. **`--source` 用项目名**（仓库名，例如 `my-project`）；同一项目里有多条并行会话时加后缀（`my-project/data`）。同一会话里保持不变。ClaudeDesk 按 `/` 前面的部分把消息分到各个项目下，所以同一个仓库一定要用同一个名字，不同仓库不要共用名字。
+4. **`--source` 用项目名**（仓库名，例如 `my-project`）；同一项目里有多条并行会话时加后缀（`my-project/data`）。同一会话里保持不变。ClaudeDesk 按**仓库**分标签：`post` 会自动记下当前目录所在 git 仓库的名字（origin 地址里的仓库名），所以要在项目目录里运行 `desk.py`（Bash 默认就在）。不在 git 仓库里时可以加 `--repo <仓库名>` 指定。
 5. **子 agent 不要发 decision 等回复。** 子 agent 等不起（它的 prompt cache 很快过期）；把要决定的事交回主会话，由主会话发。
 
 ## 发决定（decision）

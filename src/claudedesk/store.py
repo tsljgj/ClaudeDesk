@@ -38,8 +38,13 @@ def plain_summary(md: str, n: int = 140) -> str:
     return s[:n] + ("…" if len(s) > n else "")
 
 
+def norm_name(name: str) -> str:
+    """比较项目名用：不分大小写，空格 / 下划线 / 点都当成 -。"""
+    return re.sub(r"[\s_.]+", "-", str(name or "").strip().lower())
+
+
 def project_of(source: str) -> str:
-    """来源的项目名：source 里第一个 / 之前的部分（skill 让同一项目的并行会话写成 项目/后缀）。"""
+    """旧消息（没有 repo 字段）的项目名猜测：source 里第一个 / 之前的部分。"""
     s = str(source or "").strip()
     return (s.split("/", 1)[0].strip() if "/" in s[1:] else s) or "unknown"
 
@@ -55,7 +60,8 @@ def normalize(r: dict) -> dict:
     m["title"] = str(r.get("title") or "（无标题）").strip()
     m["body"] = str(r.get("body") or "")
     m["source"] = str(r.get("source") or "unknown")
-    m["project"] = project_of(m["source"])
+    m["repo"] = str(r.get("repo") or "").strip()  # desk.py 发消息时自动识别的 git 仓库名
+    m["_legacy"] = project_of(m["source"])
     q = r.get("question")
     m["question"] = str(q) if q else ""
     m["options"] = desk.normalize_options(r.get("options"))
@@ -93,6 +99,9 @@ class Store:
         self.notified: set[str] = set(self.state.get("notified", []))
         self.archived: set[str] = set(self.state.get("archived", []))
         self.deleted: set[str] = set(self.state.get("deleted", []))
+        aliases = self.state.get("aliases")
+        self.aliases: dict[str, str] = {str(k): str(v) for k, v in aliases.items()} if isinstance(aliases, dict) else {}
+        self._repos: dict[str, str] = {}  # 见过的仓库名：规范化名 -> 原名
         self._loaded = False
         self._dirty = False
         self._save_at = 0.0
@@ -118,6 +127,7 @@ class Store:
             self.state["notified"] = sorted(self.notified & present)
             self.state["archived"] = sorted(self.archived & present)
             self.state["deleted"] = sorted(self.deleted & present)  # 压缩成功后自然清掉
+            self.state["aliases"] = dict(self.aliases)
             data = json.dumps(self.state, ensure_ascii=False, indent=1)
             self._dirty = False
         tmp = self.state_path.with_name(self.state_path.name + ".tmp")
@@ -188,12 +198,15 @@ class Store:
             recs, self._inbox_pos, reset = self._advance(self.inbox_path, self._inbox_pos)
             if reset:
                 self.msgs.clear()
+                self._repos.clear()
                 changed = True
             for r in recs:
                 m = normalize(r)
                 if m["id"] in self.msgs:
                     continue
                 self.msgs[m["id"]] = m
+                if m["repo"]:
+                    self._repos.setdefault(norm_name(m["repo"]), m["repo"])
                 changed = True
                 if not self.hidden(m) and m["id"] not in self.read and m["id"] not in self.notified:
                     new.append(m)
@@ -262,10 +275,27 @@ class Store:
                 "total": len(vis),
             }
 
+    def project_info(self, m: dict) -> tuple[str, str, str]:
+        """(项目名, 类型, 归类键)。类型 repo = 认得出是哪个仓库；other = 没认出来（旧消息的来源对不上任何仓库）。
+        归类键是用户"合并到…"时用的名字（合并前的名字）。"""
+        if m["repo"]:
+            name, kind = m["repo"], "repo"
+        else:
+            raw = m["_legacy"]
+            n = norm_name(raw)
+            hit = self._repos.get(n) or next((v for k, v in self._repos.items() if n.startswith(k + "-")), None)
+            name, kind = (hit, "repo") if hit else (raw, "other")
+        key = name
+        if key in self.aliases:
+            name, kind = self.aliases[key], "repo"
+        return name, kind, key
+
     def summary(self, m: dict) -> dict:
         resp = self.responses.get(m["id"])
+        project, pkind, pkey = self.project_info(m)
         return {
-            "id": m["id"], "kind": m["kind"], "title": m["title"], "source": m["source"], "project": m["project"],
+            "id": m["id"], "kind": m["kind"], "title": m["title"], "source": m["source"],
+            "project": project, "project_kind": pkind, "project_key": pkey, "repo": m["repo"],
             "ts": m["_dt"].isoformat(), "priority": m["priority"], "snippet": m["_snippet"],
             "open": self.is_open(m), "answered": resp is not None, "unread": self.is_unread(m),
             "archived": m["id"] in self.archived,
@@ -316,7 +346,7 @@ class Store:
         return n
 
     def mark_all_read(self, project: str | None = None) -> int:
-        return self.mark_read([m["id"] for m in self.visible() if not project or m["project"] == project])
+        return self.mark_read([m["id"] for m in self.visible() if not project or self.project_info(m)[0] == project])
 
     def _dismiss_open(self, ids) -> None:
         """移走还在等回复的决定之前，先告诉等待的会话"用户跳过了"，免得它永远等下去。"""
@@ -329,6 +359,25 @@ class Store:
                     self.responses[mid] = rec
                 except FileExistsError:
                     pass
+
+    def set_alias(self, frm: str, to: str | None) -> dict:
+        """把项目（或没认出来的来源）frm 归到 to 下面；to 为空表示撤销。"""
+        frm, to = str(frm or "").strip(), str(to or "").strip()
+        if not frm:
+            raise ValueError("缺少要归类的项目名")
+        with self.lock:
+            if to and to != frm:
+                self.aliases[frm] = to
+                for k, v in list(self.aliases.items()):  # 已经归到 frm 的，一起改到 to（不留链）
+                    if v == frm:
+                        self.aliases[k] = to
+            else:
+                self.aliases.pop(frm, None)
+            self.schedule_save()
+            self._bump()
+            out = dict(self.aliases)
+        self._emit_changed()
+        return out
 
     def resolve(self, ids) -> int:
         """标为已解决：还在等回复的决定写一条 resolved 回复（等待的会话会收到），所有选中的都标为已读。
@@ -375,7 +424,7 @@ class Store:
         """把已读、且不用再处理（不是待决定）的消息全部归档。给了 project 就只动这个项目的。"""
         with self.lock:
             ids = [m["id"] for m in self.visible() if not self.is_unread(m) and not self.is_open(m)
-                   and (not project or m["project"] == project)]
+                   and (not project or self.project_info(m)[0] == project)]
         return self.archive(ids)
 
     def delete(self, ids) -> int:

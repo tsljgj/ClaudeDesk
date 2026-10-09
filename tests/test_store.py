@@ -108,13 +108,34 @@ def test_project_of_and_scoped_bulk(tmp_path):
     from claudedesk.store import project_of
     assert project_of("osworld") == "osworld" and project_of("osworld/data") == "osworld"
     assert project_of("") == "unknown" and project_of("/x") == "/x"
-    a = post(tmp_path, kind="answer", source="osworld")
-    b = post(tmp_path, kind="answer", source="osworld/eval")
-    c = post(tmp_path, kind="answer", source="cn-equity-research")
+    a = desk.post_message(desk.make_message("answer", "eval-run", "t", repo="osworld"), tmp_path)
+    b = post(tmp_path, kind="answer", source="osworld/eval")  # 旧消息：能对上已知仓库
+    c = desk.post_message(desk.make_message("answer", "x", "t", repo="cn-equity-research"), tmp_path)
     s = Store(tmp_path)
     s.poll()
+    assert s.summary(s.msgs[a])["project"] == "osworld" and s.summary(s.msgs[a])["project_kind"] == "repo"
     assert s.summary(s.msgs[b])["project"] == "osworld"
     assert s.mark_all_read("osworld") == 2
     assert s.is_unread(s.msgs[c]) and not s.is_unread(s.msgs[a])
     assert s.archive_handled("cn-equity-research") == 0
     assert s.archive_handled("osworld") == 2 and c not in s.archived
+
+
+def test_legacy_sources_match_known_repos_or_become_other(tmp_path):
+    desk.post_message(desk.make_message("answer", "s", "t", repo="OSWorld"), tmp_path)
+    old = [post(tmp_path, kind="info", source=src) for src in
+           ("osworld-eval", "osworld_runner/2", "OSWorld", "数据清洗", "ml-research")]
+    s = Store(tmp_path)
+    s.poll()
+    info = [s.project_info(s.msgs[i]) for i in old]
+    assert [(n, k) for n, k, _ in info] == [("OSWorld", "repo"), ("OSWorld", "repo"), ("OSWorld", "repo"),
+                                             ("数据清洗", "other"), ("ml-research", "other")]
+    # 用户把没认出来的来源归到某个项目；再把那个项目归到另一个，链会被拉平
+    s.set_alias("ml-research", "cn-equity-research")
+    assert s.project_info(s.msgs[old[4]])[:2] == ("cn-equity-research", "repo")
+    s.set_alias("cn-equity-research", "OSWorld")
+    assert s.aliases == {"ml-research": "OSWorld", "cn-equity-research": "OSWorld"}
+    s.set_alias("ml-research", "")
+    assert s.project_info(s.msgs[old[4]])[:2] == ("ml-research", "other")
+    s.save_state()
+    assert Store(tmp_path).aliases == {"cn-equity-research": "OSWorld"}
