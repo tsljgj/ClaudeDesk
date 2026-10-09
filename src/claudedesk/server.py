@@ -94,13 +94,13 @@ class DeskServer:
         if name == "read":
             return st.mark_read(ids, bool(body.get("read", True)))
         if name == "read_all":
-            return st.mark_all_read()
+            return st.mark_all_read(body.get("project") or None)
         if name == "archive":
             return st.archive(ids, bool(body.get("on", True)))
         if name == "resolve":
             return st.resolve(ids)
         if name == "archive_handled":
-            return st.archive_handled()
+            return st.archive_handled(body.get("project") or None)
         if name == "delete":
             return st.delete(ids)
         if name == "reply":

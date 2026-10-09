@@ -58,7 +58,7 @@
 
   var S = {
     version: -1, msgs: [], byId: {}, counts: {}, settings: BOOT.settings || {}, meta: {},
-    view: load("view", "decide"), query: "", searchIds: null,
+    view: load("view", "decide"), project: load("project", ""), query: "", searchIds: null,
     current: null, multi: new Set(), anchor: null, choice: null,
     details: {}, shownKey: null, visible: [],
   };
@@ -130,11 +130,64 @@
     if (v === "answer") return m.kind === "answer";
     return true;
   }
+  // ---- 项目（repo）：source 里第一个 / 之前的部分
+  // 项目颜色：避开橙 / 红（界面里橙色表示"要你处理"）
+  var PCOLORS = ["#1C7ED6", "#2F9E44", "#9C36B5", "#0C8599", "#5F3DC4", "#C2255C", "#66A80F", "#1864AB", "#087F5B", "#862E9C"];
+  function projectOf(m) { return m.project || String(m.source || "unknown").split("/")[0] || "unknown"; }
+  function pcolor(name) {
+    var h = 0;
+    for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return PCOLORS[h % PCOLORS.length];
+  }
+  function inScope(m) { return !S.project || projectOf(m) === S.project; }
+  // 所有项目：有待决定的排前面，其余按最近一条消息的时间
+  function projectList() {
+    var map = {};
+    S.msgs.forEach(function (m) {
+      var p = projectOf(m);
+      var e = map[p] || (map[p] = { name: p, open: 0, unread: 0, last: "", total: 0 });
+      if (m.ts > e.last) e.last = m.ts;
+      if (m.archived) return;
+      e.total++;
+      if (m.open) e.open++;
+      if (m.unread) e.unread++;
+    });
+    return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
+      return (b.open > 0) - (a.open > 0) || (b.last > a.last ? 1 : b.last < a.last ? -1 : 0);
+    });
+  }
+  function grouped() { return !S.project && projectList().length > 1; }
+
   function viewItems() {
     var v = S.view;
-    var items = S.msgs.filter(function (m) { return inView(m, v); });
+    var items = S.msgs.filter(function (m) { return inView(m, v) && inScope(m); });
     if (S.searchIds) items = items.filter(function (m) { return S.searchIds.has(m.id); });
-    return items; // 服务端已按时间倒序
+    if (grouped()) { // 按项目分组，组内仍按时间倒序（服务端给的顺序）
+      var order = {};
+      projectList().forEach(function (p, i) { order[p.name] = i; });
+      items = items.map(function (m, i) { return [m, i]; }).sort(function (a, b) {
+        return order[projectOf(a[0])] - order[projectOf(b[0])] || a[1] - b[1];
+      }).map(function (x) { return x[0]; });
+    }
+    return items;
+  }
+
+  function scopeCounts() {
+    var c = { open: 0, unread_answers: 0, unread: 0 };
+    S.msgs.forEach(function (m) {
+      if (m.archived || !inScope(m)) return;
+      if (m.open) c.open++;
+      if (m.unread) { c.unread++; if (m.kind === "answer") c.unread_answers++; }
+    });
+    return c;
+  }
+
+  function setProject(p) {
+    S.project = p || "";
+    save("project", S.project);
+    S.multi.clear();
+    if (S.current && S.byId[S.current] && !inScope(S.byId[S.current])) S.current = null;
+    renderAll();
   }
 
   function dayKey(d) { return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); }
@@ -159,17 +212,37 @@
   }
 
   function renderNav() {
-    var c = S.counts;
-    var n = { decide: [c.open, true], answer: [c.unread_answers], all: [c.unread], archive: [0] };
+    var c = S.counts, sc = scopeCounts();
+    var n = { decide: [sc.open, true], answer: [sc.unread_answers], all: [sc.unread], archive: [0] };
     $("nav").innerHTML = VIEWS.map(function (v) {
       var k = n[v.id];
       return '<button class="tab' + (S.view === v.id ? " active" : "") + '" data-view="' + v.id + '">' + v.label +
         (k[0] ? '<span class="n' + (k[1] ? " hot" : "") + '">' + k[0] + "</span>" : "") + "</button>";
     }).join("");
+    renderProjects();
     var t = [];
     if (c.open) t.push(c.open + " 待决定");
     if (c.unread) t.push(c.unread + " 未读");
     document.title = "ClaudeDesk" + (t.length ? " · " + t.join(" · ") : "");
+  }
+
+  function renderProjects() {
+    var ps = projectList();
+    if (S.project && !ps.some(function (p) { return p.name === S.project; })) { S.project = ""; save("project", ""); }
+    var box = $("projects");
+    box.hidden = ps.length < 2 && !S.project;
+    if (box.hidden) return;
+    var chip = function (name, label, p) {
+      var badge = p ? (p.open ? '<span class="n hot">' + p.open + "</span>" : p.unread ? '<span class="n">' + p.unread + "</span>" : "") : "";
+      return '<button class="pchip' + (S.project === name ? " on" : "") + '" data-project="' + esc(name) + '" role="tab"' +
+        (p ? ' title="' + esc(name) + (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "") + '"' : "") + ">" +
+        (p ? '<span class="pdot" style="background:' + pcolor(name) + '"></span>' : "") + esc(label) + badge + "</button>";
+    };
+    box.innerHTML = chip("", "全部项目", null) + ps.map(function (p) { return chip(p.name, p.name, p); }).join("");
+    var on = box.querySelector(".pchip.on");
+    if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) {
+      box.scrollLeft = on.offsetLeft - 8;
+    }
   }
 
   function renderList() {
@@ -179,7 +252,22 @@
     var list = $("list");
     if (!items.length) {
       list.innerHTML = '<div class="list-empty"><b>' +
-        (S.query ? "没有找到「" + esc(S.query) + "」" : v.empty) + "</b>" + (S.query ? "换个关键词试试" : v.emptySub) + "</div>";
+        (S.query ? "没有找到「" + esc(S.query) + "」" : (S.project ? esc(S.project) + "：" : "") + v.empty) + "</b>" +
+        (S.query ? "换个关键词试试" : v.emptySub) + "</div>";
+    } else if (grouped()) {
+      var html = "", last = null, counts = {};
+      items.forEach(function (m) { var p = projectOf(m); counts[p] = (counts[p] || 0) + 1; });
+      items.forEach(function (m) {
+        var p = projectOf(m);
+        if (p !== last) {
+          html += '<button class="group-label" data-project="' + esc(p) + '" title="只看 ' + esc(p) + '">' +
+            '<span class="pdot" style="background:' + pcolor(p) + '"></span><span class="gname">' + esc(p) + "</span>" +
+            '<span class="gcount">' + counts[p] + "</span></button>";
+          last = p;
+        }
+        html += itemHtml(m);
+      });
+      list.innerHTML = html;
     } else {
       list.innerHTML = items.map(itemHtml).join("");
     }
@@ -191,6 +279,8 @@
     var cls = "item" + (m.unread ? " unread" : "") + (m.open ? " open" : "") +
       (m.id === S.current ? " selected" : "") + (checked ? " multi" : "");
     var hot = m.open || (m.priority === "high" && m.unread);
+    var p = projectOf(m);
+    var src = (S.project || grouped()) ? (m.source === p ? "" : m.source.slice(p.length + 1) || m.source) : m.source;
     var st = "";
     if (m.open) st = '<span class="st open">' + (m.priority === "high" ? "紧急 · " : "") + "待决定</span> · ";
     else if (m.kind === "decision" && m.resolved) st = '<span class="st done">✓ 已解决</span> · ';
@@ -207,7 +297,7 @@
       '<button class="cb' + (checked ? " on" : "") + '" data-act="check" title="选择（X）" aria-label="选择"></button>' +
       (m.unread || m.open ? '<span class="dot' + (hot ? " hot" : "") + '"></span>' : "") +
       '<div class="row1"><span class="t">' + esc(m.title) + '</span><span class="time">' + fmtTime(m.ts) + "</span>" + acts + "</div>" +
-      '<div class="row2">' + st + '<span class="src">' + esc(m.source) + "</span>" + (m.snippet ? " · " + esc(m.snippet) : "") + "</div></div>";
+      '<div class="row2">' + st + (src ? '<span class="src">' + esc(src) + "</span>" + (m.snippet ? " · " : "") : "") + esc(m.snippet || "") + "</div></div>";
   }
 
   function renderBulk() {
@@ -264,7 +354,7 @@
   }
 
   function renderEyebrow(m) {
-    var bits = [KIND[m.kind], '<span class="src">' + esc(m.source) + "</span>", fmtTime(m.ts, true)];
+    var bits = [KIND[m.kind], '<span class="src"><span class="pdot" style="background:' + pcolor(projectOf(m)) + '"></span>' + esc(m.source) + "</span>", fmtTime(m.ts, true)];
     if (m.priority === "high") bits.push('<span class="hot">紧急</span>');
     if (m.archived) bits.push("已归档");
     $("eyebrow").innerHTML = bits.join(" · ") + (m.open ? '<button class="jump" id="jumpBtn">去选择 ↓</button>' : "");
@@ -702,7 +792,7 @@
   function showShortcuts() {
     var rows = [["↑ ↓ / J K", "上一条 / 下一条"], ["1 – 9", "选择第 N 个选项"], ["Ctrl + Enter", "提交回复"],
       ["E", "归档 / 移出归档"], ["Delete", "删除"], ["U", "标为已读 / 未读"], ["R", "标为已解决"], ["X", "勾选当前这条"], ["C", "复制 Markdown"],
-      ["Ctrl + P", "导出 PDF"], ["/", "搜索"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"], ["Esc", "取消选择 / 关闭"]];
+      ["Ctrl + P", "导出 PDF"], ["/", "搜索"], ["[ ]", "切换项目"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"], ["Esc", "取消选择 / 关闭"]];
     $("modalTitle").textContent = "快捷键";
     $("modalText").innerHTML = '<span class="kbd-table">' + rows.map(function (r) {
       return "<span>" + r[0].split(" ").map(function (k) { return /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
@@ -717,11 +807,17 @@
   // ---------------------------------------------------------------- 事件
   function bind() {
     paintIcons();
+    $("projects").addEventListener("click", function (e) {
+      var b = e.target.closest(".pchip");
+      if (b) setProject(b.dataset.project);
+    });
     $("nav").addEventListener("click", function (e) {
       var b = e.target.closest(".tab");
       if (b) setView(b.dataset.view);
     });
     $("list").addEventListener("click", function (e) {
+      var gl = e.target.closest(".group-label");
+      if (gl) return setProject(gl.dataset.project);
       var it = e.target.closest(".item");
       if (!it) return;
       var id = it.dataset.id;
@@ -787,15 +883,16 @@
       if (b.dataset.bulk === "delete") doDelete(ids);
     });
     $("listMenuBtn").addEventListener("click", function () {
-      var html = '<button class="menu-item" data-l="read_all">' + icon("checks") + "全部标为已读</button>" +
-        '<button class="menu-item" data-l="archive_handled">' + icon("archive") + "归档所有已处理的<span class=\"sub\">已读且不用决定</span></button>" +
+      var scope = S.project ? "（" + esc(S.project) + "）" : "";
+      var html = '<button class="menu-item" data-l="read_all">' + icon("checks") + "全部标为已读" + scope + "</button>" +
+        '<button class="menu-item" data-l="archive_handled">' + icon("archive") + "归档所有已处理的" + scope + "<span class=\"sub\">已读且不用决定</span></button>" +
         '<button class="menu-item" data-l="select_all">' + icon("check") + "全选当前列表<span class=\"sub\">Ctrl+A</span></button>";
       openPopover($("listMenuBtn"), html, "", function (e) {
         var b = e.target.closest("[data-l]");
         if (!b) return;
         closePopover();
         if (b.dataset.l === "select_all") return selectAll();
-        act({ action: b.dataset.l }).then(function (n) {
+        act({ action: b.dataset.l, project: S.project }).then(function (n) {
           toast(b.dataset.l === "read_all" ? "已全部标为已读" : n ? "已归档 " + n + " 条" : "没有可以归档的");
           refreshNow();
         });
@@ -891,6 +988,14 @@
     if (k === "ArrowDown" || k === "j") { e.preventDefault(); move(1); return; }
     if (k === "ArrowUp" || k === "k") { e.preventDefault(); move(-1); return; }
     if (k === "/") { e.preventDefault(); $("search").focus(); return; }
+    if (k === "[" || k === "]") {
+      var names = [""].concat(projectList().map(function (p) { return p.name; }));
+      if (names.length > 2) {
+        var i = names.indexOf(S.project);
+        setProject(names[(i + (k === "]" ? 1 : names.length - 1)) % names.length]);
+      }
+      return;
+    }
     if (k === "?") { showShortcuts(); return; }
     if (k === "e" || k === "E") { doArchive(targets()); return; }
     if (k === "Delete" || k === "#") { doDelete(targets()); return; }
@@ -916,6 +1021,7 @@
     var go = function () {
       if (!S.byId[id]) return false;
       var m = S.byId[id];
+      if (!inScope(m)) setProject(projectOf(m));
       if (!inView(m, S.view)) setView(view || (m.archived ? "archive" : m.kind === "decision" ? "decide" : m.kind === "answer" ? "answer" : "all"));
       if (S.query) { $("search").value = ""; S.query = ""; S.searchIds = null; renderAll(); }
       select(id);
@@ -923,5 +1029,5 @@
     };
     if (!go()) refreshNow().then(go);
   };
-  window.deskTest = { S: S, select: select, setView: setView, pick: pick, submit: submit, copy: copy, markdownOf: markdownOf };
+  window.deskTest = { setProject: setProject, S: S, select: select, setView: setView, pick: pick, submit: submit, copy: copy, markdownOf: markdownOf };
 })();

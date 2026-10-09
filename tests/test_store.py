@@ -102,3 +102,19 @@ def test_resolve_writes_reply_and_marks_read(tmp_path):
     assert not s.is_unread(s.msgs[a]) and not s.is_unread(s.msgs[b])
     assert s.summary(s.msgs[a])["resolved"] and not s.summary(s.msgs[a])["open"]
     assert s.resolve([a]) == 0  # 已经有回复：不再写
+
+
+def test_project_of_and_scoped_bulk(tmp_path):
+    from claudedesk.store import project_of
+    assert project_of("webapp") == "webapp" and project_of("webapp/data") == "webapp"
+    assert project_of("") == "unknown" and project_of("/x") == "/x"
+    a = post(tmp_path, kind="answer", source="webapp")
+    b = post(tmp_path, kind="answer", source="webapp/eval")
+    c = post(tmp_path, kind="answer", source="acme-data-pipeline")
+    s = Store(tmp_path)
+    s.poll()
+    assert s.summary(s.msgs[b])["project"] == "webapp"
+    assert s.mark_all_read("webapp") == 2
+    assert s.is_unread(s.msgs[c]) and not s.is_unread(s.msgs[a])
+    assert s.archive_handled("acme-data-pipeline") == 0
+    assert s.archive_handled("webapp") == 2 and c not in s.archived

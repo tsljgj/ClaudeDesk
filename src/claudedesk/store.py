@@ -38,6 +38,12 @@ def plain_summary(md: str, n: int = 140) -> str:
     return s[:n] + ("…" if len(s) > n else "")
 
 
+def project_of(source: str) -> str:
+    """来源的项目名：source 里第一个 / 之前的部分（skill 让同一项目的并行会话写成 项目/后缀）。"""
+    s = str(source or "").strip()
+    return (s.split("/", 1)[0].strip() if "/" in s[1:] else s) or "unknown"
+
+
 def normalize(r: dict) -> dict:
     m = dict(r)
     mid = str(r.get("id") or "").strip()
@@ -49,6 +55,7 @@ def normalize(r: dict) -> dict:
     m["title"] = str(r.get("title") or "（无标题）").strip()
     m["body"] = str(r.get("body") or "")
     m["source"] = str(r.get("source") or "unknown")
+    m["project"] = project_of(m["source"])
     q = r.get("question")
     m["question"] = str(q) if q else ""
     m["options"] = desk.normalize_options(r.get("options"))
@@ -258,7 +265,7 @@ class Store:
     def summary(self, m: dict) -> dict:
         resp = self.responses.get(m["id"])
         return {
-            "id": m["id"], "kind": m["kind"], "title": m["title"], "source": m["source"],
+            "id": m["id"], "kind": m["kind"], "title": m["title"], "source": m["source"], "project": m["project"],
             "ts": m["_dt"].isoformat(), "priority": m["priority"], "snippet": m["_snippet"],
             "open": self.is_open(m), "answered": resp is not None, "unread": self.is_unread(m),
             "archived": m["id"] in self.archived,
@@ -308,8 +315,8 @@ class Store:
             self._emit_changed()
         return n
 
-    def mark_all_read(self) -> int:
-        return self.mark_read([m["id"] for m in self.visible()])
+    def mark_all_read(self, project: str | None = None) -> int:
+        return self.mark_read([m["id"] for m in self.visible() if not project or m["project"] == project])
 
     def _dismiss_open(self, ids) -> None:
         """移走还在等回复的决定之前，先告诉等待的会话"用户跳过了"，免得它永远等下去。"""
@@ -364,10 +371,11 @@ class Store:
             self._emit_changed()
         return len(todo)
 
-    def archive_handled(self) -> int:
-        """把已读、且不用再处理（不是待决定）的消息全部归档。"""
+    def archive_handled(self, project: str | None = None) -> int:
+        """把已读、且不用再处理（不是待决定）的消息全部归档。给了 project 就只动这个项目的。"""
         with self.lock:
-            ids = [m["id"] for m in self.visible() if not self.is_unread(m) and not self.is_open(m)]
+            ids = [m["id"] for m in self.visible() if not self.is_unread(m) and not self.is_open(m)
+                   and (not project or m["project"] == project)]
         return self.archive(ids)
 
     def delete(self, ids) -> int:
