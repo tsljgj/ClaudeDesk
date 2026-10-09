@@ -10,6 +10,8 @@ A small Windows tray app that gives Claude Code sessions a place to reach you, o
 
 Bodies are full Markdown: tables, highlighted code and LaTeX math (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`). Every message can be copied in one click (Markdown, rich text or plain text) or exported to PDF, then archived or deleted.
 
+![ClaudeDesk](docs/screenshot-light.png)
+
 > Third-party tool. Not affiliated with or endorsed by Anthropic. The interface is in Simplified Chinese.
 
 ## Install

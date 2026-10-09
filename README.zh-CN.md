@@ -10,6 +10,8 @@ Windows 托盘程序，专门接收 Claude Code 会话发给你的东西：
 
 正文是完整的 Markdown：表格、代码高亮、LaTeX 公式（`$…$`、`$$…$$`、`\(…\)`、`\[…\]`）都能正常显示。每条消息可以一键复制（Markdown / 富文本 / 纯文本）或导出 PDF，看完可以归档或删除。
 
+![ClaudeDesk](docs/screenshot-light.png)
+
 > 第三方工具，与 Anthropic 无关。
 
 ## 安装
