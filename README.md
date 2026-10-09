@@ -4,47 +4,21 @@ English · [中文](README.zh-CN.md)
 
 A small Windows tray app that gives Claude Code sessions a place to reach you, outside the terminal:
 
-- **Decisions.** Instead of the built-in AskUserQuestion prompt, a session posts a decision with options. You pick one (and optionally add a note) in ClaudeDesk; the session, which has been waiting in the background, wakes up and carries on.
-- **Answers.** When you ask a session a question, it answers in the chat as usual *and* posts the question plus the full answer here, so the answer doesn't get buried under pages of tool output.
+- **Decisions.** Instead of the built-in AskUserQuestion prompt, a session posts a decision with options. You pick one (and optionally add a note) in ClaudeDesk; the session, waiting in the background, wakes up and carries on.
+- **Answers.** When you ask a session a question, it answers in the chat *and* posts the question plus the full answer here, so it doesn't get buried under tool output.
 - **Info.** Occasional notices ("the long run finished", "a job crashed").
 
-Several sessions, in several projects, can post at once; each message shows its source.
+Bodies are full Markdown: tables, highlighted code and LaTeX math (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`). Every message can be copied in one click (Markdown, rich text or plain text) or exported to PDF, then archived or deleted.
 
-> Third-party tool. Not affiliated with or endorsed by Anthropic.
->
-> The user interface is currently in Simplified Chinese only.
-
-## How it works
-
-```text
-Claude Code session                         ClaudeDesk (tray app)
-  desk.py post --kind decision ...  ──►  data/inbox.jsonl      ──► toast, taskbar flash, tray badge
-  desk.py wait --id <id>  (background)                              you click an option, Submit
-      ◄── exits with the reply JSON  ◄──  data/responses.jsonl ◄──
-```
-
-- `desk.py` is a standard-library-only CLI. Claude runs it; it appends messages to `data/inbox.jsonl` and blocks on `data/responses.jsonl` until you reply.
-- `ClaudeDesk.exe` (PySide6) watches the inbox, notifies you, renders the Markdown body (tables, code blocks), and writes your reply.
-- Both files are append-only JSON Lines guarded by a cross-process byte lock, so any number of sessions can post at once. A decision can only be answered once.
+> Third-party tool. Not affiliated with or endorsed by Anthropic. The interface is in Simplified Chinese.
 
 ## Install
 
-Requires Windows 10/11 and Python 3.10+ (used once, to create the build venv).
+Windows 10/11 (Edge WebView2 is built in).
 
-```bat
-git clone https://github.com/tsljgj/ClaudeDesk.git
-cd ClaudeDesk
-build.cmd -Install
-```
-
-`-Install` builds `ClaudeDesk.exe`, adds a `--minimized` shortcut to your Startup folder, and launches the app. Omit it to just build. If Python isn't found, pass `-Python C:\path\to\python.exe`.
-
-To run from source without building: `pip install PySide6-Essentials`, then `python src\claudedesk.py`.
-
-## Hook it up to Claude Code
-
-1. Copy [`skill/claude-desk/SKILL.md`](skill/claude-desk/SKILL.md) to `~/.claude/skills/claude-desk/SKILL.md` and set the `PY` / `DESK` variables at the top to your Python and your `desk.py` path.
-2. Optionally make it a standing rule in `~/.claude/CLAUDE.md`, e.g.:
+1. Download `ClaudeDesk.exe` from [Releases](https://github.com/tsljgj/ClaudeDesk/releases/latest) into a folder you can write to, e.g. `%LOCALAPPDATA%\Programs\ClaudeDesk\` (not `Program Files`, or it can't update itself).
+2. Run it. It puts `desk.py` (the CLI Claude uses) and `data\` (your inbox) next to itself.
+3. Copy [`skill/claude-desk/SKILL.md`](skill/claude-desk/SKILL.md) to `~/.claude/skills/claude-desk/SKILL.md` and set `DESK` to that `desk.py` and `PY` to your Python 3.10+. Optionally make it a standing rule in `~/.claude/CLAUDE.md`:
 
    ```markdown
    ## Talking to the user: ClaudeDesk
@@ -52,7 +26,28 @@ To run from source without building: `pip install PySide6-Essentials`, then `pyt
    - When answering a user's question, answer in the chat and also post it to ClaudeDesk as an answer (original question + full answer).
    ```
 
-The skill is written in Chinese, to match the UI; Claude follows it fine either way, and the commands are the same.
+Upgrading from 1.x: quit the old app from the tray, drop the new `ClaudeDesk.exe` into the old folder; `data\` carries over and the old `_internal\` folder can go.
+
+**Self-update** works like [agent-management](https://github.com/tsljgj/agent-management): every green CI build on `main` or `claude/*` is published as a `build-<N>` release with `ClaudeDesk.exe` and its `.sha256`. The app checks ~45 s after start and then every 6 hours, downloads and verifies the new exe, renames itself to `ClaudeDesk.exe.old` (Windows allows renaming a running exe), puts the new one in place, starts it and exits. It never restarts under you while the window is open: it waits until you close it to the tray, or you click "更新到 build N" in the bottom-left corner. The bundled `desk.py` is refreshed at the same time. Turn it off under Settings or in the tray menu.
+
+## Using it
+
+- Four views at the top: **决定** (decisions; the orange number counts unanswered ones), **回答** (answers), **全部** (everything), **归档** (archive).
+- Decisions: press `1`–`9` or click an option, optionally type a note, `Ctrl+Enter` to submit.
+- Toolbar: copy (Markdown; the arrow offers rich text / plain text), PDF, mark unread, archive (`E`), delete (`Delete`). Archiving or deleting a still-open decision tells the waiting session that you skipped it, so it doesn't hang.
+- Multi-select with `Ctrl`/`Shift`-click or `Ctrl+A`; right-click for a menu. Search with `/`. Press `?` for all shortcuts.
+- Settings: light / dark / system theme, four accent colors, sans (Inter + Noto Sans SC) or serif (Source Serif + Noto Serif SC) reading font, text size, list density, start with Windows, auto-update.
+
+## Run from source / build
+
+```bat
+pip install -r requirements.txt
+cd src && python -m claudedesk            :: tray + window
+cd src && python -m claudedesk --serve    :: local server only; open it in any browser (any OS)
+build.cmd [-Install]                      :: one-file ClaudeDesk.exe (build 0: no self-update)
+```
+
+The window is a local web page shown in Edge WebView2 via pywebview, with a pystray tray icon. Markdown is rendered by markdown-it + DOMPurify + KaTeX + highlight.js, all bundled for offline use along with the fonts (`scripts/vendor.py`). The local server binds to 127.0.0.1, checks the Host header and requires a per-launch token. Tests in `tests/` drive the real UI in Chromium via Playwright; CI also self-tests the packaged exe and runs an end-to-end post → reply → self-update on Windows.
 
 ## CLI reference (`desk.py`)
 
@@ -90,27 +85,8 @@ A reply looks like:
  "text": "only check G4", "source": "my-project", "title": "Review before freezing?", "choice_index": 2}
 ```
 
-File formats, concurrency details, the hidden self-test channel, design notes and measured memory use are documented in the [Chinese README](README.zh-CN.md).
-
-## Using the app
-
-- Close (×) hides to the tray; quit from the tray menu. Running the exe again just brings the window forward.
-- Tray icon: an orange "C"; a red badge counts unread messages; a yellow dot means decisions you've seen but not answered; the icon flashes orange/amber while there's an unseen decision or a high-priority message.
-- New messages pop a Windows toast and flash the taskbar button. Decisions and high-priority messages keep flashing until you look.
-- Three filters: decisions awaiting you (pinned to the top), answers, everything. Ctrl+F searches title, body, source, question and options.
-
-## Project layout
-
-```text
-desk.py          CLI, also imported by the app (file I/O, locking, ids, timestamps)
-src/             claudedesk.py (UI), store.py (data layer), icons.py (icon drawing)
-packaging/       version.txt (exe version resource)
-skill/           the Claude Code skill
-build.ps1/.cmd   build with PyInstaller (onedir) into ClaudeDesk.exe + _internal/
-```
-
-`data/`, `.venv/`, `build/`, `ClaudeDesk.exe` and `_internal/` are local and git-ignored.
+File formats and concurrency details are documented in the [Chinese README](README.zh-CN.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Bundled front-end libraries and fonts: see `src/claudedesk/assets/vendor/LICENSES.txt`.

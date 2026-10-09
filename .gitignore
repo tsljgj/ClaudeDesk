@@ -10,3 +10,7 @@ build/
 .venv/
 __pycache__/
 *.pyc
+ClaudeDesk.exe.old
+ClaudeDesk.exe.download
+dist/
+.pytest_cache/

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeDesk</title>
+<link rel="icon" href="favicon.png">
+<link rel="stylesheet" href="assets/vendor/fonts.css">
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="assets/app.css">
+<script>window.BOOT = /*__BOOT__*/{};</script>
+<script>
+  // 先套用主题，避免白屏一闪
+  (function () {
+    var s = (window.BOOT && BOOT.settings) || {};
+    var d = document.documentElement;
+    d.dataset.theme = s.theme || "system";
+    d.dataset.accent = s.accent || "ember";
+    d.dataset.font = s.font || "sans";
+    d.dataset.size = s.size || "m";
+    d.dataset.density = s.density || "cozy";
+  })();
+</script>
+</head>
+<body>
+<div id="app" class="app">
+  <section class="listpane" id="listpane">
+    <header class="list-head">
+      <div class="head-row">
+        <svg class="mark" viewBox="0 0 64 64" aria-label="ClaudeDesk">
+          <rect width="64" height="64" rx="17" fill="var(--accent)"/>
+          <path d="M35.6 22.3A11.84 11.84 0 1 0 35.6 41.7" fill="none" stroke="#fff" stroke-width="8.3" stroke-linecap="round"/>
+          <circle cx="45.1" cy="32" r="4.8" fill="#fff"/>
+        </svg>
+        <nav class="tabs" id="nav" aria-label="视图"></nav>
+        <div class="grow"></div>
+        <button class="icon-btn" id="listMenuBtn" title="更多"><i data-icon="more"></i></button>
+        <button class="icon-btn" id="settingsBtn" title="设置"><i data-icon="settings"></i></button>
+      </div>
+      <label class="search">
+        <i data-icon="search"></i>
+        <input id="search" type="search" placeholder="搜索" autocomplete="off" spellcheck="false">
+        <kbd>/</kbd>
+      </label>
+    </header>
+    <div class="bulkbar" id="bulkbar" hidden>
+      <span id="bulkCount"></span>
+      <div class="grow"></div>
+      <button class="chip-btn" data-bulk="read">已读</button>
+      <button class="chip-btn" data-bulk="archive"><span>归档</span></button>
+      <button class="chip-btn danger" data-bulk="delete">删除</button>
+      <button class="icon-btn" data-bulk="clear" title="取消选择"><i data-icon="x"></i></button>
+    </div>
+    <div class="list" id="list" tabindex="0" role="listbox" aria-label="消息列表"></div>
+    <footer class="list-foot">
+      <button class="update-chip" id="updateChip" hidden></button>
+      <span class="ver" id="ver"></span>
+    </footer>
+  </section>
+
+<main class="reader" id="reader">
+    <div class="empty" id="empty">
+      <p class="empty-sub"><kbd>↑</kbd> <kbd>↓</kbd> 切换　<kbd>?</kbd> 快捷键</p>
+    </div>
+    <div class="detail" id="detail" hidden>
+      <div class="toolbar" id="toolbar">
+        <button class="icon-btn back" id="backBtn" title="返回列表"><i data-icon="chevronLeft"></i></button>
+        <div class="grow"></div>
+        <button class="icon-btn" id="copyBtn" title="复制 Markdown（C）"><i data-icon="copy"></i></button>
+        <button class="icon-btn caret" id="copyMenuBtn" title="更多复制方式"><i data-icon="chevronDown"></i></button>
+        <button class="icon-btn" id="pdfBtn" title="导出 PDF（Ctrl+P）"><i data-icon="fileDown"></i></button>
+        <button class="icon-btn" id="unreadBtn" title="标为未读（U）"><i data-icon="mail"></i></button>
+        <button class="icon-btn" id="archiveBtn" title="归档（E）"><i data-icon="archive"></i></button>
+        <button class="icon-btn danger" id="deleteBtn" title="删除（Delete）"><i data-icon="trash"></i></button>
+      </div>
+      <div class="scroller" id="scroller">
+        <article class="article" id="article">
+          <div class="eyebrow" id="eyebrow"></div>
+          <h1 class="title" id="title"></h1>
+          <blockquote class="question" id="question" hidden><div class="q-text" id="questionText"></div></blockquote>
+          <div class="md" id="body"></div>
+        </article>
+        <section class="decide" id="decide" hidden>
+          <div class="decide-card">
+          <div class="decide-head">
+            <span class="decide-title" id="decideTitle">请选择一个选项</span>
+            <span class="decide-state" id="decideState"></span>
+          </div>
+          <div class="options" id="options"></div>
+          <textarea id="replyText" rows="2" placeholder="补充说明（可选）"></textarea>
+          <div class="decide-foot" id="decideFoot">
+            <span class="hint">1–9 选择　Ctrl+Enter 提交</span>
+            <div class="grow"></div>
+            <button class="primary" id="submitBtn" disabled>提交</button>
+          </div>
+          <div class="reply-done" id="doneBox" hidden></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="popover" id="popover" hidden></div>
+<div class="modal-back" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 id="modalTitle"></h3>
+    <p id="modalText"></p>
+    <div class="modal-foot">
+      <button class="ghost" id="modalCancel">取消</button>
+      <button class="primary" id="modalOk">确定</button>
+    </div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+<div id="printRoot" class="print-root"></div>
+
+<script src="assets/vendor/markdown-it.min.js"></script>
+<script src="assets/vendor/purify.min.js"></script>
+<script src="assets/vendor/katex/katex.min.js"></script>
+<script src="assets/vendor/katex/copy-tex.min.js"></script>
+<script src="assets/vendor/highlight.min.js"></script>
+<script src="assets/markdown.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
