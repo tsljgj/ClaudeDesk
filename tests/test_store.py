@@ -139,3 +139,16 @@ def test_legacy_sources_match_known_repos_or_become_other(tmp_path):
     assert s.project_info(s.msgs[old[4]])[:2] == ("ml-research", "other")
     s.save_state()
     assert Store(tmp_path).aliases == {"cn-equity-research": "OSWorld"}
+
+
+def test_legacy_matching_uses_discovered_projects(tmp_path):
+    old = {src: post(tmp_path, kind="info", source=src) for src in
+           ("osworld", "osworld/eval", "OSWorld-runner", "cn-equity", "cn-equity-research", "随便写的")}
+    s = Store(tmp_path)
+    s.poll()
+    assert all(s.project_info(s.msgs[i])[1] == "other" for i in old.values())  # 还不知道有哪些仓库
+    s.set_known_projects({"OSWorld", "cn-equity-research"})
+    got = {src: s.project_info(s.msgs[i])[:2] for src, i in old.items()}
+    assert got == {"osworld": ("OSWorld", "repo"), "osworld/eval": ("OSWorld", "repo"),
+                   "OSWorld-runner": ("OSWorld", "repo"), "cn-equity": ("cn-equity-research", "repo"),
+                   "cn-equity-research": ("cn-equity-research", "repo"), "随便写的": ("随便写的", "other")}

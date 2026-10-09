@@ -101,7 +101,8 @@ class Store:
         self.deleted: set[str] = set(self.state.get("deleted", []))
         aliases = self.state.get("aliases")
         self.aliases: dict[str, str] = {str(k): str(v) for k, v in aliases.items()} if isinstance(aliases, dict) else {}
-        self._repos: dict[str, str] = {}  # 见过的仓库名：规范化名 -> 原名
+        self._repos: dict[str, str] = {}  # 消息里见过的仓库名：规范化名 -> 原名
+        self._discovered: dict[str, str] = {}  # 从 Claude Code 会话记录里找到的项目名
         self._loaded = False
         self._dirty = False
         self._save_at = 0.0
@@ -282,13 +283,37 @@ class Store:
             name, kind = m["repo"], "repo"
         else:
             raw = m["_legacy"]
-            n = norm_name(raw)
-            hit = self._repos.get(n) or next((v for k, v in self._repos.items() if n.startswith(k + "-")), None)
+            hit = self._match_repo(raw)
             name, kind = (hit, "repo") if hit else (raw, "other")
         key = name
         if key in self.aliases:
             name, kind = self.aliases[key], "repo"
         return name, kind, key
+
+    def _match_repo(self, raw: str) -> str | None:
+        """旧消息的来源名对到已知仓库：完全一样；或来源是"仓库名-后缀"（取最长的那个）；
+        或来源是某个仓库名的唯一前缀（cn-equity 对 cn-equity-research）。"""
+        known = {**self._discovered, **self._repos}
+        n = norm_name(raw)
+        if not n:
+            return None
+        if n in known:
+            return known[n]
+        longer = [k for k in known if n.startswith(k + "-")]
+        if longer:
+            return known[max(longer, key=len)]
+        prefix_of = [k for k in known if k.startswith(n + "-")]
+        return known[prefix_of[0]] if len(prefix_of) == 1 else None
+
+    def set_known_projects(self, names) -> None:
+        """后台从 Claude Code 会话记录里找到的项目名（见 projects.py）。"""
+        d = {norm_name(x): x for x in names if x}
+        with self.lock:
+            if d == self._discovered:
+                return
+            self._discovered = d
+            self._bump()
+        self._emit_changed()
 
     def summary(self, m: dict) -> dict:
         resp = self.responses.get(m["id"])

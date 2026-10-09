@@ -624,6 +624,22 @@ def self_test(ddir: Path) -> int:
 
 
 # ------------------------------------------------------------------ main
+def _discover_loop(store: Store, stop: threading.Event) -> None:
+    """每 10 分钟从 Claude Code 的会话记录里重新找一遍项目名，用来认旧消息属于哪个仓库。"""
+    from . import projects
+
+    cache: dict = {}
+    stop.wait(2)
+    while not stop.is_set():
+        try:
+            names = projects.discover(cache=cache)
+            store.set_known_projects(names)
+            log.info("known projects: %s", ", ".join(sorted(names)) or "-")
+        except Exception:  # noqa: BLE001
+            log.exception("project discovery failed")
+        stop.wait(600)
+
+
 def _poll_loop(store: Store, stop: threading.Event) -> None:
     stop.wait(1.5)  # 第一次读取稍后做：托盘图标先注册好，程序关着时到的消息才能补提醒
     while not stop.is_set():
@@ -684,6 +700,7 @@ def main(argv=None) -> int:
     write_instance(ddir, server.port, server.token)
     stop = threading.Event()
     threading.Thread(target=_poll_loop, args=(store, stop), name="poll", daemon=True).start()
+    threading.Thread(target=_discover_loop, args=(store, stop), name="discover", daemon=True).start()
 
     if args.serve:
         print(f"ClaudeDesk 在 {server.url}  （Ctrl-C 退出）", flush=True)

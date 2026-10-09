@@ -239,7 +239,7 @@ def test_projects_are_separated(env):
     page.click('[data-view="all"]')
     page.wait_for_selector(".ptab")
     names = [t.split("\n")[0] for t in page.locator(".ptab .pname").all_inner_texts()]
-    assert names == ["全部", "osworld", "cn-equity-research", "其他"]
+    assert names == ["osworld", "cn-equity-research", "未归类"]  # 标签就是仓库名；没认出来的放最后
     # 全部：按项目分组，同一项目挨在一起；对不上的在最后、标着"未识别"
     assert page.locator(".group-label .gname").all_inner_texts() == ["osworld", "cn-equity-research", "数据清洗"]
     order = page.evaluate("deskTest.S.visible")
@@ -262,8 +262,8 @@ def test_projects_are_separated(env):
     page.click('[data-l="read_all"]')
     page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{c}\"].unread')")
     assert store.is_unread(store.msgs[a]) and not store.is_unread(store.msgs[o])
-    # 把"未识别"的来源归到 osworld
-    page.click('.ptab[data-project=""]')
+    # 把"未识别"的来源归到 osworld（先点 × 取消选择，回到全部）
+    page.click('.ptab-clear')
     page.locator('.group-label.other .gmerge').click()
     page.click('.popover [data-to="osworld"]')
     page.wait_for_function("() => !document.querySelector('.ptab[data-project=\"__other__\"]')")
