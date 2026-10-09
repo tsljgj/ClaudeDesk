@@ -102,3 +102,19 @@ def test_resolve_writes_reply_and_marks_read(tmp_path):
     assert not s.is_unread(s.msgs[a]) and not s.is_unread(s.msgs[b])
     assert s.summary(s.msgs[a])["resolved"] and not s.summary(s.msgs[a])["open"]
     assert s.resolve([a]) == 0  # 已经有回复：不再写
+
+
+def test_project_of_and_scoped_bulk(tmp_path):
+    from claudedesk.store import project_of
+    assert project_of("osworld") == "osworld" and project_of("osworld/data") == "osworld"
+    assert project_of("") == "unknown" and project_of("/x") == "/x"
+    a = post(tmp_path, kind="answer", source="osworld")
+    b = post(tmp_path, kind="answer", source="osworld/eval")
+    c = post(tmp_path, kind="answer", source="cn-equity-research")
+    s = Store(tmp_path)
+    s.poll()
+    assert s.summary(s.msgs[b])["project"] == "osworld"
+    assert s.mark_all_read("osworld") == 2
+    assert s.is_unread(s.msgs[c]) and not s.is_unread(s.msgs[a])
+    assert s.archive_handled("cn-equity-research") == 0
+    assert s.archive_handled("osworld") == 2 and c not in s.archived

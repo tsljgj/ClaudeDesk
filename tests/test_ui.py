@@ -224,3 +224,39 @@ def test_hover_actions_and_checkbox_bulk(env):
     page.click("#checkAll")
     page.wait_for_selector("#bulkbar", state="hidden")
     assert errors == []
+
+
+def test_projects_are_separated(env):
+    d, store, server, page, errors = env
+    a = post(d, kind="decision", source="osworld", title="OS 决定", options=["A"])
+    b = post(d, kind="answer", source="osworld/eval", title="OS 回答")
+    c = post(d, kind="answer", source="cn-equity-research", title="A 股回答")
+    store.poll()
+    page.goto(server.url)
+    page.click('[data-view="all"]')
+    page.wait_for_selector(".pchip")
+    # 全部项目：按项目分组，同一项目的消息挨在一起
+    assert page.locator(".group-label .gname").all_inner_texts() == ["osworld", "cn-equity-research"]
+    order = page.evaluate("deskTest.S.visible")
+    assert order.index(c) == 2 and set(order[:2]) == {a, b}
+    # 只看一个项目：列表和视图计数都跟着变
+    page.click('.pchip[data-project="cn-equity-research"]')
+    page.wait_for_function("() => document.querySelectorAll('.item').length === 1")
+    assert page.locator(".item").get_attribute("data-id") == c
+    assert page.locator(".group-label").count() == 0
+    assert page.inner_text('.tab[data-view="decide"]').strip() == "决定"  # 这个项目没有待决定
+    # 列表菜单"全部标为已读"只动这个项目
+    page.click("#listMenuBtn")
+    page.click('[data-l="read_all"]')
+    page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{c}\"].unread')")
+    assert store.is_unread(store.msgs[a]) and not store.is_unread(store.msgs[c])
+    # 点组标题 = 只看那个项目；[ ] 切换
+    page.click('.pchip[data-project=""]')
+    page.click('.group-label[data-project="osworld"]')
+    page.wait_for_function("() => document.querySelectorAll('.item').length === 2")
+    page.keyboard.press("]")
+    page.wait_for_function("() => deskTest.S.project === 'cn-equity-research'")
+    # 从通知打开别的项目的消息：自动切过去
+    page.evaluate(f"deskOpen('{a}')")
+    page.wait_for_function("() => deskTest.S.project === 'osworld'")
+    assert errors == []

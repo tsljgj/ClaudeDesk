@@ -35,6 +35,7 @@ Upgrading from 1.x: quit the old app from the tray, drop the new `ClaudeDesk.exe
 ## Using it
 
 - Four views at the top: **决定** (decisions; the orange number counts unanswered ones), **回答** (answers), **全部** (everything), **归档** (archive).
+- **Per project (repo):** a row of project chips sits under the views; the project is the part of `--source` before `/` (`osworld` and `osworld/eval` are both osworld). "全部项目" groups the list by project; picking one shows only that project, and the view counts and the "mark all read" / "archive handled" actions follow it. `[` / `]` switch projects.
 - Decisions: press `1`–`9` or click an option, optionally type a note, `Ctrl+Enter` to submit.
 - Hover a message in the list to get its own actions (read/unread, mark resolved, archive, delete) and a checkbox; nothing shows until you hover. The open message has an orange bar on its left.
 - **Mark resolved** (`R`) tells a waiting session the matter is handled, without picking an option (`"resolved": true` in the reply). Archiving or deleting a still-open decision tells it you skipped it, so it never hangs.
