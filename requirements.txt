@@ -1,0 +1,4 @@
+# 运行 / 打包 ClaudeDesk.exe 需要的包（desk.py 只用标准库，不需要这些）
+pywebview>=5
+pystray>=0.19
+Pillow>=10

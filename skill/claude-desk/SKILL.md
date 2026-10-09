@@ -63,6 +63,7 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
    - 按 `choice` 执行，`text` 里的补充条件同样要遵守。
    - `text` 和 `choice` 冲突、或者只写了文字时，以文字为准；看不懂就再发一条 decision 问清楚，不要猜。
+   - 回复里带 `"dismissed": true`（`choice` 为 `null`）表示用户在 ClaudeDesk 里把这条归档 / 删除了、没有作出选择：不要按任何选项执行，在对话里说一句"这条决定被跳过了"，继续做不依赖它的事，或者结束这一轮等用户在对话里说。
    - 执行前在对话里用一句话复述"用户选了 X（补充：…），现在开始做"。
 6. 特殊情况：
    - **用户直接在对话里答了**：按对话里的答复执行，停掉后台 `wait`，再 `"$PY" "$DESK" close --id <id> --text "用户在对话里选了 …"`，让 ClaudeDesk 里那条不再显示"待决定"。
@@ -95,4 +96,4 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 - 正文一律用文件或 stdin 传，不要把多行 Markdown 塞进命令行参数。命令行只放标题、选项这类短文本，用单引号包起来。
 - 不要往消息里写凭据、token。
 - 数据在 `<ClaudeDesk 目录>\data\`（`inbox.jsonl` / `responses.jsonl`，都只追加）。不要手改；要标"已处理"用 `close`。
-- 程序没响应时先看托盘里有没有图标，再看 README 的"重新构建"一节。
+- 程序没响应时先看托盘里有没有图标；日志在 `<ClaudeDesk 目录>\data\claudedesk.log`。

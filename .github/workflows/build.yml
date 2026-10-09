@@ -1,0 +1,170 @@
+name: build
+
+# Every green push to main or a claude/* branch is published as a GitHub release tagged
+# build-<run_number>; installed ClaudeDesk.exe copies pick it up through the self-updater.
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ui-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests (store + real browser UI)
+        run: |
+          python -m pip install pytest pillow playwright
+          python -m playwright install --with-deps chromium
+          python -m pytest -q
+
+  windows:
+    runs-on: windows-latest
+    needs: ui-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Stamp build number
+        shell: pwsh
+        run: |
+          @"
+          # Written by CI.
+          BUILD = ${{ github.run_number }}
+          COMMIT = "${{ github.sha }}"
+          "@ | Set-Content -Encoding utf8 src/claudedesk/_build.py
+
+      - name: Unit tests
+        run: |
+          python -m pip install -r requirements.txt pytest pyinstaller
+          python -m pytest -q tests/test_store.py
+
+      - name: Build exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          Push-Location src; python -m claudedesk.icon ..\build\claudedesk.ico; Pop-Location
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name ClaudeDesk `
+            --icon build/claudedesk.ico --version-file packaging/version.txt `
+            --paths . --paths src `
+            --add-data "src/claudedesk/assets;claudedesk/assets" --add-data "desk.py;bundled" `
+            --hidden-import pystray._win32 --collect-submodules webview `
+            --exclude-module tkinter --exclude-module unittest `
+            --distpath dist --workpath build/work --specpath build `
+            scripts/ClaudeDesk.py
+          Get-Item dist\ClaudeDesk.exe | Select-Object Name, Length
+
+      - name: Self-test packaged exe
+        shell: pwsh
+        run: |
+          $env:CLAUDEDESK_SELFTEST_OUT = "$PWD\selftest.json"
+          $p = Start-Process dist\ClaudeDesk.exe -ArgumentList "--self-test", "--data", "$PWD\selftest-data" -Wait -PassThru
+          Get-Content selftest.json
+          $r = Get-Content selftest.json -Encoding utf8 | ConvertFrom-Json
+          if ($p.ExitCode -ne 0 -or -not $r.ok -or -not $r.webview) { throw "self-test failed (exit $($p.ExitCode))" }
+          if ($r.build -ne ${{ github.run_number }}) { throw "build stamp missing (got $($r.build))" }
+
+      - name: End-to-end (real tray app, desk.py, self-update)
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $d = "$env:RUNNER_TEMP\e2e"
+          New-Item -ItemType Directory -Force "$d" | Out-Null
+          Copy-Item dist\ClaudeDesk.exe "$d\ClaudeDesk.exe"   # the installed copy
+          Copy-Item dist\ClaudeDesk.exe "$d\new.exe"          # the "downloaded" update
+          $h = (Get-FileHash "$d\new.exe" -Algorithm SHA256).Hash.ToLower()
+          "$h  ClaudeDesk.exe" | Set-Content -NoNewline -Encoding ascii "$d\new.exe.sha256"
+          $next = ${{ github.run_number }} + 1000
+          @{ tag_name = "build-$next"; name = "e2e"; html_url = ""; assets = @(
+              @{ name = "ClaudeDesk.exe"; browser_download_url = "$d\new.exe" },
+              @{ name = "ClaudeDesk.exe.sha256"; browser_download_url = "$d\new.exe.sha256" }) } |
+            ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 "$d\feed.json"
+          $env:CLAUDEDESK_UPDATE_FEED = "$d\feed.json"
+          function State { try { Get-Content "$d\data\instance.json" -ErrorAction Stop | ConvertFrom-Json } catch { $null } }
+          function Call($st, $body) {
+            Invoke-RestMethod -TimeoutSec 5 -Method Post -Uri "http://127.0.0.1:$($st.port)/api/action" `
+              -Headers @{ "X-Desk-Token" = $st.token } -ContentType "application/json; charset=utf-8" -Body $body
+          }
+          $ok = $false
+          try {
+            Start-Process "$d\ClaudeDesk.exe" -ArgumentList "--minimized"
+            for ($i = 0; $i -lt 60 -and -not (State); $i++) { Start-Sleep 1 }
+            $st = State
+            if (-not $st) { throw "tray app never came up" }
+            "instance: pid $($st.pid) port $($st.port)"
+            # the exe dropped its own desk.py next to itself; a "session" posts through it
+            if (-not (Test-Path "$d\desk.py")) { throw "desk.py was not placed next to the exe" }
+            $id = (python "$d\desk.py" post --kind decision --source e2e --title "e2e?" --body "x" --option "A" --option "B" --no-launch).Trim()
+            "posted $id"
+            $s = Invoke-RestMethod -Uri "http://127.0.0.1:$($st.port)/api/state?since=-1" -Headers @{ "X-Desk-Token" = $st.token }
+            for ($i = 0; $i -lt 10 -and -not ($s.messages | Where-Object id -eq $id); $i++) {
+              Start-Sleep 1
+              $s = Invoke-RestMethod -Uri "http://127.0.0.1:$($st.port)/api/state?since=-1" -Headers @{ "X-Desk-Token" = $st.token }
+            }
+            if (-not ($s.messages | Where-Object id -eq $id)) { throw "app did not pick up the posted message" }
+            $r = Call $st ('{"action":"reply","id":"' + $id + '","choice":"B","text":"e2e"}')
+            if (-not $r.ok) { throw "reply failed: $($r.message)" }
+            $w = python "$d\desk.py" wait --id $id --timeout 10
+            "wait -> $w"
+            if ($LASTEXITCODE -ne 0 -or $w -notmatch '"choice": "B"') { throw "desk.py wait did not see the reply" }
+            # self-update
+            $r = Call $st '{"action":"install_update"}'
+            "update: $($r.result)"
+            for ($i = 0; $i -lt 90; $i++) {
+              Start-Sleep 1
+              $n = State
+              if ($n -and $n.pid -ne $st.pid -and $n.build -eq ${{ github.run_number }}) {
+                try { Invoke-RestMethod -TimeoutSec 5 -Uri "http://127.0.0.1:$($n.port)/api/state?since=-1" -Headers @{ "X-Desk-Token" = $n.token } | Out-Null; $ok = $true; break } catch {}
+              }
+            }
+            if ($ok) { "new instance after update: pid $($n.pid)"; Call $n '{"action":"quit"}' | Out-Null }
+          } finally {
+            "---- claudedesk.log ----"
+            Get-Content "$d\data\claudedesk.log" -ErrorAction SilentlyContinue
+            Start-Sleep 2
+            Get-Process ClaudeDesk -ErrorAction SilentlyContinue | Stop-Process -Force
+          }
+          if (-not $ok) { throw "after the update no new instance came up" }
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash dist\ClaudeDesk.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  ClaudeDesk.exe" | Set-Content -NoNewline -Encoding ascii dist\ClaudeDesk.exe.sha256
+          Get-Content dist\ClaudeDesk.exe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeDesk-windows
+          path: |
+            dist/ClaudeDesk.exe
+            dist/ClaudeDesk.exe.sha256
+
+      - name: Publish release (auto-update channel)
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/claude/'))
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: ClaudeDesk build ${{ github.run_number }}
+          body: |
+            ${{ github.event.head_commit.message }}
+
+            branch `${{ github.ref_name }}` · commit ${{ github.sha }}
+          make_latest: true
+          files: |
+            dist/ClaudeDesk.exe
+            dist/ClaudeDesk.exe.sha256
