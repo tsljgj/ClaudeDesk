@@ -49,16 +49,16 @@
 
   // ---------------------------------------------------------------- 状态
   var VIEWS = [
+    { id: "all", label: "全部", empty: "收件箱是空的", emptySub: "一切都处理完了" },
     { id: "decide", label: "决定", empty: "没有要你决定的事", emptySub: "会话需要你拍板时，会出现在这里" },
     { id: "answer", label: "回答", empty: "还没有回答", emptySub: "你问 Claude 的问题，完整答案收在这里" },
-    { id: "all", label: "全部", empty: "收件箱是空的", emptySub: "一切都处理完了" },
     { id: "archive", label: "归档", empty: "归档是空的", emptySub: "按 E 把处理完的消息收起来" },
   ];
   var KIND = { decision: "决定", answer: "回答", info: "通知" };
 
   var S = {
     version: -1, msgs: [], byId: {}, counts: {}, settings: BOOT.settings || {}, meta: {},
-    view: load("view", "decide"), projects: loadSet("projects"), query: "", searchIds: null,
+    view: "all", projects: loadSet("projects"), query: "", searchIds: null,
     current: null, multi: new Set(), anchor: null, choice: null,
     details: {}, shownKey: null, visible: [],
   };
@@ -176,18 +176,15 @@
       if (m.unread) e.unread++;
     });
     return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
-      return (a.key === OTHER) - (b.key === OTHER) || (b.open > 0) - (a.open > 0) ||
-        (b.last > a.last ? 1 : b.last < a.last ? -1 : 0);
+      return (a.key === OTHER) - (b.key === OTHER) || byName(a.name, b.name);
     });
   }
-  function groupOrder() { // 分组顺序：仓库按标签顺序，"其他"里的各来源按最近时间
+  function byName(a, b) { return a.localeCompare(b, "zh-CN", { sensitivity: "base", numeric: true }); }
+  function groupOrder() { // 分组顺序和标签一样按名字，"未归类"里的各来源排在最后；不随消息进出而跳动
     var order = {}, n = 0, others = {};
     projectList().forEach(function (p) { if (p.key !== OTHER) order[p.key] = n++; });
-    S.msgs.forEach(function (m) {
-      if (m.project_kind === "other" && (!others[projectOf(m)] || m.ts > others[projectOf(m)])) others[projectOf(m)] = m.ts;
-    });
-    Object.keys(others).sort(function (a, b) { return others[b] > others[a] ? 1 : -1; })
-      .forEach(function (k) { if (!(k in order)) order[k] = n++; });
+    S.msgs.forEach(function (m) { if (m.project_kind === "other") others[projectOf(m)] = 1; });
+    Object.keys(others).sort(byName).forEach(function (k) { if (!(k in order)) order[k] = n++; });
     return order;
   }
   function grouped() {
@@ -268,7 +265,7 @@
     $("nav").innerHTML = VIEWS.map(function (v) {
       var k = n[v.id];
       return '<button class="tab' + (S.view === v.id ? " active" : "") + '" data-view="' + v.id + '">' + v.label +
-        (k[0] ? '<span class="n' + (k[1] ? " hot" : "") + '">' + k[0] + "</span>" : "") + "</button>";
+        '<span class="n' + (k[0] && k[1] ? " hot" : "") + '">' + (k[0] || "") + "</span></button>";
     }).join("");
     renderProjects();
     var t = [];
@@ -285,7 +282,7 @@
     if (gone.length && S.msgs.length) { gone.forEach(function (k) { S.projects.delete(k); }); save("projects", JSON.stringify(Array.from(S.projects))); }
     var tab = function (p) {
       var on = S.projects.has(p.key);
-      var badge = p.open ? '<span class="n hot">' + p.open + "</span>" : p.unread ? '<span class="n">' + p.unread + "</span>" : "";
+      var badge = '<span class="n' + (p.open ? " hot" : "") + '">' + (p.open || p.unread || "") + "</span>";
       var tip = (p.key === OTHER ? "认不出是哪个仓库的旧消息。点分组标题旁的「归到…」可以归到某个仓库" : p.name +
         (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "")) +
         "\n点：只看它，再点一次取消（都不选 = 看全部）· Ctrl/Shift + 点：多选" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
@@ -395,7 +392,7 @@
     ca.classList.toggle("on", !!all);
     ca.classList.toggle("some", !all);
     $("bulkCount").textContent = "已选 " + n + " 条";
-    $("bulkResolve").hidden = !hasOpen(ids);
+    $("bulkResolve").style.visibility = hasOpen(ids) ? "" : "hidden";
     var allArch = ids.every(function (id) { return S.byId[id] && S.byId[id].archived; });
     $("bulkArchive").innerHTML = icon(allArch ? "unarchive" : "archive");
     $("bulkArchive").title = allArch ? "移出归档" : "归档";
@@ -551,8 +548,10 @@
     }
     renderList();
     renderReader();
-    var el = document.querySelector('.item[data-id="' + cssEsc(id) + '"]');
-    if (el) el.scrollIntoView({ block: "nearest" });
+    if (opts.scroll) {
+      var el = document.querySelector('.item[data-id="' + cssEsc(id) + '"]');
+      if (el) el.scrollIntoView({ block: "nearest" });
+    }
   }
   function cssEsc(s) { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
   function move(delta) {
@@ -560,11 +559,10 @@
     if (!ids.length) return;
     var i = ids.indexOf(S.current);
     var j = i < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, i + delta));
-    select(ids[j]);
+    select(ids[j], { scroll: true });
   }
   function setView(v) {
     S.view = v;
-    save("view", v);
     S.multi.clear();
     renderNav();
     renderList();
@@ -1129,7 +1127,7 @@
   }
 
   // ---------------------------------------------------------------- 启动
-  if (!VIEWS.some(function (v) { return v.id === S.view; })) S.view = "decide";
+  if (!VIEWS.some(function (v) { return v.id === S.view; })) S.view = "all";
   bind();
   renderNav();
   renderFoot();
@@ -1142,7 +1140,7 @@
       if (!inScope(m)) { S.projects = new Set([tabKey(m)]); applyProjects(); }
       if (!inView(m, S.view)) setView(view || (m.archived ? "archive" : m.kind === "decision" ? "decide" : m.kind === "answer" ? "answer" : "all"));
       if (S.query) { $("search").value = ""; S.query = ""; S.searchIds = null; renderAll(); }
-      select(id);
+      select(id, { scroll: true });
       return true;
     };
     if (!go()) refreshNow().then(go);

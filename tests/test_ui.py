@@ -239,11 +239,11 @@ def test_projects_are_separated(env):
     page.click('[data-view="all"]')
     page.wait_for_selector(".ptab")
     names = [t.split("\n")[0] for t in page.locator(".ptab .pname").all_inner_texts()]
-    assert names == ["osworld", "cn-equity-research", "未归类"]  # 标签就是仓库名；没认出来的放最后
+    assert names == ["cn-equity-research", "osworld", "未归类"]  # 标签就是仓库名，按名字排；没认出来的放最后
     # 全部：按项目分组，同一项目挨在一起；对不上的在最后、标着"未识别"
-    assert page.locator(".group-label .gname").all_inner_texts() == ["osworld", "cn-equity-research", "数据清洗"]
+    assert page.locator(".group-label .gname").all_inner_texts() == ["cn-equity-research", "osworld", "数据清洗"]
     order = page.evaluate("deskTest.S.visible")
-    assert set(order[:2]) == {a, b} and order[2:] == [c, o]
+    assert order[0] == c and set(order[1:3]) == {a, b} and order[3] == o
     assert page.locator(".group-label.other .gtag").count() == 1
     # 点标签：只看它；视图计数跟着变；再点一次取消
     page.click('.ptab[data-project="cn-equity-research"]')
@@ -274,4 +274,51 @@ def test_projects_are_separated(env):
     page.wait_for_function("() => deskTest.S.projects.size === 1")
     page.evaluate(f"deskOpen('{c}')")
     page.wait_for_function("() => deskTest.S.projects.has('cn-equity-research')")
+    assert errors == []
+
+
+def test_nothing_moves_when_clicking(env):
+    """点按钮、选标签、勾选、读一条：别的标签、文字、列表项都不能挪位置。"""
+    d, store, server, page, errors = env
+    mk = lambda kind, title, repo, **kw: desk.post_message(  # noqa: E731
+        desk.make_message(kind, "s", title, repo=repo, **kw), d)
+    ids = [mk("decision", "这是一个比较长的标题，用来看读过之后字会不会挪", "osworld", options=["A"]),
+           mk("answer", "回答一", "cn-equity-research"), mk("answer", "回答二", "osworld")]
+    ids += [mk("info", f"通知 {i}", "osworld") for i in range(12)]  # 够长，列表有滚动条
+    store.poll()
+    page.goto(server.url)
+    page.wait_for_selector(".item")
+    assert page.evaluate("deskTest.S.view") == "all"  # 默认是"全部"
+    assert page.locator(".tab.active").inner_text().startswith("全部")
+
+    boxes = """sel => [...document.querySelectorAll(sel)].map(e => { const r = e.getBoundingClientRect();
+        return [Math.round(r.left), Math.round(r.top), Math.round(r.width)]; })"""
+    tabs0, ptabs0 = page.evaluate(boxes, ".tab"), page.evaluate(boxes, ".ptab")
+    # 切视图、选项目标签：所有标签位置不变
+    page.click('.tab[data-view="decide"]')
+    page.click('.ptab[data-project="osworld"]')
+    assert page.evaluate(boxes, ".tab") == tabs0
+    assert page.evaluate(boxes, ".ptab") == ptabs0
+    page.click('.ptab[data-project="osworld"]')
+    page.click('.tab[data-view="all"]')
+
+    # 读一条（未读 -> 已读、计数变少）：标签和列表项位置不变，标题宽度不变
+    page.locator(f'.item[data-id="{ids[0]}"]').scroll_into_view_if_needed()  # 测试工具点之前会滚过去，先滚好再量
+    items0 = page.evaluate(boxes, ".item")
+    title0 = page.evaluate(boxes, f'.item[data-id="{ids[0]}"] .t')
+    page.click(f'.item[data-id="{ids[0]}"]')
+    page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{ids[0]}\"].unread')")
+    assert page.evaluate(boxes, ".item") == items0
+    assert page.evaluate(boxes, f'.item[data-id="{ids[0]}"] .t') == title0
+    assert page.evaluate(boxes, ".tab") == tabs0 and page.evaluate(boxes, ".ptab") == ptabs0
+
+    # 勾选：批量栏盖在搜索框上，列表不往下挤
+    page.wait_for_timeout(300)  # 读过之后服务端推一次新状态，列表会重画一次
+    page.locator(f'.item[data-id="{ids[1]}"]').scroll_into_view_if_needed()
+    items1 = page.evaluate(boxes, ".item")
+    page.locator(f'.item[data-id="{ids[1]}"]').hover()
+    page.locator(f'.item[data-id="{ids[1]}"] .cb').click()
+    page.wait_for_selector("#bulkbar:not([hidden])")
+    assert page.evaluate(boxes, ".item") == items1
+    page.keyboard.press("Escape")
     assert errors == []
