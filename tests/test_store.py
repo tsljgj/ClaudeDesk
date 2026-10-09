@@ -108,13 +108,34 @@ def test_project_of_and_scoped_bulk(tmp_path):
     from claudedesk.store import project_of
     assert project_of("webapp") == "webapp" and project_of("webapp/data") == "webapp"
     assert project_of("") == "unknown" and project_of("/x") == "/x"
-    a = post(tmp_path, kind="answer", source="webapp")
-    b = post(tmp_path, kind="answer", source="webapp/eval")
-    c = post(tmp_path, kind="answer", source="acme-data-pipeline")
+    a = desk.post_message(desk.make_message("answer", "eval-run", "t", repo="webapp"), tmp_path)
+    b = post(tmp_path, kind="answer", source="webapp/eval")  # 旧消息：能对上已知仓库
+    c = desk.post_message(desk.make_message("answer", "x", "t", repo="acme-data-pipeline"), tmp_path)
     s = Store(tmp_path)
     s.poll()
+    assert s.summary(s.msgs[a])["project"] == "webapp" and s.summary(s.msgs[a])["project_kind"] == "repo"
     assert s.summary(s.msgs[b])["project"] == "webapp"
     assert s.mark_all_read("webapp") == 2
     assert s.is_unread(s.msgs[c]) and not s.is_unread(s.msgs[a])
     assert s.archive_handled("acme-data-pipeline") == 0
     assert s.archive_handled("webapp") == 2 and c not in s.archived
+
+
+def test_legacy_sources_match_known_repos_or_become_other(tmp_path):
+    desk.post_message(desk.make_message("answer", "s", "t", repo="WebApp"), tmp_path)
+    old = [post(tmp_path, kind="info", source=src) for src in
+           ("webapp-eval", "webapp_runner/2", "WebApp", "随手记", "scratch-notes")]
+    s = Store(tmp_path)
+    s.poll()
+    info = [s.project_info(s.msgs[i]) for i in old]
+    assert [(n, k) for n, k, _ in info] == [("WebApp", "repo"), ("WebApp", "repo"), ("WebApp", "repo"),
+                                             ("随手记", "other"), ("scratch-notes", "other")]
+    # 用户把没认出来的来源归到某个项目；再把那个项目归到另一个，链会被拉平
+    s.set_alias("scratch-notes", "acme-data-pipeline")
+    assert s.project_info(s.msgs[old[4]])[:2] == ("acme-data-pipeline", "repo")
+    s.set_alias("acme-data-pipeline", "WebApp")
+    assert s.aliases == {"scratch-notes": "WebApp", "acme-data-pipeline": "WebApp"}
+    s.set_alias("scratch-notes", "")
+    assert s.project_info(s.msgs[old[4]])[:2] == ("scratch-notes", "other")
+    s.save_state()
+    assert Store(tmp_path).aliases == {"acme-data-pipeline": "WebApp"}

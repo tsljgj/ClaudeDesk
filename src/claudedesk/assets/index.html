@@ -24,20 +24,22 @@
 </head>
 <body>
 <div id="app" class="app">
+  <header class="topbar">
+    <svg class="mark" viewBox="0 0 64 64" aria-label="ClaudeDesk">
+      <rect width="64" height="64" rx="17" fill="var(--accent)"/>
+      <path d="M35.6 22.3A11.84 11.84 0 1 0 35.6 41.7" fill="none" stroke="#fff" stroke-width="8.3" stroke-linecap="round"/>
+      <circle cx="45.1" cy="32" r="4.8" fill="#fff"/>
+    </svg>
+    <nav class="ptabs" id="projects" role="tablist" aria-label="项目（仓库）"></nav>
+    <button class="icon-btn" id="settingsBtn" title="设置"><i data-icon="settings"></i></button>
+  </header>
   <section class="listpane" id="listpane">
     <header class="list-head">
       <div class="head-row">
-        <svg class="mark" viewBox="0 0 64 64" aria-label="ClaudeDesk">
-          <rect width="64" height="64" rx="17" fill="var(--accent)"/>
-          <path d="M35.6 22.3A11.84 11.84 0 1 0 35.6 41.7" fill="none" stroke="#fff" stroke-width="8.3" stroke-linecap="round"/>
-          <circle cx="45.1" cy="32" r="4.8" fill="#fff"/>
-        </svg>
         <nav class="tabs" id="nav" aria-label="视图"></nav>
         <div class="grow"></div>
         <button class="icon-btn" id="listMenuBtn" title="更多"><i data-icon="more"></i></button>
-        <button class="icon-btn" id="settingsBtn" title="设置"><i data-icon="settings"></i></button>
       </div>
-      <div class="projects" id="projects" role="tablist" aria-label="项目" hidden></div>
       <label class="search">
         <i data-icon="search"></i>
         <input id="search" type="search" placeholder="搜索" autocomplete="off" spellcheck="false">

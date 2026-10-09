@@ -21,6 +21,7 @@ import contextlib
 import datetime as _dt
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -180,8 +181,45 @@ def normalize_options(raw) -> list[dict]:
     return out
 
 
+def detect_repo(cwd: str | os.PathLike | None = None) -> str | None:
+    """当前目录所在的 git 仓库名，用来把消息按仓库分开。
+    依次看：origin 远程地址里的仓库名 → 主仓库目录名（worktree 也认得出是哪个仓库）→ 工作区根目录名。
+    不在 git 仓库里、或者没装 git，返回 None。"""
+    flags = {"creationflags": 0x08000000} if os.name == "nt" else {}  # CREATE_NO_WINDOW
+
+    def git(*args: str) -> str | None:
+        try:
+            r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5,
+                               stdin=subprocess.DEVNULL, **flags)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        out = (r.stdout or "").strip()
+        return out if r.returncode == 0 and out else None
+
+    if git("rev-parse", "--is-inside-work-tree") != "true":
+        return None
+    url = git("config", "--get", "remote.origin.url")
+    if url:
+        name = re.split(r"[/:\\]", url.rstrip("/\\"))[-1]
+        name = name[:-4] if name.lower().endswith(".git") else name
+        if name:
+            return name
+    common = git("rev-parse", "--git-common-dir")
+    if common:
+        p = Path(common)
+        if not p.is_absolute():
+            p = Path(cwd or os.getcwd()) / p
+        p = p.resolve()
+        repo = p.parent if p.name == ".git" else p
+        name = repo.name[:-4] if repo.name.lower().endswith(".git") else repo.name
+        if name:
+            return name
+    top = git("rev-parse", "--show-toplevel")
+    return Path(top).name if top else None
+
+
 def make_message(kind, source, title, body="", question=None, options=None,
-                 recommended=None, allow_text=False, priority="normal") -> dict:
+                 recommended=None, allow_text=False, priority="normal", repo=None) -> dict:
     if kind not in KINDS:
         raise ValueError(f"kind 必须是 {KINDS} 之一")
     if not str(title or "").strip():
@@ -202,6 +240,8 @@ def make_message(kind, source, title, body="", question=None, options=None,
         "body": body or "",
         "priority": "high" if priority == "high" else "normal",
     }
+    if repo:
+        msg["repo"] = str(repo).strip()
     if question:
         msg["question"] = question
     if kind == "decision":
@@ -311,8 +351,9 @@ def cmd_post(a) -> int:
     if a.question_file:
         question = _read_text_file(a.question_file)
     try:
+        repo = a.repo if a.repo is not None else detect_repo()
         msg = make_message(a.kind, a.source, a.title, body, question, a.option,
-                           a.recommended, a.allow_text, a.priority)
+                           a.recommended, a.allow_text, a.priority, repo=repo or None)
     except ValueError as e:
         print(f"错误：{e}", file=sys.stderr)
         return 1
@@ -407,6 +448,8 @@ def cmd_list(a) -> int:
     for m in msgs:
         if a.source and m.get("source") != a.source:
             continue
+        if a.repo and m.get("repo") != a.repo:
+            continue
         is_open = m.get("kind") == "decision" and m.get("id") not in answered
         if a.open and not is_open:
             continue
@@ -440,6 +483,7 @@ def main(argv=None) -> int:
     sp = sub.add_parser("post", help="发一条消息，打印 id")
     sp.add_argument("--kind", required=True, choices=KINDS)
     sp.add_argument("--source", required=True, help="会话或项目名")
+    sp.add_argument("--repo", help="消息属于哪个仓库（默认：当前目录所在 git 仓库的名字，自动识别；写空字符串表示不归属）")
     sp.add_argument("--title", required=True)
     sp.add_argument("--body", help="正文 Markdown；写 - 表示从 stdin 读")
     sp.add_argument("--body-file", help="正文 Markdown 文件（UTF-8）")
@@ -474,6 +518,7 @@ def main(argv=None) -> int:
     sp = sub.add_parser("list", help="列出消息")
     sp.add_argument("--open", action="store_true", help="只看还没回复的 decision")
     sp.add_argument("--source")
+    sp.add_argument("--repo", help="只看这个仓库的")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_list)
 

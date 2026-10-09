@@ -260,7 +260,7 @@ class TrayApp:
             m = msgs[0]
             head = {"decision": "需要你决定", "answer": "新回答", "info": "通知"}[m["kind"]]
             title = f"{head}：{m['title']}"
-            text = f"[{m['source']}] " + (plain_summary(m["question"], 60) + " → " if m["question"] else "") \
+            text = f"[{m.get('repo') or m['source']}] " + (plain_summary(m["question"], 60) + " → " if m["question"] else "") \
                 + plain_summary(m["body"], 100)
         else:
             nd = sum(1 for m in msgs if m["kind"] == "decision")
