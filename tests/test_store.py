@@ -139,3 +139,16 @@ def test_legacy_sources_match_known_repos_or_become_other(tmp_path):
     assert s.project_info(s.msgs[old[4]])[:2] == ("scratch-notes", "other")
     s.save_state()
     assert Store(tmp_path).aliases == {"acme-data-pipeline": "WebApp"}
+
+
+def test_legacy_matching_uses_discovered_projects(tmp_path):
+    old = {src: post(tmp_path, kind="info", source=src) for src in
+           ("webapp", "webapp/eval", "WebApp-runner", "acme-data", "acme-data-pipeline", "随便写的")}
+    s = Store(tmp_path)
+    s.poll()
+    assert all(s.project_info(s.msgs[i])[1] == "other" for i in old.values())  # 还不知道有哪些仓库
+    s.set_known_projects({"WebApp", "acme-data-pipeline"})
+    got = {src: s.project_info(s.msgs[i])[:2] for src, i in old.items()}
+    assert got == {"webapp": ("WebApp", "repo"), "webapp/eval": ("WebApp", "repo"),
+                   "WebApp-runner": ("WebApp", "repo"), "acme-data": ("acme-data-pipeline", "repo"),
+                   "acme-data-pipeline": ("acme-data-pipeline", "repo"), "随便写的": ("随便写的", "other")}

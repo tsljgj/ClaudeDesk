@@ -162,6 +162,12 @@ i[data-icon] svg { width: 100%; height: 100%; }
 }
 .ptab.on + .ptab::before, .ptab:hover + .ptab::before { display: none; }
 .ptab.other .pname { color: var(--ink-3); font-style: italic; }
+.ptab-clear {
+  align-self: center; flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; margin-left: 2px;
+  border-radius: 6px; color: var(--ink-4);
+}
+.ptab-clear:hover { color: var(--ink); background: color-mix(in srgb, var(--bg) 55%, transparent); }
+.ptab-clear i[data-icon] { width: 14px; height: 14px; }
 .ptab .n { font-size: 11px; font-weight: 650; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .ptab .n.hot { color: var(--accent); }
 

@@ -181,10 +181,10 @@ def normalize_options(raw) -> list[dict]:
     return out
 
 
-def detect_repo(cwd: str | os.PathLike | None = None) -> str | None:
+def detect_repo(cwd: str | os.PathLike | None = None, folder_fallback: bool = False) -> str | None:
     """当前目录所在的 git 仓库名，用来把消息按仓库分开。
     依次看：origin 远程地址里的仓库名 → 主仓库目录名（worktree 也认得出是哪个仓库）→ 工作区根目录名。
-    不在 git 仓库里、或者没装 git，返回 None。"""
+    不在 git 仓库里（或没装 git）：folder_fallback 时用当前目录名（家目录、盘符根目录除外），否则返回 None。"""
     flags = {"creationflags": 0x08000000} if os.name == "nt" else {}  # CREATE_NO_WINDOW
 
     def git(*args: str) -> str | None:
@@ -197,7 +197,12 @@ def detect_repo(cwd: str | os.PathLike | None = None) -> str | None:
         return out if r.returncode == 0 and out else None
 
     if git("rev-parse", "--is-inside-work-tree") != "true":
-        return None
+        if not folder_fallback:
+            return None
+        here = Path(cwd or os.getcwd()).resolve()
+        if here == Path.home().resolve() or here.parent == here or not here.name:
+            return None
+        return here.name
     url = git("config", "--get", "remote.origin.url")
     if url:
         name = re.split(r"[/:\\]", url.rstrip("/\\"))[-1]
@@ -351,7 +356,7 @@ def cmd_post(a) -> int:
     if a.question_file:
         question = _read_text_file(a.question_file)
     try:
-        repo = a.repo if a.repo is not None else detect_repo()
+        repo = a.repo if a.repo is not None else detect_repo(folder_fallback=True)
         msg = make_message(a.kind, a.source, a.title, body, question, a.option,
                            a.recommended, a.allow_text, a.priority, repo=repo or None)
     except ValueError as e:
@@ -483,7 +488,7 @@ def main(argv=None) -> int:
     sp = sub.add_parser("post", help="发一条消息，打印 id")
     sp.add_argument("--kind", required=True, choices=KINDS)
     sp.add_argument("--source", required=True, help="会话或项目名")
-    sp.add_argument("--repo", help="消息属于哪个仓库（默认：当前目录所在 git 仓库的名字，自动识别；写空字符串表示不归属）")
+    sp.add_argument("--repo", help="消息属于哪个仓库（默认自动识别：当前目录所在 git 仓库的名字；不在仓库里就用当前目录名）")
     sp.add_argument("--title", required=True)
     sp.add_argument("--body", help="正文 Markdown；写 - 表示从 stdin 读")
     sp.add_argument("--body-file", help="正文 Markdown 文件（UTF-8）")

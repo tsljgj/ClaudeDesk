@@ -168,7 +168,7 @@
     var map = {};
     S.msgs.forEach(function (m) {
       var k = tabKey(m);
-      var e = map[k] || (map[k] = { key: k, name: k === OTHER ? "其他" : k, open: 0, unread: 0, last: "", total: 0 });
+      var e = map[k] || (map[k] = { key: k, name: k === OTHER ? "未归类" : k, open: 0, unread: 0, last: "", total: 0 });
       if (m.ts > e.last) e.last = m.ts;
       if (m.archived) return;
       e.total++;
@@ -237,7 +237,7 @@
   function setProject(p) { S.projects = p ? new Set([p]) : new Set(); applyProjects(); } // 测试 / 通知用
   function scopeLabel() {
     if (!S.projects.size) return "";
-    if (S.projects.size === 1) { var k = S.projects.values().next().value; return k === OTHER ? "其他" : k; }
+    if (S.projects.size === 1) { var k = S.projects.values().next().value; return k === OTHER ? "未归类" : k; }
     return S.projects.size + " 个项目";
   }
 
@@ -284,18 +284,19 @@
     var gone = Array.from(S.projects).filter(function (k) { return !keys[k]; });
     if (gone.length && S.msgs.length) { gone.forEach(function (k) { S.projects.delete(k); }); save("projects", JSON.stringify(Array.from(S.projects))); }
     var tab = function (p) {
-      var on = p ? S.projects.has(p.key) : !S.projects.size;
-      var badge = p ? (p.open ? '<span class="n hot">' + p.open + "</span>" : p.unread ? '<span class="n">' + p.unread + "</span>" : "") : "";
-      var tip = p ? (p.key === OTHER ? "没认出仓库的消息（旧消息，或不在 git 仓库里发的）。右键分组标题可以归到某个项目" : p.name +
+      var on = S.projects.has(p.key);
+      var badge = p.open ? '<span class="n hot">' + p.open + "</span>" : p.unread ? '<span class="n">' + p.unread + "</span>" : "";
+      var tip = (p.key === OTHER ? "认不出是哪个仓库的旧消息。点分组标题旁的「归到…」可以归到某个仓库" : p.name +
         (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "")) +
-        "\n点：只看它（再点取消）· Ctrl/Shift + 点：多选 · 右键：归到别的项目" : "所有项目";
-      return '<button class="ptab' + (on ? " on" : "") + (p && p.key === OTHER ? " other" : "") + '" data-project="' + esc(p ? p.key : "") +
+        "\n点：只看它，再点一次取消（都不选 = 看全部）· Ctrl/Shift + 点：多选" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
+      return '<button class="ptab' + (on ? " on" : "") + (p.key === OTHER ? " other" : "") + '" data-project="' + esc(p.key) +
         '" role="tab" aria-selected="' + on + '" title="' + esc(tip) + '">' +
-        (p ? '<span class="pdot" style="background:' + pcolor(p.key) + '"></span>' : "") +
-        '<span class="pname">' + esc(p ? p.name : "全部") + "</span>" + badge + "</button>";
+        '<span class="pdot" style="background:' + pcolor(p.key) + '"></span>' +
+        '<span class="pname">' + esc(p.name) + "</span>" + badge + "</button>";
     };
     var box = $("projects");
-    box.innerHTML = tab(null) + ps.map(tab).join("");
+    box.innerHTML = ps.map(tab).join("") +
+      (S.projects.size ? '<button class="ptab-clear" data-project="" title="取消选择，看全部仓库（Esc）">' + icon("x") + "</button>" : "");
     var on = box.querySelector(".ptab.on");
     if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) {
       box.scrollLeft = on.offsetLeft - 8;
@@ -343,7 +344,7 @@
         if (p !== last) {
           html += '<div class="group-label' + (other ? " other" : "") + '" data-project="' + esc(p) + '" data-tab="' + esc(tabKey(m)) + '">' +
             '<span class="pdot" style="background:' + pcolor(other ? OTHER : p) + '"></span>' +
-            '<button class="gname" title="' + (other ? "只看「其他」" : "只看 " + esc(p)) + '">' + esc(p) + "</button>" +
+            '<button class="gname" title="' + (other ? "只看「未归类」" : "只看 " + esc(p)) + '">' + esc(p) + "</button>" +
             '<span class="gcount">' + counts[p] + "</span>" + (other ? '<span class="gtag">未识别</span>' : "") +
             '<button class="gmerge" title="归到某个项目下">归到…</button></div>';
           last = p;
@@ -902,7 +903,7 @@
   function bind() {
     paintIcons();
     $("projects").addEventListener("click", function (e) {
-      var b = e.target.closest(".ptab");
+      var b = e.target.closest(".ptab, .ptab-clear");
       if (b) clickTab(b.dataset.project, e.ctrlKey || e.metaKey || e.shiftKey);
     });
     $("projects").addEventListener("contextmenu", function (e) {
@@ -1095,6 +1096,7 @@
     if (k === "Escape") {
       closePopover();
       if (S.multi.size) { S.multi.clear(); renderList(); }
+      else if (S.projects.size) { S.projects = new Set(); applyProjects(); }
       return;
     }
     if (k === "ArrowDown" || k === "j") { e.preventDefault(); move(1); return; }

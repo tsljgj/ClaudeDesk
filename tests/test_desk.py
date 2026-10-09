@@ -47,3 +47,32 @@ def test_post_records_repo(tmp_path):
     assert [m.get("repo") for m in msgs] == ["webapp", "other"]
     out = run("list", "--repo", "webapp", "--json").stdout.strip().splitlines()
     assert len(out) == 1 and json.loads(out[0])["title"] == "t"
+
+
+def test_folder_fallback_outside_git(tmp_path):
+    d = tmp_path / "acme-data-pipeline"
+    d.mkdir()
+    assert desk.detect_repo(d) is None
+    assert desk.detect_repo(d, folder_fallback=True) == "acme-data-pipeline"
+
+
+def test_discover_projects_from_claude_sessions(tmp_path, monkeypatch):
+    from claudedesk import projects
+
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "code" / "local-name"
+    repo.mkdir(parents=True)
+    git(repo, "init", "-q")
+    git(repo, "remote", "add", "origin", "https://github.com/me/webapp.git")
+
+    def session(folder, cwd):
+        p = cfg / "projects" / folder
+        p.mkdir(parents=True)
+        lines = [{"type": "summary", "summary": "x"}, {"type": "user", "cwd": cwd, "message": {}}]
+        (p / "s1.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+
+    session("a", str(repo))                                    # 真仓库：用 origin 里的名字
+    session("b", r"D:\code\acme-data-pipeline")                # 别的机器上的路径：用目录名
+    session("c", r"D:\code\acme-data-pipeline\.claude\worktrees\feat-x")  # worktree 算回主目录
+    session("d", str(Path.home()))                             # 家目录不算项目
+    assert projects.discover([cfg]) == {"webapp", "acme-data-pipeline"}
