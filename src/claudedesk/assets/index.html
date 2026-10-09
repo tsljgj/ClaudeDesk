@@ -40,22 +40,24 @@
         <div class="grow"></div>
         <button class="icon-btn" id="listMenuBtn" title="更多"><i data-icon="more"></i></button>
       </div>
-      <label class="search">
-        <i data-icon="search"></i>
-        <input id="search" type="search" placeholder="搜索" autocomplete="off" spellcheck="false">
-        <kbd>/</kbd>
-      </label>
+      <div class="search-row">
+        <label class="search">
+          <i data-icon="search"></i>
+          <input id="search" type="search" placeholder="搜索" autocomplete="off" spellcheck="false">
+          <kbd>/</kbd>
+        </label>
+        <div class="bulkbar" id="bulkbar" hidden>
+          <button class="cb" id="checkAll" data-bulk="all" title="全选 / 全不选（Ctrl+A）"></button>
+          <span class="bulk-count" id="bulkCount"></span>
+          <div class="grow"></div>
+          <button class="icon-btn" data-bulk="read" title="标为已读"><i data-icon="mailOpen"></i></button>
+          <button class="icon-btn" data-bulk="resolve" id="bulkResolve" title="标为已解决"><i data-icon="check"></i></button>
+          <button class="icon-btn" data-bulk="archive" id="bulkArchive" title="归档"><i data-icon="archive"></i></button>
+          <button class="icon-btn danger" data-bulk="delete" title="删除"><i data-icon="trash"></i></button>
+          <button class="icon-btn" data-bulk="clear" title="取消选择（Esc）"><i data-icon="x"></i></button>
+        </div>
+      </div>
     </header>
-    <div class="bulkbar" id="bulkbar" hidden>
-      <button class="cb" id="checkAll" data-bulk="all" title="全选 / 全不选（Ctrl+A）"></button>
-      <span class="bulk-count" id="bulkCount"></span>
-      <div class="grow"></div>
-      <button class="icon-btn" data-bulk="read" title="标为已读"><i data-icon="mailOpen"></i></button>
-      <button class="icon-btn" data-bulk="resolve" id="bulkResolve" title="标为已解决"><i data-icon="check"></i></button>
-      <button class="icon-btn" data-bulk="archive" id="bulkArchive" title="归档"><i data-icon="archive"></i></button>
-      <button class="icon-btn danger" data-bulk="delete" title="删除"><i data-icon="trash"></i></button>
-      <button class="icon-btn" data-bulk="clear" title="取消选择（Esc）"><i data-icon="x"></i></button>
-    </div>
     <div class="list" id="list" tabindex="0" role="listbox" aria-label="消息列表"></div>
     <footer class="list-foot">
       <button class="update-chip" id="updateChip" hidden></button>

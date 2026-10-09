@@ -34,7 +34,7 @@ Upgrading from 1.x: quit the old app from the tray, drop the new `ClaudeDesk.exe
 
 ## Using it
 
-- Four views at the top: **决定** (decisions; the orange number counts unanswered ones), **回答** (answers), **全部** (everything), **归档** (archive).
+- Four views above the list: **全部** (everything; the default, every time it opens), **决定** (decisions; the orange number counts unanswered ones), **回答** (answers), **归档** (archive). Repo tabs are sorted by name and never reorder; nothing shifts when you click, read or tick things.
 - **Per repo (tabs across the top of the window):** the tabs are repo names. Click one to see only that repo, click it again (or ×, or `Esc`) to see all; `Ctrl`/`Shift`-click to pick several; `[` / `]` switch. The repo comes from `desk.py post`, which records the git repo of the directory it runs in (origin URL name; worktrees resolve to their repo; outside git, the folder name; `--repo` overrides). Messages from before this version are matched to repos found in Claude Code's own session history (`~/.claude/projects`, plus `CLAUDE_CONFIG_DIR`); anything left over goes under "未归类", where "归到…" files it under a repo.
 - Decisions: press `1`–`9` or click an option, optionally type a note, `Ctrl+Enter` to submit.
 - Hover a message in the list to get its own actions (read/unread, mark resolved, archive, delete) and a checkbox; nothing shows until you hover. The open message has an orange bar on its left.
