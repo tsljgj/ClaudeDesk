@@ -58,13 +58,14 @@ jobs:
           New-Item -ItemType Directory -Force build | Out-Null
           Push-Location src; python -m claudedesk.icon ..\build\claudedesk.ico; Pop-Location
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name ClaudeDesk `
-            --icon build/claudedesk.ico --version-file packaging/version.txt `
-            --paths . --paths src `
-            --add-data "src/claudedesk/assets;claudedesk/assets" --add-data "desk.py;bundled" `
+            --icon "$PWD\build\claudedesk.ico" --version-file "$PWD\packaging\version.txt" `
+            --paths "$PWD" --paths "$PWD\src" `
+            --add-data "$PWD\src\claudedesk\assets;claudedesk/assets" --add-data "$PWD\desk.py;bundled" `
             --hidden-import pystray._win32 --collect-submodules webview `
             --exclude-module tkinter --exclude-module unittest `
             --distpath dist --workpath build/work --specpath build `
-            scripts/ClaudeDesk.py
+            "$PWD\scripts\ClaudeDesk.py"
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
           Get-Item dist\ClaudeDesk.exe | Select-Object Name, Length
 
       - name: Self-test packaged exe
