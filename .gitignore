@@ -1,0 +1,12 @@
+# Your inbox: messages, replies, read state. Never commit.
+data/
+
+# Build outputs (build.ps1 regenerates all of these)
+ClaudeDesk.exe
+_internal/
+build/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
