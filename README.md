@@ -36,8 +36,10 @@ Upgrading from 1.x: quit the old app from the tray, drop the new `ClaudeDesk.exe
 
 - Four views at the top: **决定** (decisions; the orange number counts unanswered ones), **回答** (answers), **全部** (everything), **归档** (archive).
 - Decisions: press `1`–`9` or click an option, optionally type a note, `Ctrl+Enter` to submit.
-- Toolbar: copy (Markdown; the arrow offers rich text / plain text), PDF, mark unread, archive (`E`), delete (`Delete`). Archiving or deleting a still-open decision tells the waiting session that you skipped it, so it doesn't hang.
-- Multi-select with `Ctrl`/`Shift`-click or `Ctrl+A`; right-click for a menu. Search with `/`. Press `?` for all shortcuts.
+- Hover a message in the list to get its own actions (read/unread, mark resolved, archive, delete) and a checkbox; nothing shows until you hover. The open message has an orange bar on its left.
+- **Mark resolved** (`R`) tells a waiting session the matter is handled, without picking an option (`"resolved": true` in the reply). Archiving or deleting a still-open decision tells it you skipped it, so it never hangs.
+- Tick checkboxes (`Shift` for a range, `X`, `Ctrl+A`) for the batch bar: select all, read, resolved, archive, delete. Right-click works too.
+- The reader toolbar has copy (Markdown; the arrow offers rich text / plain text) and PDF. Search with `/`. Press `?` for all shortcuts.
 - Settings: light / dark / system theme, four accent colors, sans (Inter + Noto Sans SC) or serif (Source Serif + Noto Serif SC) reading font, text size, list density, start with Windows, auto-update.
 
 ## Run from source / build

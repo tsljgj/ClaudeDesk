@@ -187,30 +187,44 @@
   }
 
   function itemHtml(m) {
+    var checked = S.multi.has(m.id);
     var cls = "item" + (m.unread ? " unread" : "") + (m.open ? " open" : "") +
-      (m.id === S.current ? " selected" : "") + (S.multi.has(m.id) ? " multi" : "");
+      (m.id === S.current ? " selected" : "") + (checked ? " multi" : "");
     var hot = m.open || (m.priority === "high" && m.unread);
     var st = "";
     if (m.open) st = '<span class="st open">' + (m.priority === "high" ? "紧急 · " : "") + "待决定</span> · ";
+    else if (m.kind === "decision" && m.resolved) st = '<span class="st done">✓ 已解决</span> · ';
     else if (m.kind === "decision" && m.dismissed) st = '<span class="st skip">已跳过</span> · ';
     else if (m.kind === "decision" && m.answered) st = '<span class="st done">✓ ' + esc(m.choice || "已回复") + "</span> · ";
     else if (m.priority === "high" && m.unread) st = '<span class="st open">紧急</span> · ';
     if (!m.open && (S.view === "all" || S.view === "archive" || S.query) && m.kind !== "decision") st = '<span class="st kind">' + KIND[m.kind] + "</span> · " + st;
-    return '<button class="' + cls + '" data-id="' + esc(m.id) + '" role="option">' +
+    var acts = '<span class="acts">' +
+      '<button class="act" data-act="read" title="' + (m.unread ? "标为已读" : "标为未读") + '（U）">' + icon(m.unread ? "mailOpen" : "mail") + "</button>" +
+      (m.open ? '<button class="act" data-act="resolve" title="标为已解决（R）">' + icon("check") + "</button>" : "") +
+      '<button class="act" data-act="archive" title="' + (m.archived ? "移出归档" : "归档") + '（E）">' + icon(m.archived ? "unarchive" : "archive") + "</button>" +
+      '<button class="act danger" data-act="delete" title="删除（Delete）">' + icon("trash") + "</button></span>";
+    return '<div class="' + cls + '" data-id="' + esc(m.id) + '" role="option" aria-selected="' + (m.id === S.current) + '">' +
+      '<button class="cb' + (checked ? " on" : "") + '" data-act="check" title="选择（X）" aria-label="选择"></button>' +
       (m.unread || m.open ? '<span class="dot' + (hot ? " hot" : "") + '"></span>' : "") +
-      '<div class="row1"><span class="t">' + esc(m.title) + '</span><span class="time">' + fmtTime(m.ts) + "</span></div>" +
-      '<div class="row2">' + st + '<span class="src">' + esc(m.source) + "</span>" + (m.snippet ? " · " + esc(m.snippet) : "") + "</div></button>";
+      '<div class="row1"><span class="t">' + esc(m.title) + '</span><span class="time">' + fmtTime(m.ts) + "</span>" + acts + "</div>" +
+      '<div class="row2">' + st + '<span class="src">' + esc(m.source) + "</span>" + (m.snippet ? " · " + esc(m.snippet) : "") + "</div></div>";
   }
 
   function renderBulk() {
     var n = S.multi.size;
-    $("bulkbar").hidden = n < 2;
-    if (n >= 2) {
-      $("bulkCount").textContent = "已选 " + n + " 条";
-      var allArch = Array.from(S.multi).every(function (id) { return S.byId[id] && S.byId[id].archived; });
-      var b = document.querySelector('[data-bulk="archive"]');
-      b.querySelector("span").textContent = allArch ? "移出归档" : "归档";
-    }
+    $("bulkbar").hidden = n < 1;
+    $("list").classList.toggle("multi-mode", n > 0);
+    if (!n) return;
+    var ids = Array.from(S.multi);
+    var all = S.visible.length && S.visible.every(function (id) { return S.multi.has(id); });
+    var ca = $("checkAll");
+    ca.classList.toggle("on", !!all);
+    ca.classList.toggle("some", !all);
+    $("bulkCount").textContent = "已选 " + n + " 条";
+    $("bulkResolve").hidden = !hasOpen(ids);
+    var allArch = ids.every(function (id) { return S.byId[id] && S.byId[id].archived; });
+    $("bulkArchive").innerHTML = icon(allArch ? "unarchive" : "archive");
+    $("bulkArchive").title = allArch ? "移出归档" : "归档";
   }
 
   function renderFoot() {
@@ -238,10 +252,6 @@
     }
     $("empty").hidden = true;
     $("detail").hidden = false;
-    $("unreadBtn").innerHTML = icon(m.unread ? "mailOpen" : "mail");
-    $("unreadBtn").title = m.unread ? "标为已读（U）" : "标为未读（U）";
-    $("archiveBtn").innerHTML = icon(m.archived ? "unarchive" : "archive");
-    $("archiveBtn").title = m.archived ? "移出归档（E）" : "归档（E）";
     var key = m.id + "|" + m.answered;
     if (S.shownKey === key) { renderEyebrow(m); return; }
     var cached = S.details[key];
@@ -308,7 +318,8 @@
       var when = r.ts ? fmtTime(r.ts, true) : "";
       done.hidden = false;
       done.className = "reply-done" + (r.dismissed ? " skip" : "");
-      if (r.dismissed) done.innerHTML = "<b>已跳过</b> · " + when + "<div>没有作出选择，等待的会话已收到通知。</div>";
+      if (r.resolved) done.innerHTML = "<b>已标为已解决</b> · " + when + "<div>没有选择选项，等待的会话已收到「已经处理好了」。</div>";
+      else if (r.dismissed) done.innerHTML = "<b>已跳过</b> · " + when + "<div>没有作出选择，等待的会话已收到通知。</div>";
       else if (r.closed_by === "claude") done.innerHTML = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
       else done.innerHTML = "<b>已提交</b> · " + when + (r.choice ? "　选择：<b>" + esc(r.choice) + "</b>" : "") +
         (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
@@ -395,7 +406,7 @@
   }
 
   function targets() {
-    if (S.multi.size > 1) return Array.from(S.multi);
+    if (S.multi.size) return Array.from(S.multi);
     return S.current ? [S.current] : [];
   }
 
@@ -438,10 +449,34 @@
     });
   }
 
+  function doResolve(ids) {
+    if (!ids.length) return;
+    var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; }).length;
+    act({ action: "resolve", ids: ids }).then(function () {
+      S.multi.clear();
+      return refreshNow();
+    }).then(function () {
+      toast(open ? "已标为已解决 " + open + " 条，等待的会话已收到" : "已标为已读");
+    }).catch(function (e) { toast(e.message, { bad: true }); });
+  }
+
+  function toggleCheck(id, range) {
+    if (range && S.anchor && S.visible.indexOf(S.anchor) >= 0) {
+      var ids = S.visible, a = ids.indexOf(S.anchor), b = ids.indexOf(id);
+      ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(function (x) { S.multi.add(x); });
+    } else if (S.multi.has(id)) S.multi.delete(id);
+    else S.multi.add(id);
+    S.anchor = id;
+    renderList();
+  }
+
   function doToggleRead(ids) {
     if (!ids.length) return;
     var anyUnread = ids.some(function (id) { return S.byId[id] && S.byId[id].unread; });
-    act({ action: "read", ids: ids, read: anyUnread }).then(refreshNow);
+    act({ action: "read", ids: ids, read: anyUnread }).then(function () {
+      if (ids.length > 1) { S.multi.clear(); toast((anyUnread ? "已标为已读 " : "已标为未读 ") + ids.length + " 条"); }
+      return refreshNow();
+    });
   }
 
   // ---- 复制
@@ -666,8 +701,8 @@
   }
   function showShortcuts() {
     var rows = [["↑ ↓ / J K", "上一条 / 下一条"], ["1 – 9", "选择第 N 个选项"], ["Ctrl + Enter", "提交回复"],
-      ["E", "归档 / 移出归档"], ["Delete", "删除"], ["U", "标为已读 / 未读"], ["C", "复制 Markdown"],
-      ["Ctrl + P", "导出 PDF"], ["/", "搜索"], ["Ctrl / Shift + 点击", "多选"], ["Ctrl + A", "全选当前列表"], ["Esc", "取消选择 / 关闭"]];
+      ["E", "归档 / 移出归档"], ["Delete", "删除"], ["U", "标为已读 / 未读"], ["R", "标为已解决"], ["X", "勾选当前这条"], ["C", "复制 Markdown"],
+      ["Ctrl + P", "导出 PDF"], ["/", "搜索"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"], ["Esc", "取消选择 / 关闭"]];
     $("modalTitle").textContent = "快捷键";
     $("modalText").innerHTML = '<span class="kbd-table">' + rows.map(function (r) {
       return "<span>" + r[0].split(" ").map(function (k) { return /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
@@ -690,13 +725,19 @@
       var it = e.target.closest(".item");
       if (!it) return;
       var id = it.dataset.id;
-      if (e.ctrlKey || e.metaKey) {
-        if (!S.multi.size && S.current) S.multi.add(S.current);
-        S.multi.has(id) ? S.multi.delete(id) : S.multi.add(id);
-        S.anchor = id;
-        renderList();
+      var a = e.target.closest("[data-act]");
+      if (a) {
+        e.stopPropagation();
+        var what = a.dataset.act;
+        if (what === "check") return toggleCheck(id, e.shiftKey);
+        var one = [id];
+        if (what === "read") doToggleRead(one);
+        if (what === "resolve") doResolve(one);
+        if (what === "archive") doArchive(one);
+        if (what === "delete") doDelete(one);
         return;
       }
+      if (e.ctrlKey || e.metaKey) return toggleCheck(id, false);
       if (e.shiftKey && (S.anchor || S.current)) {
         var ids = S.visible, a = ids.indexOf(S.anchor || S.current), b = ids.indexOf(id);
         if (a >= 0 && b >= 0) {
@@ -714,7 +755,8 @@
       var id = it.dataset.id;
       if (!S.multi.has(id)) select(id, { noRead: true });
       var ids = targets(), m = S.byId[id];
-      var html = '<button class="menu-item" data-m="read">' + icon(m.unread ? "mailOpen" : "mail") + (m.unread ? "标为已读" : "标为未读") + "</button>" +
+      var html = '<button class="menu-item" data-m="read">' + icon(m.unread ? "mailOpen" : "mail") + (m.unread ? "标为已读" : "标为未读") + '<span class="sub">U</span></button>' +
+        (hasOpen(ids) ? '<button class="menu-item" data-m="resolve">' + icon("check") + '标为已解决<span class="sub">R</span></button>' : "") +
         '<button class="menu-item" data-m="archive">' + icon(m.archived ? "unarchive" : "archive") + (m.archived ? "移出归档" : "归档") + '<span class="sub">E</span></button>' +
         '<div class="menu-sep"></div><button class="menu-item danger" data-m="delete">' + icon("trash") + "删除" + (ids.length > 1 ? " " + ids.length + " 条" : "") + '<span class="sub">Del</span></button>';
       var fake = { getBoundingClientRect: function () { return { left: e.clientX, right: e.clientX + 1, top: e.clientY, bottom: e.clientY }; } };
@@ -723,6 +765,7 @@
         if (!b) return;
         closePopover();
         if (b.dataset.m === "read") doToggleRead(ids);
+        if (b.dataset.m === "resolve") doResolve(ids);
         if (b.dataset.m === "archive") doArchive(ids);
         if (b.dataset.m === "delete") doDelete(ids);
       });
@@ -731,8 +774,15 @@
       var b = e.target.closest("[data-bulk]");
       if (!b) return;
       var ids = Array.from(S.multi);
+      if (b.dataset.bulk === "all") {
+        if (S.visible.every(function (id) { return S.multi.has(id); })) S.multi.clear(); else selectAll();
+        renderList();
+      }
       if (b.dataset.bulk === "clear") { S.multi.clear(); renderList(); }
-      if (b.dataset.bulk === "read") act({ action: "read", ids: ids }).then(refreshNow);
+      if (b.dataset.bulk === "read") act({ action: "read", ids: ids }).then(function () {
+        S.multi.clear(); toast("已标为已读 " + ids.length + " 条"); return refreshNow();
+      });
+      if (b.dataset.bulk === "resolve") doResolve(ids);
       if (b.dataset.bulk === "archive") doArchive(ids);
       if (b.dataset.bulk === "delete") doDelete(ids);
     });
@@ -765,6 +815,7 @@
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
     });
     $("submitBtn").addEventListener("click", submit);
+    $("resolveBtn").addEventListener("click", function () { var d = currentDetail(); if (d) doResolve([d.id]); });
     $("copyBtn").addEventListener("click", function () { copy("md"); });
     $("copyMenuBtn").addEventListener("click", function () {
       var html = '<button class="menu-item" data-c="md">' + icon("copy") + "复制 Markdown<span class=\"sub\">C</span></button>" +
@@ -776,9 +827,6 @@
       });
     });
     $("pdfBtn").addEventListener("click", pdf);
-    $("unreadBtn").addEventListener("click", function () { doToggleRead(targets()); });
-    $("archiveBtn").addEventListener("click", function () { doArchive(targets()); });
-    $("deleteBtn").addEventListener("click", function () { doDelete(targets()); });
     $("backBtn").addEventListener("click", function () { S.current = null; renderList(); renderReader(); });
     $("settingsBtn").addEventListener("click", openSettings);
     $("updateChip").addEventListener("click", function () {
@@ -847,6 +895,8 @@
     if (k === "e" || k === "E") { doArchive(targets()); return; }
     if (k === "Delete" || k === "#") { doDelete(targets()); return; }
     if (k === "u" || k === "U") { doToggleRead(targets()); return; }
+    if (k === "r" || k === "R") { doResolve(targets()); return; }
+    if ((k === "x" || k === "X") && S.current) { toggleCheck(S.current, e.shiftKey); return; }
     if (k === "c" || k === "C") { copy("md"); return; }
     if (/^[1-9]$/.test(k)) { pick(+k - 1); return; }
     if (k === "Enter") {

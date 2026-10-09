@@ -19,6 +19,7 @@ import desk
 
 KINDS = desk.KINDS
 DISMISS_TEXT = "（用户在 ClaudeDesk 里移除了这条决定，没有作出选择）"
+RESOLVE_TEXT = "（用户在 ClaudeDesk 里把这条标为已解决：已经处理好了，不需要你再按选项做什么）"
 
 
 def _now() -> dt.datetime:
@@ -262,6 +263,7 @@ class Store:
             "open": self.is_open(m), "answered": resp is not None, "unread": self.is_unread(m),
             "archived": m["id"] in self.archived,
             "choice": (resp or {}).get("choice"), "dismissed": bool((resp or {}).get("dismissed")),
+            "resolved": bool((resp or {}).get("resolved")),
         }
 
     def summaries(self) -> list[dict]:
@@ -320,6 +322,29 @@ class Store:
                     self.responses[mid] = rec
                 except FileExistsError:
                     pass
+
+    def resolve(self, ids) -> int:
+        """标为已解决：还在等回复的决定写一条 resolved 回复（等待的会话会收到），所有选中的都标为已读。
+        返回实际解决的决定数。"""
+        done = 0
+        with self.lock:
+            ids = self._known(ids)
+            for mid in ids:
+                m = self.msgs[mid]
+                if not self.is_open(m):
+                    continue
+                try:
+                    rec = desk.write_response(mid, None, RESOLVE_TEXT, m["source"], self.ddir,
+                                              extra={"title": m["title"], "resolved": True})
+                    self.responses[mid] = rec
+                    done += 1
+                except FileExistsError:
+                    pass
+            self.read.update(ids)
+            self.schedule_save()
+            self._bump()
+        self._emit_changed()
+        return done
 
     def archive(self, ids, on: bool = True) -> int:
         with self.lock:

@@ -125,8 +125,8 @@ def test_dismiss_open_decision_by_archive(env):
     a = post(d, kind="decision", title="还在等", options=["A"])
     store.poll()
     page.goto(server.url)
-    page.click(f'.item[data-id="{a}"]')
-    page.click("#archiveBtn")
+    page.locator(f'.item[data-id="{a}"]').hover()
+    page.click(f'.item[data-id="{a}"] [data-act="archive"]')
     page.wait_for_selector("#modal:not([hidden])")
     page.click("#modalOk")
     page.wait_for_selector(".toast")
@@ -176,4 +176,51 @@ def test_settings_persist(env):
     assert store.setting("theme") == "dark" and store.setting("accent") == "indigo"
     page.reload()
     assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+    assert errors == []
+
+
+def test_hover_actions_and_checkbox_bulk(env):
+    d, store, server, page, errors = env
+    a = post(d, kind="decision", title="待定一", options=["A", "B"])
+    b = post(d, kind="decision", title="待定二", options=["A", "B"])
+    c = post(d, kind="answer", title="回答一", body="x")
+    store.poll()
+    page.goto(server.url)
+    page.click('[data-view="all"]')
+    item = page.locator(f'.item[data-id="{c}"]')
+    item.wait_for()
+    # 没悬停时操作按钮和勾选框都看不见
+    assert item.locator(".acts").evaluate("e => getComputedStyle(e).opacity") == "0"
+    assert item.locator(".cb").evaluate("e => getComputedStyle(e).opacity") == "0"
+    item.hover()
+    page.wait_for_function(f"() => getComputedStyle(document.querySelector('.item[data-id=\"{c}\"] .acts')).opacity === '1'")
+    # 悬停归档：只动这一条，右边不用先打开
+    item.locator('[data-act="archive"]').click()
+    page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{c}\"]')")
+    assert c in store.archived and store.is_unread(store.msgs[a])
+
+    # 勾两条 → 批量"已解决"
+    page.locator(f'.item[data-id="{a}"]').hover()
+    page.locator(f'.item[data-id="{a}"] .cb').click()
+    page.wait_for_selector("#bulkbar:not([hidden])")
+    assert page.locator(f'.item[data-id="{b}"] .cb').evaluate("e => getComputedStyle(e).opacity") == "1"  # 多选时都显示
+    page.locator(f'.item[data-id="{b}"] .cb').click()
+    assert "2" in page.inner_text("#bulkCount")
+    assert page.is_visible("#bulkResolve")
+    page.click('[data-bulk="resolve"]')
+    page.wait_for_selector("#bulkbar", state="hidden")
+    resp = {r["id"]: r for r in desk.read_all(d / desk.RESPONSES)}
+    assert resp[a]["resolved"] is True and resp[b]["resolved"] is True and resp[a]["choice"] is None
+    page.wait_for_selector(f'.item[data-id="{a}"] .st.done')
+
+    # 当前打开的那条有强调竖条
+    page.click(f'.item[data-id="{b}"]')
+    bar = page.locator(f'.item[data-id="{b}"]').evaluate("e => getComputedStyle(e, '::before').width")
+    assert bar == "3px"
+    # 全选框
+    page.locator(f'.item[data-id="{b}"] .cb').click()
+    page.click("#checkAll")
+    page.wait_for_function("() => document.querySelectorAll('.item.multi').length === document.querySelectorAll('.item').length")
+    page.click("#checkAll")
+    page.wait_for_selector("#bulkbar", state="hidden")
     assert errors == []

@@ -89,3 +89,16 @@ def test_wait_change_wakes(tmp_path):
 def test_plain_summary():
     assert plain_summary("# 标题\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```py\nx\n```\n$$x^2$$ [链接](http://x)") \
         == "标题 a b 1 2 [公式] 链接"
+
+
+def test_resolve_writes_reply_and_marks_read(tmp_path):
+    a = post(tmp_path, kind="decision", options=["A"])
+    b = post(tmp_path, kind="answer")
+    s = Store(tmp_path)
+    s.poll()
+    assert s.resolve([a, b]) == 1
+    r = desk.read_all(tmp_path / desk.RESPONSES)
+    assert len(r) == 1 and r[0]["id"] == a and r[0]["resolved"] is True and r[0]["choice"] is None
+    assert not s.is_unread(s.msgs[a]) and not s.is_unread(s.msgs[b])
+    assert s.summary(s.msgs[a])["resolved"] and not s.summary(s.msgs[a])["open"]
+    assert s.resolve([a]) == 0  # 已经有回复：不再写

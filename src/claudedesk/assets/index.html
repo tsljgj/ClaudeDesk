@@ -44,12 +44,14 @@
       </label>
     </header>
     <div class="bulkbar" id="bulkbar" hidden>
-      <span id="bulkCount"></span>
+      <button class="cb" id="checkAll" data-bulk="all" title="全选 / 全不选（Ctrl+A）"></button>
+      <span class="bulk-count" id="bulkCount"></span>
       <div class="grow"></div>
-      <button class="chip-btn" data-bulk="read">已读</button>
-      <button class="chip-btn" data-bulk="archive"><span>归档</span></button>
-      <button class="chip-btn danger" data-bulk="delete">删除</button>
-      <button class="icon-btn" data-bulk="clear" title="取消选择"><i data-icon="x"></i></button>
+      <button class="icon-btn" data-bulk="read" title="标为已读"><i data-icon="mailOpen"></i></button>
+      <button class="icon-btn" data-bulk="resolve" id="bulkResolve" title="标为已解决"><i data-icon="check"></i></button>
+      <button class="icon-btn" data-bulk="archive" id="bulkArchive" title="归档"><i data-icon="archive"></i></button>
+      <button class="icon-btn danger" data-bulk="delete" title="删除"><i data-icon="trash"></i></button>
+      <button class="icon-btn" data-bulk="clear" title="取消选择（Esc）"><i data-icon="x"></i></button>
     </div>
     <div class="list" id="list" tabindex="0" role="listbox" aria-label="消息列表"></div>
     <footer class="list-foot">
@@ -69,9 +71,6 @@
         <button class="icon-btn" id="copyBtn" title="复制 Markdown（C）"><i data-icon="copy"></i></button>
         <button class="icon-btn caret" id="copyMenuBtn" title="更多复制方式"><i data-icon="chevronDown"></i></button>
         <button class="icon-btn" id="pdfBtn" title="导出 PDF（Ctrl+P）"><i data-icon="fileDown"></i></button>
-        <button class="icon-btn" id="unreadBtn" title="标为未读（U）"><i data-icon="mail"></i></button>
-        <button class="icon-btn" id="archiveBtn" title="归档（E）"><i data-icon="archive"></i></button>
-        <button class="icon-btn danger" id="deleteBtn" title="删除（Delete）"><i data-icon="trash"></i></button>
       </div>
       <div class="scroller" id="scroller">
         <article class="article" id="article">
@@ -91,6 +90,7 @@
           <div class="decide-foot" id="decideFoot">
             <span class="hint">1–9 选择　Ctrl+Enter 提交</span>
             <div class="grow"></div>
+            <button class="ghost" id="resolveBtn" title="不选选项，直接告诉会话这件事已经处理好了（R）">标为已解决</button>
             <button class="primary" id="submitBtn" disabled>提交</button>
           </div>
           <div class="reply-done" id="doneBox" hidden></div>
