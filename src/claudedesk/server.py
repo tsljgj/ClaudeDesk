@@ -97,6 +97,8 @@ class DeskServer:
             return st.mark_all_read()
         if name == "archive":
             return st.archive(ids, bool(body.get("on", True)))
+        if name == "resolve":
+            return st.resolve(ids)
         if name == "archive_handled":
             return st.archive_handled()
         if name == "delete":
