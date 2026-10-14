@@ -801,10 +801,7 @@
       '<span class="eb" title="' + fmtTime(m.ts, true) + '">' + ebDate(m) + "</span>"];
     if (m.priority === "high") bits.push('<span class="eb"><span class="hot">紧急</span></span>');
     if (m.archived) bits.push('<span class="eb">已归档</span>');
-    keepFocus($("eyebrow"), function () {
-      $("eyebrow").innerHTML = bits.join("") + (m.open ? '<button class="jump" id="jumpBtn">去选择 ↓</button>' : "");
-    });
-    updateJump();
+    $("eyebrow").innerHTML = bits.join(""); // 决定卡片就在标题下面，不用再有"去选择"
   }
   // 整块重写 innerHTML 会把焦点丢到 body：键盘停在里面某个按钮上时（长轮询、计时器随时会重画），重画后还给同一个按钮。
   // 只管键盘焦点（:focus-visible）：鼠标点过留下的看不见的焦点照旧丢掉，免得之后按 Enter 又点了一次这个按钮
@@ -818,9 +815,8 @@
     var b = sel && box.querySelector(sel);
     if (b && document.activeElement !== b) b.focus();
   }
-  // "去选择 ↓"：决定卡片已经露出来了就不显示
-  function updateJump() { var j = $("jumpBtn"); if (j) j.hidden = $("decide").hidden || $("decide").getBoundingClientRect().top < $("scroller").getBoundingClientRect().bottom - 48; }
 
+  // 阅读页从上到下：标题 → 要你做的（待决定的卡片 / 追问框）→ 往来记录（新的在上）→ 原消息（原问题、正文）
   function showDetail(d, key) {
     var newMsg = !S.shownKey || S.shownKey.split("|")[0] !== d.id;
     S.shownKey = key;
@@ -833,11 +829,10 @@
     renderFollowup(d, newMsg);
     renderThreadRef(d);
     syncFollowup(S.byId[d.id] || d); // 缓存里的详情可能比列表旧（期间又追问 / 送达 / 有了回应）
-    if (newMsg) {
+    if (newMsg) { // 换了一条：回到顶上，先看到要你做的
       $("scroller").scrollTop = 0;
       $("toolbar").classList.remove("scrolled");
     }
-    requestAnimationFrame(updateJump); // 正文、卡片排好之后再量
   }
   function renderBody(d) { // 设置（字号 / 字体）变了只重画正文，选项和没写完的回复不动
     var body = $("body");
@@ -855,7 +850,7 @@
     if (d.kind !== "decision") { box.hidden = true; S.choice = S.choiceIdx = null; return; }
     box.hidden = false;
     var r = d.response, dr = S.drafts[d.id];
-    if (dr && dr.fu) dr = null; // 追问的草稿（回复过以后在下面写的）不是这张卡片的
+    if (dr && dr.fu) dr = null; // 追问的草稿（回复过以后在追问框里写的）不是这张卡片的
     if (r) { S.choice = S.choiceIdx = null; if (dr) delete S.drafts[d.id]; } // 已有回复：决定的草稿作废，追问的留着
     else if (reset) { // 换了一条：恢复这条自己的草稿（选项按序号记，同名选项也分得开）
       S.choiceIdx = dr && dr.idx != null && d.options && d.options[dr.idx] ? dr.idx : null;
@@ -963,7 +958,7 @@
       "按 " + (n > 1 ? "1–" + Math.min(n, 9) : "1") + " 选择" + (text ? "，或 Ctrl+Enter 提交" : "，或直接写回复");
   }
   function reduced() { return !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches); }
-  // 数字键选了之后：选中的那项不在屏幕上就滚过去，免得选在看不见的地方
+  // 数字键选了之后：选中的那项不在屏幕上（往下读正文去了、选项很长）就滚过去，免得选在看不见的地方
   function revealDecide() {
     var o = $("options").querySelector(".opt.checked"), box = $("decide");
     if (!o || box.hidden) return;
@@ -997,7 +992,7 @@
     });
   }
 
-  // ---------------------------------------------------------------- 追问（每条消息底部；还没回复的决定只有自己的回复框，回复了才出现）
+  // ---------------------------------------------------------------- 追问（标题下面的追问框，框下是往来记录，新的在上；还没回复的决定只有自己的卡片，回复了才出现）
   // 会话挂着 wait --followups 时（listening）发出去它就接着答；它领走一条就退出、答完再挂上，这段时间说"正在回答"
   // （delivered 是领走的时间；一小时还没回应，多半是会话没了，不再这么说）
   function canFollow(d) { return !!d && !(d.kind === "decision" && !d.response); }
@@ -1025,17 +1020,18 @@
     if (!canFollow(d)) { box.hidden = true; return; }
     box.hidden = false;
     var busy = !!fuSending[d.id], link = function (r) { return '<button class="fu-a" data-open="' + esc(r.id) + '">Claude 的回答：' + esc(r.title) + " →</button>"; };
-    // 你的追问按时间排，每条下面是回应它的那条回答（点了打开），还没有就"等待回答…"
-    var html = (d.followups || []).map(function (f) {
-      return '<div class="fu-item"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
+    // 往来记录新的在上（紧挨着追问框，刚发的一眼看得到）：每条追问下面是回应它的那条回答（点了打开），还没有就"等待回答…"；
+    // 配不上追问的回应单独一行，按时间插进去
+    var rows = (d.followups || []).map(function (f, i) {
+      return { ts: f.ts, i: i, html: '<div class="fu-item"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
         '<div class="fu-q">' + esc(f.text) + "</div>" + (f.reply ? link(f.reply) :
-        '<div class="fu-wait" data-fid="' + esc(f.id) + '">' + fuWait(d, f) + "</div>") + "</div>";
-    }).join("") + (d.replies || []).filter(function (r) { return !r.paired; }).map(link).join(""); // 配不上追问的回应也列出来
-    var ta = $("fuText"), dr = S.drafts[d.id], sc = $("scroller").getBoundingClientRect(), r0 = ta.getBoundingClientRect();
-    var seen = document.activeElement === ta && r0.top >= sc.top - 4 && r0.bottom <= sc.bottom + 4; // 正在框里写、框看得见（贴着边的也算）
+        '<div class="fu-wait" data-fid="' + esc(f.id) + '">' + fuWait(d, f) + "</div>") + "</div>" };
+    }).concat((d.replies || []).filter(function (r) { return !r.paired; }).map(function (r, i) { return { ts: r.ts, i: 1e6 + i, html: link(r) }; }));
+    rows.sort(function (a, b) { return (new Date(b.ts) - new Date(a.ts)) || b.i - a.i; }); // 同一毫秒的：后来的在上
+    var html = rows.map(function (x) { return x.html; }).join("");
+    var ta = $("fuText"), dr = S.drafts[d.id];
     $("fuList").innerHTML = html;
     $("fuList").hidden = !html;
-    if (seen && ta.getBoundingClientRect().bottom > sc.bottom) ta.scrollIntoView({ block: "nearest" }); // 刚发的追问加在框上面、把框挤出了屏幕：跟过去
     if (reset || ta.dataset.id !== d.id) ta.value = dr && dr.fu ? dr.text : ""; // 每条各记各的草稿（决定没回复时写的补充说明不算）；决定刚回复、卡片刚出现时也换成它自己的
     ta.dataset.id = d.id;
     ta.readOnly = busy;
@@ -1378,8 +1374,15 @@
       toast(mode === "text" ? "已复制纯文本" : mode === "rich" ? "已复制（保留格式，可粘到 Word / 飞书 / Notion）" : "已复制 Markdown");
     }).catch(function (e) { toast("复制失败：" + e.message, { bad: true }); });
   }
+  // 复制 / 打印用的文章：阅读区里标题和正文中间隔着决定卡片、追问，这里按"标题行、标题、原问题、正文"拼回一份
+  function docClone() {
+    var a = document.createElement("article");
+    a.className = "article";
+    ["eyebrow", "title", "question", "body"].forEach(function (id) { a.appendChild($(id).cloneNode(true)); });
+    return a;
+  }
   function plainOf() {
-    var a = $("article").cloneNode(true);
+    var a = docClone();
     a.querySelectorAll(".code-copy, .katex-mathml").forEach(function (e) { e.remove(); });
     a.querySelectorAll(".math[data-tex]").forEach(function (e) { e.textContent = e.classList.contains("math-display") ? "$$" + e.dataset.tex + "$$" : "$" + e.dataset.tex + "$"; });
     var eb = a.querySelector(".eyebrow"); // 顶上那行的分隔点是 CSS 画的：纯文本里补回 " · "
@@ -1387,7 +1390,7 @@
     return a.innerText.trim() + "\n";
   }
   function richOf() {
-    var a = $("article").cloneNode(true);
+    var a = docClone();
     a.querySelectorAll(".code-copy, .code-head, .eyebrow").forEach(function (e) { e.remove(); });
     a.querySelectorAll(".math[data-tex]").forEach(function (e) { // 富文本里公式写成 TeX 源码，粘到哪里都不丢
       var c = document.createElement("code");
@@ -1400,8 +1403,7 @@
   // ---- PDF
   function preparePrint(d) {
     var root = $("printRoot");
-    var a = $("article").cloneNode(true);
-    a.removeAttribute("id");
+    var a = docClone(); // 印出来照原样读：标题、原问题、正文，再是回复 / 选项
     a.querySelectorAll("[id]").forEach(function (e) { e.removeAttribute("id"); });
     root.innerHTML = "";
     root.appendChild(a);
@@ -1905,12 +1907,8 @@
     $("modalOk").addEventListener("click", function () { closeModal(true); });
     $("modalCancel").addEventListener("click", function () { closeModal(false); });
     $("modal").addEventListener("click", function (e) { if (e.target === $("modal")) closeModal(false); });
-    $("eyebrow").addEventListener("click", function (e) {
-      if (e.target.closest("#jumpBtn")) $("decide").scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" });
-    });
     $("scroller").addEventListener("scroll", function () {
       $("toolbar").classList.toggle("scrolled", $("scroller").scrollTop > 4);
-      updateJump();
     });
     $("body").addEventListener("click", function (e) {
       var b = e.target.closest(".code-copy");

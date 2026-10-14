@@ -140,7 +140,7 @@ def test_online_delivered_answering_and_links_both_ways(env):
 
 
 def test_follow_up_on_answered_and_resolved_decisions(env):
-    """回复过的决定也能追问：卡片在"你的回复"下面出现；标为已处理的同样能追问。"""
+    """回复过的决定也能追问：追问框出现在"你的回复"上面（标题下面）；标为已处理的同样能追问。"""
     d, store, server, page, errors = env
     a = post(d, kind="answer", title="回答 A", body="a")
     q = post(d, kind="decision", title="先复核还是直接冻结？", options=["先复核", "直接冻结"], allow_text=True)
@@ -158,8 +158,8 @@ def test_follow_up_on_answered_and_resolved_decisions(env):
     page.wait_for_selector("#doneBox:not([hidden])")
     page.wait_for_selector("#followup:not([hidden])")
     assert store.responses[q]["choice"] == "先复核" and not desk.read_followups(d)[0]
-    assert page.evaluate("document.getElementById('followup').getBoundingClientRect().top >= "
-                         "document.getElementById('doneBox').getBoundingClientRect().bottom")  # 在"你的回复"下面
+    assert page.evaluate("document.getElementById('followup').getBoundingClientRect().bottom <= "
+                         "document.getElementById('doneBox').getBoundingClientRect().top")  # 在"你的回复"上面
     assert page.input_value("#fuText") == ""
     page.fill("#fuText", "复核要多久？")
     page.keyboard.press("Control+Enter")  # 回复过了：Ctrl+Enter 发追问

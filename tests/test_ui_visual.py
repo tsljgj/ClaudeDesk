@@ -449,9 +449,8 @@ def test_decision_card_states_stay_distinct(env):
     # 还没选：提交按钮是灰的（不是发浑的强调色）
     assert page.is_disabled("#submitBtn")
     assert css("#submitBtn", "backgroundColor") == _var(page, "--sunken") and css("#submitBtn", "opacity") == "1"
-    # 卡片整个露在屏幕上："去选择 ↓"不出现
-    page.wait_for_timeout(100)
-    assert page.locator("#jumpBtn").is_hidden()
+    # 卡片就在标题下面：没有"去选择 ↓"
+    assert page.locator("#jumpBtn, .eyebrow button").count() == 0
     # 选 2，鼠标停在它上面：选中的强调色边框还在；没选的那项悬停照旧变深（边框有 0.1 秒过渡，等它走完再量）
     page.keyboard.press("2")
     page.hover('.opt[data-idx="1"]')
@@ -465,12 +464,13 @@ def test_decision_card_states_stay_distinct(env):
     page.keyboard.press("Shift+Tab")
     assert page.evaluate("document.activeElement.dataset.idx") == "0"
     assert css('.opt[data-idx="0"]', "outlineColor") == _var(page, "--ink-2") != _var(page, "--accent")
-    # 长正文：卡片在下面，"去选择 ↓"出现；滚到卡片，它就收起
+    # 长正文：卡片照样在标题下面、一打开就整个看得见，正文在它下面；也没有"去选择 ↓"
     page.evaluate("id => deskOpen(id)", long)
     page.wait_for_function("() => document.getElementById('title').textContent === '长的'")
-    page.wait_for_selector("#jumpBtn:not([hidden])")
-    page.click("#jumpBtn")
-    page.wait_for_selector("#jumpBtn", state="hidden")
+    assert page.evaluate("""() => { const c = document.getElementById('decide').getBoundingClientRect(),
+        s = document.getElementById('scroller').getBoundingClientRect(), b = document.getElementById('body').getBoundingClientRect();
+        return c.top >= s.top && c.bottom <= s.bottom && b.top >= c.bottom; }""")
+    assert page.locator("#jumpBtn, .eyebrow button").count() == 0
     assert errors == []
 
 

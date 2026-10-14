@@ -107,11 +107,10 @@ def test_z_during_an_archive_never_undoes_the_one_before(env):
 
 
 def test_keyboard_focus_survives_background_updates(env):
-    """键盘停在视图标签、项目标签、"开始处理"、"去选择"上时，新消息到了（长轮询整块重画这些地方）焦点不能掉到 body。"""
+    """键盘停在视图标签、项目标签、"开始处理"、决定卡片的选项上时，新消息到了（长轮询整块重画这些地方）焦点不能掉到 body。"""
     d, store, server, page, errors = env
     post(d, kind="answer", title="甲", body="x", repo="alpha")
     post(d, kind="answer", title="乙", body="x", repo="beta")
-    # 正文长一点：决定卡片在屏幕下面，"去选择 ↓"才会出现（卡片已经露出来时它是隐藏的）
     dec = post(d, kind="decision", title="要决定的", body="很长的背景。\n\n" * 80, options=["A", "B"], repo="alpha")
     store.poll()
     open_page(page, server)
@@ -123,13 +122,14 @@ def test_keyboard_focus_survives_background_updates(env):
         page.wait_for_function("v => deskTest.S.version > v", arg=v)
         assert page.evaluate(FOCUSED, sel), sel
     page.click(f'.item[data-id="{dec}"]')
-    page.wait_for_selector("#jumpBtn")
+    opt = '#options .opt[data-idx="1"]'
+    page.wait_for_selector(opt)
     page.keyboard.press("Shift")  # 点过鼠标了：先按个键，下面的焦点算键盘焦点（:focus-visible）
-    page.focus("#jumpBtn")
+    page.focus(opt)
     v = page.evaluate("deskTest.S.version")
     post(d, kind="info", title="又来一条", body="x", repo="beta")
     page.wait_for_function("v => deskTest.S.version > v", arg=v)
-    assert page.evaluate(FOCUSED, "#jumpBtn")
+    assert page.evaluate(FOCUSED, opt)
     # 鼠标点的标签：焦点照旧不留（看不见的焦点留着，之后按 Enter 会又点一次这个标签）
     page.click('#nav .tab[data-view="answer"]')
     assert not page.evaluate(FOCUSED, '#nav .tab[data-view="answer"]')

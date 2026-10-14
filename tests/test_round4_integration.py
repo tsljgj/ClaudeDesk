@@ -162,8 +162,8 @@ def test_following_a_thread_link_does_not_leave_focus_on_a_hidden_button(env):
     assert errors == []
 
 
-def test_followup_box_stays_on_screen_after_sending(env):
-    """滚到底写追问、Ctrl+Enter 发出：发出的那条加在输入框上面，框不能被挤出屏幕（接着写下一句时看得见自己在写什么）。"""
+def test_followup_box_stays_put_and_new_ones_land_on_top(env):
+    """长回答上接连发三个追问：追问框在标题下面不动、焦点留在框里；发出的那条出现在列表最上面，紧挨着框（不用滚就看得见）。"""
     d, store, server, page, errors = env
     a = post(d, kind="answer", title="长回答", body="\n\n".join(f"第 {i} 段" for i in range(60)))
     store.poll()
@@ -171,17 +171,21 @@ def test_followup_box_stays_on_screen_after_sending(env):
     page.click(f'.item[data-id="{a}"]')
     shown(page, a)
     page.wait_for_selector("#followup:not([hidden])")
-    page.evaluate("document.getElementById('scroller').scrollTop = 1e6")
     page.focus("#fuText")
-    pos = "() => document.getElementById('fuText').getBoundingClientRect().bottom - document.getElementById('scroller').getBoundingClientRect().bottom"
+    top = "() => Math.round(document.getElementById('fuText').getBoundingClientRect().top)"
+    t0 = page.evaluate(top)
     for i in range(3):
         page.keyboard.type(f"第 {i} 个追问")
         page.keyboard.press("Control+Enter")
         page.wait_for_function(f"() => document.querySelectorAll('#fuList .fu-item').length === {i + 1}")
-        page.wait_for_timeout(150)
         assert page.evaluate("document.activeElement.id") == "fuText"
-        assert page.evaluate(pos) <= 1, f"第 {i + 1} 次发出后输入框到了屏幕外"
+        assert page.evaluate(top) == t0 and page.evaluate("document.getElementById('scroller').scrollTop") == 0
+        first = page.locator("#fuList .fu-item").first
+        assert f"第 {i} 个追问" in first.inner_text()
+        fb, sb = first.bounding_box(), page.locator("#scroller").bounding_box()
+        assert fb["y"] + fb["height"] <= sb["y"] + sb["height"]  # 刚发的那条在屏幕上
     assert [f["text"] for f in desk.read_followups(d)[0]] == ["第 0 个追问", "第 1 个追问", "第 2 个追问"]
+    assert page.evaluate("[...document.querySelectorAll('#fuList .fu-q')].map(e => e.textContent)") == ["第 2 个追问", "第 1 个追问", "第 0 个追问"]
     assert errors == []
 
 
