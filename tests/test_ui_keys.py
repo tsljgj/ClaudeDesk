@@ -157,7 +157,8 @@ def test_search_keys_stay_in_the_box_and_esc_is_layered(env):
     page.keyboard.press("/")
     page.keyboard.type("苹果 二")
     page.keyboard.press("Enter")  # Enter 也一样
-    page.wait_for_function(f"deskTest.S.current === '{a2}'")
+    # a2 本来就是当前这条（上面 ↓ 选的）：要等搜完、焦点回到列表，不然下面的 x 会打进搜索框
+    page.wait_for_function(f"deskTest.S.current === '{a2}' && document.activeElement.id === 'list'")
 
     # 列表里 Esc 一次一层：搜索 → 勾选 → 项目
     page.keyboard.press("x")
