@@ -330,7 +330,6 @@ def test_z_and_ctrl_z_undo_archive_and_read(env):
     page.wait_for_function("document.querySelector('.toast button')?.textContent === '撤销（Z）'")
     assert v[0] in store.archived
     page.keyboard.press("z")
-    page.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent === '已撤销')")
     page.wait_for_function(f"() => !!document.querySelector('.item[data-id=\"{v[0]}\"]')")
     assert v[0] not in store.archived
     assert page.locator(".toast button").count() == 0  # 撤销过的提示条收起来了

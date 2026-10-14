@@ -377,7 +377,8 @@ def test_delete_of_an_open_decision_says_the_session_is_not_told(env):
     page.wait_for_function("document.activeElement.id === 'modalOk'")
     assert page.inner_text("#modalText") == "删除后不能恢复，会从收件箱文件里真正移除。\n其中有还在等你决定的消息：删除不会通知会话。"
     page.keyboard.press("Enter")
-    wait_toast(page, "已删除 1 条")
+    page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{dec}\"]')")
+    page.wait_for_function(f"() => !deskTest.S.allById['{dec}']")  # 删掉了（服务端那边也没了）
     r = resp(d, dec)[0]
     assert r["dismissed"] is True and r["silent"] is True
     assert errors == []

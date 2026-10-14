@@ -260,8 +260,8 @@ def test_deleted_rows_do_not_flash_back_while_the_delete_is_in_flight(env):
     assert page.evaluate("ids => ids.filter(id => document.querySelector('.item[data-id=\"' + id + '\"]'))", ids[:2]) == []
     assert page.evaluate("ids => ids.filter(id => deskTest.S.fresh[id])", ids[:2]) == []
     assert wait_until(lambda: all(i in store.deleted for i in ids[:2]))
-    page.wait_for_selector(".toast >> text=已删除 2 条")
-    assert page.locator(".item").count() == 2
+    page.wait_for_function("document.querySelectorAll('.item').length === 2")
+    assert page.locator(".toast", has_text="已删除").count() == 0  # 删掉的行已经看不见了，不再弹"已删除"
     assert errors == []
 
 

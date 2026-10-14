@@ -321,7 +321,7 @@ Claude Code 会话                         data\                    ClaudeDesk�
 | `responses.jsonl` | 程序（你的回复）和 `desk.py close`；只追加 | 每行一条回复 |
 | `followups.jsonl` | 程序（你的追问）；只追加 | 每行一条追问。旧版还在这里写过"已送达"记录，照样认 |
 | `deliveries.jsonl` | `desk.py listen`、`wait`、`close`、`inbox --adopt`；只追加，从不重写 | 什么时候把什么交给了哪个会话、会话接管、恢复的会话换了的进程号 |
-| `state.json` | 程序 | 已读 / 已提醒 / 已归档 / 已删除的 id、项目归类、关掉的标签、设置、窗口位置 |
+| `state.json` | 程序 | 已读 / 已提醒 / 已归档 / 已删除的 id、每条最后一次打开的时间、项目归类、关掉的标签、设置、窗口位置 |
 | `instance.json` | 程序 | 正在运行的那个实例的端口和 token，第二次启动时靠它把窗口交给已经在跑的那个 |
 | `claudedesk.log` | 程序 | 运行日志（启动、更新、出错），满 1 MB 轮换 |
 | `.lock` | 两边 | 跨进程锁文件 |

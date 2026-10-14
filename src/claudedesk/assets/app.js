@@ -1285,9 +1285,8 @@
       renderAll();
       refocusList();
       act({ action: "delete", ids: ids }).then(function () {
-        return refreshNow(true);
-      }).then(function () { toast("已删除 " + ids.length + " 条"); })
-        .catch(function (e) { ids.forEach(function (id) { delete S.gone[id]; }); toast(e.message, { bad: true }); refreshNow(true); });
+        return refreshNow(true); // 行已经没了，再弹"已删除"是多余的
+      }).catch(function (e) { ids.forEach(function (id) { delete S.gone[id]; }); toast(e.message, { bad: true }); refreshNow(true); });
     });
   }
 
@@ -1375,8 +1374,7 @@
     if (!u) return toast("没有可以撤销的操作");
     lastUndo = null;
     u.el.remove();
-    u.run();
-    toast("已撤销");
+    u.run(); // 放回来的行自己看得见，不再弹"已撤销"
   }
   // ---- 复制
   function markdownOf(d) {

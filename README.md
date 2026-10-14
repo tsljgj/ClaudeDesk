@@ -321,7 +321,7 @@ Everything lives in `data\` next to `ClaudeDesk.exe` and `desk.py`.
 | `responses.jsonl` | The app (your replies) and `desk.py close`; append-only | One reply per line |
 | `followups.jsonl` | The app (your follow-ups); append-only | One follow-up per line. Older versions also wrote "delivered" records here; they are still read |
 | `deliveries.jsonl` | `desk.py listen`, `wait`, `close` and `inbox --adopt`; append-only, never rewritten | What was delivered to which session and when, adopted sessions, and new PIDs of resumed sessions |
-| `state.json` | The app | Read / notified / archived / deleted ids, repo filing, closed tabs, settings, window position |
+| `state.json` | The app | Read / notified / archived / deleted ids, when you last opened each message, repo filing, closed tabs, settings, window position |
 | `instance.json` | The app | Port and token of the running instance, so a second launch hands over to it |
 | `claudedesk.log` | The app | Log (start, update, errors), rotated at 1 MB |
 | `.lock` | Both | Cross-process lock file |
