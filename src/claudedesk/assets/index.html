@@ -61,6 +61,8 @@
     </header>
     <div class="list" id="list" tabindex="0" role="listbox" aria-label="消息列表"></div>
     <footer class="list-foot">
+      <!-- 提示条的槽：不浮在内容上面；窄窗口在看一条时，app.js 把它挪到阅读页工具栏下面 -->
+      <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
       <button class="update-chip" id="updateChip" hidden></button>
       <span class="ver" id="ver"></span>
     </footer>
@@ -133,7 +135,6 @@
     </div>
   </div>
 </div>
-<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <div id="printRoot" class="print-root"></div>
 
 <script src="assets/vendor/markdown-it.min.js"></script>

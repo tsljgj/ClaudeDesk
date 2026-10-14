@@ -334,6 +334,7 @@ def test_arrival_toast_in_a_narrow_window(env):
     drop(mk("decision", long, "proj", options=["推", "不推"], priority="high"))
     t = page.locator(".toast", has_text="proj 需要你决定")
     t.wait_for()
+    page.wait_for_function("document.getElementById('reader').getBoundingClientRect().left === 0")  # 提示条在阅读页里：等它滑进来停稳再量
     tb, bb = t.bounding_box(), t.locator("button").bounding_box()
     assert tb["x"] >= 15 and tb["x"] + tb["width"] <= 465 and tb["width"] > 400  # 原来只有半个窗口宽
     assert tb["height"] <= 60 and bb["height"] <= 28  # 两行以内；"查看（N）"不一字一行
