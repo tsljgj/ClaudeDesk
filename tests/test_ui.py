@@ -214,10 +214,17 @@ def test_hover_actions_and_checkbox_bulk(env):
     assert resp[a]["resolved"] is True and resp[b]["resolved"] is True and resp[a]["choice"] is None
     page.wait_for_selector(f'.item[data-id="{a}"] .st.done')
 
-    # 当前打开的那条有强调竖条
+    # 当前打开的那条有强调色竖条；底色是中性灰，不带强调色（读一条回答不像在报警）
     page.click(f'.item[data-id="{b}"]')
-    bar = page.locator(f'.item[data-id="{b}"]').evaluate("e => getComputedStyle(e, '::before').width")
-    assert bar == "3px"
+    bar = page.locator(f'.item[data-id="{b}"]').evaluate("e => { const s = getComputedStyle(e, '::before'); return [s.width, s.backgroundColor]; }")
+    assert bar == ["3px", "rgb(242, 84, 27)"]
+    sel = page.locator(f'.item[data-id="{b}"]').evaluate("""e => { const c = getComputedStyle(e).backgroundColor, v = c.match(/[\\d.]+/g).map(Number);
+        return c.startsWith('color(') ? v.slice(0, 3).map(x => x * 255) : v.slice(0, 3); }""")  # color-mix 算出来可能写成 color(srgb …)
+    assert max(sel) - min(sel) <= 3 and max(sel) < 245  # 灰的，比底色深一点
+    # 勾选框：中性色（强调色只留给"等你处理"）
+    page.locator(f'.item[data-id="{b}"] .cb').click()
+    assert page.locator(f'.item[data-id="{b}"] .cb').evaluate("e => getComputedStyle(e).backgroundColor") == "rgb(69, 69, 79)"  # --ink-2
+    page.locator(f'.item[data-id="{b}"] .cb').click()
     # 全选框
     page.locator(f'.item[data-id="{b}"] .cb').click()
     page.click("#checkAll")
@@ -228,23 +235,26 @@ def test_hover_actions_and_checkbox_bulk(env):
 
 
 def test_item_state_marks(env):
-    """列表圆点：没读过 / 待决定 / 看过的待决定 / 紧急 / 读过各不一样；第二行不留多余的 " · "。"""
+    """列表圆点：没读过 / 待决定 / 看过的待决定 / 紧急的待决定 / 紧急通知 / 读过各不一样；第二行不留多余的 " · "。"""
     d, store, server, page, errors = env
     new = post(d, kind="answer", title="新回答", body="x")
     dec = post(d, kind="decision", title="新决定", options=["A"])
     seen = post(d, kind="decision", title="看过的决定", options=["A"])
     hot = post(d, kind="info", title="紧急通知", body="y", priority="high")
+    udec = post(d, kind="decision", title="紧急的决定", options=["A"], priority="high")
+    useen = post(d, kind="decision", title="看过的紧急决定", options=["A"], priority="high")
     old = post(d, kind="answer", title="读过的回答", body="z")
     done = post(d, kind="decision", title="空正文的决定", body="", options=["升", "不升"])
     store.poll()
-    store.mark_read([seen, old, done])
+    store.mark_read([seen, useen, old, done])
     store.submit(done, "升", "")
     page.goto(server.url)
     page.wait_for_selector(f'.item[data-id="{done}"] .st.done')
     dot = lambda i: page.evaluate(  # noqa: E731
         f"() => {{ const e = document.querySelector('.item[data-id=\"{i}\"] .dot'); return e ? e.className : ''; }}")
-    assert (dot(new), dot(dec), dot(seen), dot(hot), dot(old), dot(done)) == (
-        "dot new", "dot hot", "dot hot seen", "dot hot urgent", "", "")
+    # 外面一圈只给紧急的待决定（处理完才消失）；紧急通知只是实心强调色
+    assert (dot(new), dot(dec), dot(seen), dot(hot), dot(udec), dot(useen), dot(old), dot(done)) == (
+        "dot new", "dot hot", "dot hot seen", "dot hot", "dot hot urgent", "dot hot urgent", "", "")
     assert page.locator(f'.item[data-id="{done}"] .row2').inner_text().strip() == "✓ 升"
     color = lambda i: page.locator(f'.item[data-id="{i}"] .t').evaluate("e => getComputedStyle(e).color")  # noqa: E731
     assert color(old) != color(new)  # 读过的标题安静一些
@@ -321,12 +331,16 @@ def test_nothing_moves_when_clicking(env):
     boxes = """sel => [...document.querySelectorAll(sel)].map(e => { const r = e.getBoundingClientRect();
         return [Math.round(r.left), Math.round(r.top), Math.round(r.width)]; })"""
     tabs0, ptabs0 = page.evaluate(boxes, ".tab"), page.evaluate(boxes, ".ptab")
-    # 切视图、选项目标签：所有标签位置不变
+    # 切视图、选项目标签：视图标签位置不变；项目标签只因"全部项目"带上总数而整体右移同样的距离，各自宽度不变
     page.click('.tab[data-view="decide"]')
     page.click('.ptab[data-project="webapp"]')
     assert page.evaluate(boxes, ".tab") == tabs0
-    assert page.evaluate(boxes, ".ptab") == ptabs0
+    ptabs1 = page.evaluate(boxes, ".ptab")
+    dx = ptabs1[0][2] - ptabs0[0][2]
+    assert 0 < dx <= 26 and ptabs1[0][:2] == ptabs0[0][:2]
+    assert ptabs1[1:] == [[x + dx, y, w] for x, y, w in ptabs0[1:]]
     page.click('.ptab.all')
+    assert page.evaluate(boxes, ".ptab") == ptabs0  # 回到全部：回到原位
     page.click('.tab[data-view="all"]')
 
     # 读一条（未读 -> 已读、计数变少）：标签和列表项位置不变，标题宽度不变
