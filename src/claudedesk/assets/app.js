@@ -67,6 +67,7 @@
     drafts: {}, choiceIdx: null, submitting: {}, fresh: {}, // 每条的草稿（选项序号 + 文字）/ 正在提交的 id / 新到的高亮到期时间
     gone: {}, // 在这里删掉的 id：删除还在路上时到的旧快照里还有它们，不能让它们当成"新消息"闪回来
     all: [], allById: {}, hidden: new Set(), // 全部消息（含关掉的标签里的）/ 关掉的标签键（服务端存）。msgs / byId 只有没关掉的
+    pendingHidden: {}, // 关 / 找回标签的请求还在路上：键 -> { on }。这期间到的快照（服务端还没改）按它来，标签不闪回去、选中不丢
     cursor: null, jump: null, // 窄窗口列表页的光标（↑↓ 只挪它）/ 新到提示里那条：{ id, el }，提示还在时 N 先打开它
     todo: load("todo", "") === "1", keep: null, // 只看未处理（记在本机）/ 正在看的那条：读完了也先留在列表里，换到别的才走
   };
@@ -119,6 +120,7 @@
     S.allById = {};
     S.all.forEach(function (m) { S.allById[m.id] = m; });
     S.hidden = new Set(st.hidden_projects || []);
+    Object.keys(S.pendingHidden).forEach(function (k) { if (S.pendingHidden[k].on) S.hidden.add(k); else S.hidden.delete(k); });
     filterClosed();
     S.counts = st.counts || {};
     S.meta = st.meta || {};
@@ -126,9 +128,9 @@
     if (st.settings) applySettings(st.settings);
     S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
     if (S.current && !S.byId[S.current]) S.current = null;
-    // 缓存瘦身：删掉的消息不留详情；已经有回复的不留草稿
+    // 缓存瘦身：删掉的消息不留详情；已经有回复的不留决定的草稿（追问的草稿 fu 留着：回复过的决定才能追问）
     Object.keys(S.details).forEach(function (k) { if (!S.allById[k.split("|")[0]]) delete S.details[k]; }); // 关掉的标签里的留着：找回来还在
-    Object.keys(S.drafts).forEach(function (id) { if (!S.allById[id] || S.allById[id].answered) delete S.drafts[id]; });
+    Object.keys(S.drafts).forEach(function (id) { if (!S.allById[id] || (S.allById[id].answered && !S.drafts[id].fu)) delete S.drafts[id]; });
     var arr = first ? null : arrivals(old);
     if (S.query) runSearch(); else renderAll();
     if (!arr) return;
@@ -220,14 +222,15 @@
     var map = {};
     S.msgs.forEach(function (m) {
       var k = tabKey(m);
-      var e = map[k] || (map[k] = { key: k, name: k === OTHER ? "未归类" : k, open: 0, unread: 0, last: "", total: 0 });
+      var e = map[k] || (map[k] = { key: k, name: k === OTHER ? "未归类" : k, open: 0, unread: 0, last: "", total: 0, arch: 0 });
       if (m.ts > e.last) e.last = m.ts;
-      if (m.archived) return;
+      if (m.archived) { e.arch++; return; }
       e.total++;
       if (m.open) e.open++;
       if (m.unread) e.unread++;
     });
-    return Object.keys(map).map(function (k) { return map[k]; }).filter(function (p) { return p.key !== OTHER || p.total; }) // "未归类"只剩归档的：不要标签（归档视图里照样分组显示）
+    // "未归类"只剩归档的：不要标签；归档视图里还是要有（不然点它的分组标题时，选择马上被当成"标签没了"清掉，点了没反应）
+    return Object.keys(map).map(function (k) { return map[k]; }).filter(function (p) { return p.key !== OTHER || p.total || (S.view === "archive" && p.arch); })
       .sort(function (a, b) { return (a.key === OTHER) - (b.key === OTHER) || byName(a.name, b.name); });
   }
   function byName(a, b) { return a.localeCompare(b, "zh-CN", { sensitivity: "base", numeric: true }); }
@@ -279,7 +282,7 @@
   function applyProjects() {
     save("projects", JSON.stringify(Array.from(S.projects)));
     S.multi.clear();
-    if (S.current && S.byId[S.current] && !inScope(S.byId[S.current])) S.current = null;
+    if (S.current && S.byId[S.current] && !inScope(S.byId[S.current])) S.current = S.keep = null; // 换走了：读完先留着的那条也不留
     renderAll();
   }
   function setProject(p) { S.projects = p ? new Set([p]) : new Set(); applyProjects(); } // 测试 / 通知用
@@ -297,6 +300,7 @@
     S.msgs = S.all.filter(function (m) { return !S.gone[m.id] && !closedOf(m); });
     S.byId = {};
     S.msgs.forEach(function (m) { S.byId[m.id] = m; });
+    if (S.keep && !S.byId[S.keep]) S.keep = null; // 留着的那条所在的标签关掉了（或删了）：算换走了，找回标签时它不再留在"只看未处理"里
     var n = S.projects.size;
     S.projects.forEach(function (k) { if (S.hidden.has(k)) S.projects.delete(k); }); // 选着的标签关掉了：从选择里拿掉
     if (S.projects.size !== n) save("projects", JSON.stringify(Array.from(S.projects)));
@@ -325,23 +329,30 @@
       if (S.current && !S.byId[S.current]) S.current = null;
       renderAll();
       refocusList();
-      act({ action: "hide_project", key: key }).then(function () { return refreshNow(true); }).then(function () {
+      var done = pendHidden([key], true);
+      act({ action: "hide_project", key: key }).then(function () { done(); return refreshNow(true); }).then(function () {
         toast("已关闭「" + name + "」", { undo: function () {
           reopenTabs([key]);
           if (was) S.projects.add(key); // 关之前选着它：撤销后还选着
           applyProjects();
         } });
-      }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
+      }).catch(function (e) { done(); toast(e.message, { bad: true }); refreshNow(true); });
     };
     if (open) confirmBox("关闭「" + name + "」？", "「" + name + "」还有 " + open + " 条待决定没回复。关掉后它们不再显示、也不计入未读；这个项目来新消息时标签会自动回来。", "关闭").then(function (ok) { if (ok) go(); });
     else go();
   }
   // 找回关掉的标签（keys 为 null：全部）。先在本地放回来；选不选它、什么时候重画由调用的人定
   function reopenTabs(keys) {
-    (keys || Array.from(S.hidden)).forEach(function (k) { S.hidden.delete(k); });
+    var ks = keys || Array.from(S.hidden), done = pendHidden(ks, false);
+    ks.forEach(function (k) { S.hidden.delete(k); });
     filterClosed();
     var reqs = keys ? keys.map(function (k) { return act({ action: "show_project", key: k }); }) : [act({ action: "show_project", all: true })];
-    return Promise.all(reqs).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
+    return Promise.all(reqs).then(function () { done(); return refreshNow(true); }).catch(function (e) { done(); toast(e.message, { bad: true }); refreshNow(true); });
+  }
+  // 记下"这几个标签正在关 / 找回"，返回请求回来后调用的清除函数（同一个标签又有了新的请求就留给新的去清）
+  function pendHidden(keys, on) {
+    var mine = keys.map(function (k) { return (S.pendingHidden[k] = { on: on }); });
+    return function () { keys.forEach(function (k, i) { if (S.pendingHidden[k] === mine[i]) delete S.pendingHidden[k]; }); };
   }
   function closedSub(p) { return (p.live ? p.live + " 条" : p.total + " 条已归档") + (p.open ? " · " + p.open + " 待决定" : ""); }
   function renderClosed() { // 标签条右头"已关闭 N"：有关掉的标签才出现
@@ -470,6 +481,7 @@
   }
 
   function renderNav() {
+    renderProjects(); // 先画标签：选着的标签没了（"未归类"出了归档视图、最后一条删掉了）会从选择里拿掉，下面的数要按拿掉以后的范围算
     var c = S.counts, sc = scopeCounts();
     var n = { decide: [sc.open, true, " 条待决定"], answer: [sc.unread_answers, false, " 条未读回答"], all: [sc.unread, false, " 条未读"], archive: [0] };
     keepFocus($("nav"), function () {
@@ -480,7 +492,6 @@
           '<span class="n' + (k[0] && k[1] ? " hot" : "") + '">' + (k[0] || "") + "</span></button>";
       }).join("");
     });
-    renderProjects();
     renderQueue();
     renderTools();
     var t = [];
@@ -794,7 +805,8 @@
     if (d.kind !== "decision") { box.hidden = true; S.choice = S.choiceIdx = null; return; }
     box.hidden = false;
     var r = d.response, dr = S.drafts[d.id];
-    if (r) { S.choice = S.choiceIdx = null; delete S.drafts[d.id]; } // 已有回复：草稿作废
+    if (dr && dr.fu) dr = null; // 追问的草稿（回复过以后在下面写的）不是这张卡片的
+    if (r) { S.choice = S.choiceIdx = null; if (dr) delete S.drafts[d.id]; } // 已有回复：决定的草稿作废，追问的留着
     else if (reset) { // 换了一条：恢复这条自己的草稿（选项按序号记，同名选项也分得开）
       S.choiceIdx = dr && dr.idx != null && d.options && d.options[dr.idx] ? dr.idx : null;
       S.choice = S.choiceIdx != null ? d.options[S.choiceIdx].label : null;
@@ -935,10 +947,12 @@
         '<div class="fu-q">' + esc(f.text) + "</div>" + (f.reply ? link(f.reply) :
         '<div class="fu-wait">等待回答…' + (f.delivered ? " · 已送到会话" : "") + "</div>") + "</div>";
     }).join("") + (d.replies || []).filter(function (r) { return !r.paired; }).map(link).join(""); // 配不上追问的回应也列出来
+    var ta = $("fuText"), dr = S.drafts[d.id], sc = $("scroller").getBoundingClientRect(), r0 = ta.getBoundingClientRect();
+    var seen = document.activeElement === ta && r0.top >= sc.top - 4 && r0.bottom <= sc.bottom + 4; // 正在框里写、框看得见（贴着边的也算）
     $("fuList").innerHTML = html;
     $("fuList").hidden = !html;
-    var ta = $("fuText"), dr = S.drafts[d.id];
-    if (reset || ta.dataset.id !== d.id) ta.value = dr ? dr.text : ""; // 每条各记各的草稿；决定刚回复、卡片刚出现时也换成它自己的
+    if (seen && ta.getBoundingClientRect().bottom > sc.bottom) ta.scrollIntoView({ block: "nearest" }); // 刚发的追问加在框上面、把框挤出了屏幕：跟过去
+    if (reset || ta.dataset.id !== d.id) ta.value = dr && dr.fu ? dr.text : ""; // 每条各记各的草稿（决定没回复时写的补充说明不算）；决定刚回复、卡片刚出现时也换成它自己的
     ta.dataset.id = d.id;
     ta.readOnly = busy;
     box.setAttribute("aria-busy", busy ? "true" : "false");
@@ -967,7 +981,7 @@
       if (!nd || nd.error || !cm || nd.answered !== cm.answered) return;
       var key = cm.id + "|" + cm.answered;
       keepDetail(key, nd);
-      if (S.shownKey === key) { renderFollowup(nd, false); renderThreadRef(nd); }
+      if (S.shownKey === key) { renderFollowup(nd, false); renderThreadRef(nd); syncFollowup(S.byId[m.id]); } // 拿的这一路上又变了（上面那次因为在拿而跳过了）：再对一次
     }).catch(function () { delete fuFetching[m.id]; });
   }
   function sendFollowup() {
@@ -1081,7 +1095,7 @@
     S.multi.clear();
     renderNav();
     renderList();
-    if (S.current && S.byId[S.current] && !inView(S.byId[S.current], v)) { S.current = null; renderReader(); }
+    if (S.current && S.byId[S.current] && !inView(S.byId[S.current], v)) { S.current = S.keep = null; renderReader(); } // 换走了：回来时读完的那条不再留着
   }
   // 当前条目被移走（归档 / 删除）后，选中下一条
   function nextAfter(ids) {
@@ -1768,13 +1782,16 @@
     $("fuText").addEventListener("input", function () {
       var d = currentDetail(), t = $("fuText").value;
       if (!canFollow(d) || shownId() !== d.id) return;
-      if (t.trim()) S.drafts[d.id] = { idx: null, text: t }; else delete S.drafts[d.id]; // 和决定的草稿放在一起，按消息 id 记
+      if (t.trim()) S.drafts[d.id] = { idx: null, text: t, fu: true }; else delete S.drafts[d.id]; // 和决定的草稿放在一起，按消息 id 记；fu 标明是追问的（决定有了回复也不删）
       renderFuState(d);
     });
     $("fuSend").addEventListener("click", sendFollowup);
     $("fuCopy").addEventListener("click", copyFollowup);
     [$("followup"), $("threadRef")].forEach(function (box) { // "Claude 的回答 →" / "原回答（原决定…）"：打开那一条
-      box.addEventListener("click", function (e) { var b = e.target.closest("[data-open]"); if (b) window.deskOpen(b.dataset.open); });
+      box.addEventListener("click", function (e) { // 点的按钮跟着换掉 / 藏起来：焦点交给列表，不留在看不见的按钮上
+        var b = e.target.closest("[data-open]");
+        if (b) { window.deskOpen(b.dataset.open); $("list").focus(); }
+      });
     });
     $("resolveBtn").addEventListener("click", function () { var d = currentDetail(); if (d) doResolve([d.id]); });
     $("copyBtn").addEventListener("click", function () { copy("md"); });

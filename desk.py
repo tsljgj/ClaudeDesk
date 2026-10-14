@@ -330,7 +330,7 @@ def read_followups(ddir: Path | None = None) -> tuple[list[dict], set[str]]:
         if r.get("delivered"):
             sent.add(str(r["delivered"]))
         elif r.get("id") and r.get("msg"):
-            fus.append(r)
+            fus.append(dict(r, id=str(r["id"]), msg=str(r["msg"])))  # 手改 / 写坏的行里可能不是字符串：拿来当键（集合、字典）会出错
     return fus, sent
 
 
