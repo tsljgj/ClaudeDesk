@@ -156,9 +156,15 @@ class TrayApp:
         self._pending_update = None
         self._show_when_ready = False
         self._handoff_window: dict = {}
+        self._crisp_tray = False      # 托盘图标按托盘的实际像素画（_hook_tray_icon 装上之后）
+        self._overlay = ("", "")      # 任务栏按钮角标：想要的 (字, 读屏说明)
+        self._overlay_key = None      # 已经设到任务栏上的 (字, 像素)
+        self._overlay_icon = 0        # 它的 HICON，换掉后 DestroyIcon
+        self._taskbar = None          # ITaskbarList3，只在界面线程上用
+        self._button_hook = False     # 收得到 TaskbarButtonCreated
 
         M, Item = pystray.Menu, pystray.MenuItem
-        self.icon = pystray.Icon(APP, render(64), APP, menu=M(
+        self.icon = pystray.Icon(APP, render(self._tray_px()), APP, menu=M(
             Item("打开 ClaudeDesk", lambda: self.show(), default=True),
             Item("全部标为已读", lambda: store.mark_all_read()),
             M.SEPARATOR,
@@ -187,6 +193,7 @@ class TrayApp:
                 self.icon._message_handlers[pw.WM_NOTIFY] = on_notify
             except Exception:  # noqa: BLE001
                 log.exception("could not hook notification clicks")
+            self._hook_tray_icon()
 
         store.on_changed.append(self.refresh_icon)
         store.on_arrived.append(self.notify)
@@ -232,17 +239,105 @@ class TrayApp:
         self._set_autostart(not winapi.autostart_enabled())
 
     # ------------------------------------------------------------ 图标 / 通知
+    def _tray_px(self) -> int:
+        return winapi.small_icon_size() if self._crisp_tray else 64
+
+    def _hook_tray_icon(self) -> None:
+        """pystray 把图存成 ICO、按"大图标"尺寸读回来，托盘再缩小一次，角标里的小字糊成一片。
+        换成直接交给托盘一个按托盘实际像素画好的 HICON（pystray 的私有方法，装不上就照旧用 64px 的图）。"""
+        from .icon import to_png
+
+        ic = self.icon
+        orig = getattr(ic, "_assert_icon_handle", None)
+        if orig is None or not hasattr(ic, "_icon_handle"):
+            log.warning("pystray internals changed: tray icon stays 64px")
+            return
+
+        def assert_handle():
+            if ic._icon_handle:
+                return
+            try:
+                ic._icon_handle = winapi.icon_from_png(to_png(ic.icon), ic.icon.width)
+            except Exception:  # noqa: BLE001
+                log.exception("tray icon handle")
+                orig()
+
+        ic._assert_icon_handle = assert_handle
+        self._crisp_tray = True
+
     def refresh_icon(self) -> None:
+        from .icon import overlay_state
+
         c = self.store.counts()
-        key = (min(c["unread"], 100), c["urgent"] > 0 and self._phase, c["open"] > 0)
+        px = self._tray_px()
+        key = (min(c["unread"], 100), c["urgent"] > 0 and self._phase, c["open"] > 0, px)
         if key != self._icon_key:
             self._icon_key = key
-            self.icon.icon = self.render(64, count=c["unread"], alert=key[1], pending=key[2])
+            self.icon.icon = self.render(px, count=c["unread"], alert=key[1], pending=key[2])
         tip = [APP]
         if c["open"]:
             tip.append(f"待你决定 {c['open']}")
         tip.append(f"未读 {c['unread']}")
         self.icon.title = "\n".join(tip)
+        self._update_overlay(overlay_state(c["unread"], c["open"]))
+
+    # 任务栏按钮角标：Windows 只在按钮存在时（窗口显示或最小化）才画；按钮每次（重新）建好都会给窗口发
+    # "TaskbarButtonCreated"（显示、从托盘恢复、Explorer 重启后），在那时重设。SetOverlayIcon 对没有按钮的窗口
+    # 也返回成功、但什么都不留下，所以不能靠返回值判断。
+    def _update_overlay(self, want: tuple[str, str] | None = None, fresh: bool = False) -> None:
+        """记下想要的角标；按钮在的话放到界面线程上去设（异步：数据层 / 闪烁线程的回调不等界面线程）。"""
+        if want is not None:
+            if want == self._overlay and not fresh:
+                return
+            self._overlay = want
+        if not (winapi.WIN and self.hwnd and self.visible and self.window is not None):
+            return  # 没有按钮：等 TaskbarButtonCreated
+        self._native_async(lambda: self._apply_overlay(fresh))
+
+    def _on_button_created(self) -> None:
+        """界面线程（窗口过程里）：任务栏按钮刚建好，上面还没有角标。"""
+        log.info("taskbar button created")
+        self._native_async(lambda: self._apply_overlay(True))
+
+    def _overlay_after_show(self) -> None:
+        """窗口刚显示出来。收得到 TaskbarButtonCreated 就等它；收不到就现在设一次，1 秒后按钮肯定建好了再设一次。"""
+        if not self._button_hook:
+            self._update_overlay(fresh=True)
+            threading.Timer(1.0, self._update_overlay, kwargs={"fresh": True}).start()
+
+    def _apply_overlay(self, fresh: bool = False) -> None:
+        """界面线程上执行。fresh：按钮是新建的（上面什么都没有），顺便换一个新的 COM 对象（Explorer 可能重启过）。"""
+        from .icon import render_badge, to_png
+
+        hicon = 0
+        try:
+            text, desc = self._overlay
+            px = winapi.small_icon_size(self.hwnd)
+            key = (text, px)
+            if key == self._overlay_key and not fresh:
+                return
+            if fresh and self._taskbar is not None:
+                self._taskbar.close()
+                self._taskbar = None
+            if self._taskbar is None:
+                self._taskbar = winapi.TaskbarList()
+            hicon = winapi.icon_from_png(to_png(render_badge(px, text)), px) if text else 0
+            hr = self._taskbar.set_overlay(self.hwnd, hicon, desc)
+            if hr < 0:
+                raise OSError(f"SetOverlayIcon 0x{hr & 0xFFFFFFFF:08X}")
+        except Exception:  # noqa: BLE001 - 角标失败不影响别的；下次计数变化 / 按钮重建再试
+            log.exception("taskbar overlay")
+            winapi.destroy_icon(hicon)
+            self._overlay_key = None
+            tb, self._taskbar = self._taskbar, None
+            try:
+                tb and tb.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        old, self._overlay_icon = self._overlay_icon, hicon
+        winapi.destroy_icon(old)
+        self._overlay_key = key
 
     def _blink_loop(self) -> None:
         while not self.quitting:
@@ -285,6 +380,17 @@ class TrayApp:
         form = self.window.native
         return form.Invoke(Func[Object](fn))
 
+    def _native_async(self, fn) -> None:
+        """同 _native，但不等它执行完（BeginInvoke）：从数据层 / 闪烁线程里调也不会和界面线程互相等。fn 自己接住异常。"""
+        if self.window is None or self.quitting:
+            return
+        try:
+            from System import Func, Object  # type: ignore
+
+            self.window.native.BeginInvoke(Func[Object](fn))
+        except Exception:  # noqa: BLE001
+            log.exception("BeginInvoke failed")
+
     def _show_minimized(self) -> None:
         if self.window is None or not winapi.WIN:
             return
@@ -299,6 +405,7 @@ class TrayApp:
 
             self._native(go)
             self.visible = True
+            self._overlay_after_show()
         except Exception:  # noqa: BLE001
             log.exception("show minimized failed")
 
@@ -313,6 +420,7 @@ class TrayApp:
             log.exception("show failed")
             return
         self.visible = True
+        self._overlay_after_show()
         if self.hwnd:
             winapi.force_foreground(self.hwnd)
             winapi.stop_flash(self.hwnd)
@@ -539,10 +647,22 @@ class TrayApp:
         return 0
 
     def _gui_started(self) -> None:
+        try:  # pywebview 6 在窗体建好之前就开线程调本函数（window.native 还是 None）；隐藏窗口建好时也会触发 shown
+            self.window.events.shown.wait(15)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.hwnd = int(self._native(lambda: self.window.native.Handle.ToInt64()))
         except Exception:  # noqa: BLE001
+            log.exception("no window handle (no taskbar flash / badge)")
             self.hwnd = 0
+        if winapi.WIN and self.hwnd:  # 任务栏按钮每次建好（显示、从托盘恢复、Explorer 重启）都重设角标；要在第一次显示之前挂上
+            try:
+                self._button_hook = bool(self._native(lambda: winapi.watch_message(
+                    self.hwnd, "TaskbarButtonCreated", self._on_button_created)))
+            except Exception:  # noqa: BLE001
+                log.exception("TaskbarButtonCreated hook")
+            log.info("taskbar button hook: %s", self._button_hook)
         if self._show_when_ready:
             self._show_when_ready = False
             self.show()
