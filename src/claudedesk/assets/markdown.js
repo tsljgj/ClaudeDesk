@@ -69,6 +69,7 @@
       return true;
     }
 
+    if (pos > 0 && /[0-9A-Za-z]/.test(src[pos - 1])) return false; // "5$，那个 10$" 里的 $ 是货币单位，不是公式开头
     start = pos + 1;
     if (start >= max) return false;
     var first = src.charCodeAt(start);
@@ -85,6 +86,7 @@
     var next = end + 1 < src.length ? src.charCodeAt(end + 1) : 0;
     if (prev === 0x20 || prev === 0x09 || prev === 0x0a || (next >= 0x30 && next <= 0x39)) return false;
     content = src.slice(start, end);
+    if (content.indexOf("`") >= 0) return false; // "$env:PATH … `$env:PATH`"：结尾的 $ 在代码段里，不能把代码段吞掉
     if (!silent) {
       var ti = state.push("math_inline", "math", 0);
       ti.content = content;
@@ -176,8 +178,23 @@
       (lang ? " language-" + label : "") + '">' + html + "</code></pre></div>";
   }
 
+  // 正文里当真 HTML 用的标签（只认小写）。其余的像 <id>、<branch>、Vec<String>、<T> 都是占位符 / 泛型，原样显示
+  var HTML_OK = /^(a|abbr|b|blockquote|br|caption|cite|code|col|colgroup|dd|del|details|div|dl|dt|em|figcaption|figure|h[1-6]|hr|i|img|ins|kbd|li|mark|ol|p|pre|q|rp|rt|ruby|s|samp|small|span|strong|sub|summary|sup|table|tbody|td|tfoot|th|thead|tr|u|ul|wbr)$/;
+  var HTML_TAG = /<\/?([A-Za-z][A-Za-z0-9-]*)(?:\s+[^\s"'>\/=]+(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>/g;
+  function safeTags(html) { // 注释本来就不显示，先去掉（留着会让 DOMPurify 把同段的 "<id>" 文字连段落一起删掉）；<?…?>、<!…> 原样显示
+    return html.replace(/<!--[\s\S]*?-->/g, "").replace(/<(?=[?!])/g, "&lt;")
+      .replace(HTML_TAG, function (t, name) { return HTML_OK.test(name) ? t : escapeHtml(t); });
+  }
+
   function make() {
     var md = global.markdownit({ html: true, linkify: true, typographer: false, breaks: false });
+    // 中文粗体："**结论：**建议" 这类结尾 ** 紧挨全角标点、后面跟汉字的，CommonMark 原规则闭合不了
+    if (global.markdownitCjkFriendly) md.use(global.markdownitCjkFriendly);
+    // 只把 http(s):// / www. / mailto: 开头的变成链接：server.py、README.md 的后缀也是顶级域名，不能当网址
+    var match = md.linkify.match.bind(md.linkify);
+    md.linkify.match = function (text) {
+      return (match(text) || []).filter(function (m) { return /^(https?:\/\/|ftp:\/\/|mailto:|www\.)/i.test(m.raw); });
+    };
     md.inline.ruler.before("escape", "math_inline", mathInline);
     md.block.ruler.after("blockquote", "math_block", mathBlock, { alt: ["paragraph", "reference", "blockquote", "list"] });
     md.core.ruler.after("inline", "task_lists", taskLists);
@@ -192,6 +209,13 @@
       return highlight(t.content.replace(/\n$/, ""), lang);
     };
     md.renderer.rules.code_block = function (tokens, idx) { return highlight(tokens[idx].content.replace(/\n$/, ""), ""); };
+    md.renderer.rules.html_inline = function (tokens, idx) { return safeTags(tokens[idx].content); };
+    md.renderer.rules.html_block = function (tokens, idx, options, env) {
+      var c = tokens[idx].content, m = /^\s*<\/?([A-Za-z][A-Za-z0-9-]*)/.exec(c);
+      if (m ? HTML_OK.test(m[1]) : /^\s*<!--/.test(c)) return safeTags(c);
+      // 独占一行的 <id>、<title>、<?xml …?> 也会被当成 HTML 块：退回普通段落，里面的 Markdown 照常解析
+      return "<p>" + md.renderInline(c.trim(), env) + "</p>\n";
+    };
     md.renderer.rules.table_open = function () { return '<div class="table-wrap"><table>\n'; };
     md.renderer.rules.table_close = function () { return "</table></div>\n"; };
     var defaultLink = md.renderer.rules.link_open || function (tokens, idx, options, env, self) {
@@ -207,7 +231,9 @@
 
   var engine = null;
 
-  // 表格行里 $…$ / \(…\) 中的竖线换成占位符（代码段里的不动）
+  // 表格行里 $…$ / \(…\) 中的竖线换成占位符（代码段里的不动）。$…$ 的判定和 mathInline 一致，
+  // 否则 "| $5 | $10 |" 这种价格会被当成一个公式，表格少一列
+  var TABLE_MATH = /\$\$[^$]+\$\$|(?<![0-9A-Za-z\\])\$(?=[^$\s])(?:\\\$|[^$`])*?[^$\s\\]\$(?!\d)|\\\([\s\S]*?\\\)/g;
   function protectTablePipes(src) {
     var inFence = false;
     return src.split("\n").map(function (line) {
@@ -215,20 +241,44 @@
       if (inFence || line.indexOf("|") < 0 || !/[$`]|\\\(/.test(line)) return line;
       return line.split(/(`+[^`]*`+)/).map(function (seg, i) {
         if (i % 2) return seg.split("|").join(PIPE); // 代码段里的 | 也不该切单元格
-        return seg.replace(/\$\$[^$]+\$\$|\$[^$\s][^$]*?\$|\\\([\s\S]*?\\\)/g, function (m) { return m.split("|").join(PIPE); });
+        return seg.replace(TABLE_MATH, function (m) { return m.split("|").join(PIPE); });
       }).join("");
     }).join("\n");
   }
 
+  // 正文里的原始 HTML 不能跳出正文：style 只留排版用的几项（position、z-index、inset、transform 能盖住整个界面），
+  // class 只留本文件自己生成的（否则 class="modal-back" 之类会套上界面自己的浮层样式）
+  var STYLE_OK = /^(text-align|vertical-align|color|background-color|font-weight|font-style|text-decoration(-[a-z]+)?|white-space|(min-|max-)?(width|height))$/;
+  var CLASS_OK = /^(math|math-inline|math-display|codeblock|code-head|code-lang|hljs|hljs-[\w-]+|language-[\w+#.-]+|[\w-]+_|task|done|task-item|table-wrap)$/;
+  function cleanAttr(node, data) {
+    var kept;
+    if (data.attrName === "style") {
+      kept = String(data.attrValue).split(";").filter(function (d) {
+        var i = d.indexOf(":");
+        return i > 0 && STYLE_OK.test(d.slice(0, i).trim().toLowerCase()) && !/url\(|expression|\/\*|\\/i.test(d);
+      });
+      data.attrValue = kept.join(";");
+    } else if (data.attrName === "class") {
+      kept = String(data.attrValue).split(/\s+/).filter(function (c) { return CLASS_OK.test(c); });
+      data.attrValue = kept.join(" ");
+    } else return;
+    if (!kept.length) data.keepAttr = false;
+  }
+
   function toHtml(src) {
-    if (!engine) engine = make();
+    if (!engine) {
+      engine = make();
+      if (global.DOMPurify) global.DOMPurify.addHook("uponSanitizeAttribute", cleanAttr);
+    }
     var html = engine.render(protectTablePipes(String(src || "")));
     html = html.split(PIPE).join("|");
     if (global.DOMPurify) {
       html = global.DOMPurify.sanitize(html, {
         ADD_ATTR: ["target", "data-tex"],
+        ADD_URI_SAFE_ATTR: ["data-tex"], // 否则 "f: X \to Y" 像个未知协议的网址，data-tex 会被删掉，公式出不来
         FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "iframe", "object", "embed"],
         ALLOW_DATA_ATTR: false,
+        SANITIZE_NAMED_PROPS: true, // id="modal" 之类加前缀 user-content-，不会和界面自己的 id 撞上
       });
     }
     return html;
@@ -258,6 +308,13 @@
       h.appendChild(b);
     });
     root.querySelectorAll("a[href]").forEach(function (a) {
+      if (a.origin === location.origin) { // [app.js](src/…) 这类相对链接指向本机服务器，打开只会 404：换成文字，悬停看路径
+        var s = document.createElement("span");
+        s.title = a.getAttribute("href");
+        while (a.firstChild) s.appendChild(a.firstChild);
+        a.parentNode.replaceChild(s, a);
+        return;
+      }
       a.setAttribute("target", "_blank");
       a.setAttribute("rel", "noopener noreferrer");
     });

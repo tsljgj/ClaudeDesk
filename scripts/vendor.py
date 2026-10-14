@@ -2,14 +2,17 @@
 
 只在升级这些库时需要跑：
     mkdir tmp && cd tmp && npm init -y && npm i markdown-it@14 katex@0.16 dompurify@3 \
+        markdown-it-cjk-friendly@3.0.0 get-east-asian-width@1.7.0 esbuild@0.28.2 \
         @highlightjs/cdn-assets@11 @fontsource-variable/inter @fontsource-variable/jetbrains-mono \
         @fontsource-variable/noto-sans-sc @fontsource-variable/source-serif-4 @fontsource-variable/noto-serif-sc
     python scripts/vendor.py tmp/node_modules
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -66,13 +69,28 @@ def libs(nm: Path) -> None:
     css = (OUT / "katex/katex.min.css").read_text(encoding="utf-8")
     css = re.sub(r",url\(fonts/[^)]+\.woff\) format\(\"woff\"\),url\(fonts/[^)]+\.ttf\) format\(\"truetype\"\)", "", css)
     (OUT / "katex/katex.min.css").write_text(css, encoding="utf-8")
+    cjk(nm)
     licenses = OUT / "LICENSES.txt"
     parts = []
-    for pkg in ("markdown-it", "dompurify", "katex", "@highlightjs/cdn-assets", *dict.fromkeys(p for p, *_ in FONTS)):
-        lic = next((p for p in (nm / pkg).glob("LICENSE*")), None)
+    for pkg in ("markdown-it", "markdown-it-cjk-friendly", "get-east-asian-width", "dompurify", "katex",
+                "@highlightjs/cdn-assets", *dict.fromkeys(p for p, *_ in FONTS)):
+        lic = next((p for p in (nm / pkg).glob("[Ll][Ii][Cc][Ee][Nn][Ss][Ee]*")), None)
         if lic:
             parts.append(f"===== {pkg} =====\n{lic.read_text(encoding='utf-8', errors='replace').strip()}\n")
     licenses.write_text("\n".join(parts), encoding="utf-8")
+
+
+def cjk(nm: Path) -> None:
+    """markdown-it-cjk-friendly 只发 ESM（还 import get-east-asian-width），不能直接用 <script> 加载：
+    用 esbuild 连同依赖打成一个普通脚本，插件挂在 window.markdownitCjkFriendly。"""
+    ver = {p: json.loads((nm / p / "package.json").read_text(encoding="utf-8"))["version"]
+           for p in ("markdown-it-cjk-friendly", "get-east-asian-width")}
+    banner = "/*! markdown-it-cjk-friendly %s + get-east-asian-width %s | MIT */" % tuple(ver.values())
+    js = ("require('esbuild').buildSync({entryPoints:[process.argv[1]],bundle:true,minify:true,format:'iife',"
+          "globalName:'markdownitCjkFriendly',banner:{js:process.argv[2]},"
+          "footer:{js:'markdownitCjkFriendly=markdownitCjkFriendly.default;'},outfile:process.argv[3]})")
+    subprocess.run(["node", "-e", js, str(nm / "markdown-it-cjk-friendly/dist/index.js"), banner,
+                    str(OUT / "markdown-it-cjk-friendly.min.js")], cwd=nm.parent, check=True)
 
 
 if __name__ == "__main__":
