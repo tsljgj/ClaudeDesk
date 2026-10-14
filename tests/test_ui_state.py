@@ -1,5 +1,6 @@
 """界面状态：归档 / 删除和长轮询的竞态、每条消息的草稿、按序号提交、j/k 浏览的已读、新消息提示、提交中的状态。"""
 import json
+import re
 import threading
 import time
 
@@ -267,6 +268,73 @@ def test_new_arrivals_toast_when_hidden_and_highlight_when_visible(env):
     assert errors == []
 
 
+def _dropper(d, store):
+    def mk(kind, title, repo, **kw):
+        return desk.make_message(kind, "s", title, repo=repo, **kw)
+
+    def drop(*msgs):  # 一次写进收件箱，保证同一轮长轮询一起拿到
+        with open(d / desk.INBOX, "a", encoding="utf-8") as f:
+            f.write("".join(json.dumps(m, ensure_ascii=False) + "\n" for m in msgs))
+        store.poll()
+        return [m["id"] for m in msgs]
+    return mk, drop
+
+
+def test_arrival_off_screen_toasts_and_n_opens_it_across_projects(env):
+    """全部项目视图里，新到的待决定插在屏幕外：也弹提示；提示还在时按 N 先打开它，筛着别的项目也能跨过去。"""
+    d, store, server, page, errors = env
+    mk, drop = _dropper(d, store)
+    drop(*[mk("answer", f"回答 {i}", "aaa") for i in range(20)], mk("decision", "aaa 的决定", "aaa", options=["A"]))
+    page.goto(server.url)
+    page.wait_for_selector(".item")
+    page.click(".item >> nth=1")  # 在看一条回答
+    page.wait_for_function(SAME)
+    # 新的待决定来自排在最后的项目：插在列表底下，屏幕外
+    [x] = drop(mk("decision", "要不要发版？", "zzz", options=["发", "不发"], priority="high"))
+    t = page.locator(".toast", has_text="zzz 需要你决定：要不要发版？")
+    t.wait_for()
+    assert t.locator("button").inner_text() == "查看（N）"
+    assert page.evaluate("""id => document.querySelector('.item[data-id="' + id + '"]').getBoundingClientRect().top
+        >= document.getElementById('list').getBoundingClientRect().bottom""", x)
+    page.keyboard.press("n")  # 提示还在：N 打开它，不是队列里 aaa 的那条
+    page.wait_for_function("id => deskTest.S.current === id", arg=x)
+    page.wait_for_function(SAME)
+    assert page.locator(".toast", has_text="要不要发版？").count() == 0  # 用过的提示收起来
+
+    # 只看 aaa 时，zzz 又来一条：N 跨项目打开它
+    page.click('.ptab[data-project="aaa"]')
+    page.wait_for_function("() => deskTest.S.projects.has('aaa') && !deskTest.S.current")
+    [y] = drop(mk("decision", "第二个要决定的", "zzz", options=["A"]))
+    page.locator(".toast", has_text="zzz 需要你决定：第二个要决定的").wait_for()
+    page.keyboard.press("n")
+    page.wait_for_function("id => deskTest.S.current === id", arg=y)
+    page.wait_for_function(SAME)
+    assert page.evaluate("Array.from(deskTest.S.projects)") == ["zzz"]
+    page.keyboard.press("n")  # 之后照常走队列（紧急的先）
+    page.wait_for_function("id => deskTest.S.current === id", arg=x)
+    assert errors == []
+
+
+def test_arrival_toast_in_a_narrow_window(env):
+    """窄窗口在看一条时，阅读页盖住了列表：同一项目新到的待决定也弹提示；提示条用满宽度，长标题最多两行，按钮不折行。"""
+    d, store, server, page, errors = env
+    mk, drop = _dropper(d, store)
+    [a] = drop(mk("decision", "正在看的决定", "proj", options=["A", "B"]))
+    page.set_viewport_size({"width": 480, "height": 800})
+    page.goto(server.url)
+    page.wait_for_selector(".item")
+    page.evaluate("id => deskOpen(id)", a)
+    page.wait_for_function("document.getElementById('app').classList.contains('reading')")
+    long = "发布前要不要先把 build 129 推到测试通道，让 app-ui 和 app-core 的改动先在内部跑一天、确认没问题以后再推给所有人？"
+    drop(mk("decision", long, "proj", options=["推", "不推"], priority="high"))
+    t = page.locator(".toast", has_text="proj 需要你决定")
+    t.wait_for()
+    tb, bb = t.bounding_box(), t.locator("button").bounding_box()
+    assert tb["x"] >= 15 and tb["x"] + tb["width"] <= 465 and tb["width"] > 400  # 原来只有半个窗口宽
+    assert tb["height"] <= 60 and bb["height"] <= 28  # 两行以内；"查看（N）"不一字一行
+    assert errors == []
+
+
 def test_submit_in_flight_state_failure_and_retry(env):
     d, store, server, page, errors = env
     a = post(d, kind="decision", title="慢慢提交", options=["甲", "乙"], allow_text=True)
@@ -297,6 +365,7 @@ def test_submit_in_flight_state_failure_and_retry(env):
         opts: [...document.querySelectorAll('#options .opt')].map(b => b.disabled),
         checked: [...document.querySelectorAll('#options .opt.checked')].map(b => +b.dataset.idx) })""")
     assert st == {"busy": "true", "btn": True, "ro": True, "opts": [True, True], "checked": [1]}
+    assert page.inner_text("#decideHint") == "正在发给会话…"  # 不再说"Ctrl+Enter 提交「乙」"
     page.click('#options .opt[data-idx="0"]', force=True)  # 锁住时点别的选项没用
     assert page.evaluate("deskTest.S.choiceIdx") == 1
 
@@ -310,14 +379,17 @@ def test_submit_in_flight_state_failure_and_retry(env):
         opts: [...document.querySelectorAll('#options .opt')].map(b => b.disabled),
         checked: [...document.querySelectorAll('#options .opt.checked')].map(b => +b.dataset.idx) })""")
     assert st == {"busy": "false", "text": "提交", "btn": False, "ro": False, "val": "补充一句", "opts": [False, False], "checked": [1]}
+    assert page.inner_text("#decideHint") == "Ctrl+Enter 提交「乙」"
     assert a not in store.responses
 
-    # 重试成功
+    # 重试成功：完成框写"已提交 · 今天 00:07 · 会话已收到"和补充的话；选了哪项看打了 ✓ 的那项，不再重复
     mode["fail"] = False
     bad.locator("button", has_text="重试").click()
     page.wait_for_selector("#doneBox:not([hidden])")
-    assert "已提交 · 会话已收到你的选择" in page.inner_text("#doneBox")
-    assert "乙" in page.inner_text("#doneBox") and "补充一句" in page.inner_text("#doneBox")
+    done = page.inner_text("#doneBox")
+    assert re.match(r"已提交 · (今天|昨天) \d\d:\d\d · 会话已收到", done), done
+    assert "补充一句" in done and "选择：" not in done
+    assert page.evaluate("[...document.querySelectorAll('#options .opt.chosen')].map(b => b.dataset.idx + ':' + b.textContent)") == ["1:乙"]
     r = [x for x in desk.read_all(d / desk.RESPONSES) if x["id"] == a][0]
     assert r["choice"] == "乙" and r["text"] == "补充一句"
     assert errors == []

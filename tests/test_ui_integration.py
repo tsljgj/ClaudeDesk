@@ -111,7 +111,8 @@ def test_keyboard_focus_survives_background_updates(env):
     d, store, server, page, errors = env
     post(d, kind="answer", title="甲", body="x", repo="alpha")
     post(d, kind="answer", title="乙", body="x", repo="beta")
-    dec = post(d, kind="decision", title="要决定的", options=["A", "B"], repo="alpha")
+    # 正文长一点：决定卡片在屏幕下面，"去选择 ↓"才会出现（卡片已经露出来时它是隐藏的）
+    dec = post(d, kind="decision", title="要决定的", body="很长的背景。\n\n" * 80, options=["A", "B"], repo="alpha")
     store.poll()
     open_page(page, server)
     page.wait_for_selector("#startBtn")

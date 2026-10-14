@@ -255,12 +255,15 @@ def test_focus_is_visible_and_hidden_controls_are_not_tab_stops(env):
     page.click(f'.item[data-id="{a}"]')
     page.keyboard.press("k")
     page.wait_for_function("getComputedStyle(document.querySelector('.item.selected')).boxShadow.includes('inset')")
-    # 输入框 / 搜索框获得焦点：边框是强调色
-    accent = "rgb(242, 84, 27)"
+    # 焦点环、输入框 / 搜索框获得焦点：中性的深灰（强调色只留给"等你处理"）
+    accent, ink3 = "rgb(242, 84, 27)", "rgb(100, 100, 111)"
+    assert js(page, "getComputedStyle(document.querySelector('.item.selected')).boxShadow").startswith(ink3)
     page.focus("#replyText")
-    assert js(page, "getComputedStyle(document.getElementById('replyText')).borderTopColor") == accent
+    assert js(page, "getComputedStyle(document.getElementById('replyText')).borderTopColor") == ink3 != accent
     page.focus("#search")
-    assert js(page, "getComputedStyle(document.querySelector('.search')).borderTopColor") == accent
+    assert js(page, "getComputedStyle(document.querySelector('.search')).borderTopColor") == ink3
+    page.keyboard.press("Tab")  # 键盘焦点环
+    assert js(page, "getComputedStyle(document.activeElement).outlineColor") == "rgb(69, 69, 79)"  # --ink-2
     assert errors == []
 
 
@@ -474,12 +477,15 @@ def test_menus_and_settings_work_from_the_keyboard(env):
     page.keyboard.press("Escape")
     assert js(page, "document.activeElement.id") == "list"
 
-    # 快捷键表里有新加的键；焦点在"好的"上
+    # 快捷键表：分组列出键盘操作；焦点在"好的"上
     page.keyboard.press("?")
     page.wait_for_function("document.activeElement.id === 'modalOk'")
     sheet = page.inner_text("#modalText")
-    for s in ["设置", "撤销", "连续勾选", "窄窗口：回到列表", "先确认", "Backspace"]:
+    for s in ["浏览", "整理", "设置", "撤销", "连续勾选", "退一层", "下一条 / 上一条待决定", "打开 / 写补充说明", "标为已解决", "Ctrl + A"]:
         assert s in sheet, s
+    keys = js(page, "[...document.querySelectorAll('#modalText .kbd-table > span:nth-child(odd)')].map(e => e.textContent)")
+    assert len(keys) == 20 and len(set(keys)) == 20
+    assert js(page, "[...document.querySelectorAll('#modalText kbd')].some(k => k.textContent === '/')")  # "/" 单独一个键也画成按键
     page.keyboard.press("Enter")
     page.wait_for_selector("#modal", state="hidden")
     assert js(page, "document.getElementById('modalCancel').hidden") is False
@@ -496,17 +502,66 @@ def test_narrow_window_esc_and_backspace_go_back_to_the_list(env):
     page.wait_for_selector(".item")
     assert page.get_attribute("#backBtn", "title") == "返回列表（Esc）"
     reading = "document.getElementById('app').classList.contains('reading')"
-    page.keyboard.press("j")
+    page.keyboard.press("j")  # 窄窗口列表页：j 只挪光标，Enter 才打开
+    page.keyboard.press("Enter")
     page.wait_for_function(reading)
     page.keyboard.press("Escape")
     page.wait_for_function("!" + reading)
     assert js(page, "document.activeElement.id") == "list"
     page.keyboard.press("j")
+    page.keyboard.press("Enter")
     page.wait_for_function(reading)
     page.keyboard.press("Backspace")
     page.wait_for_function("!" + reading)
+    assert js(page, "document.activeElement.id") == "list"
     # 减少动效：阅读页不滑进来
     assert js(page, "getComputedStyle(document.getElementById('reader')).transitionDuration") != "0s"
     page.emulate_media(reduced_motion="reduce")
     assert js(page, "getComputedStyle(document.getElementById('reader')).transitionDuration") == "0s"
+    assert errors == []
+
+
+def test_narrow_list_has_a_cursor_so_esc_then_j_moves_on(env):
+    """窄窗口：j 只挪光标（不打开、不标已读），Enter 打开；Esc 回到列表时光标停在刚看的那条，再按 j 就是下一条。"""
+    d, store, server, page, errors = env
+    for i in range(4):
+        post(d, kind="answer", title=f"回答 {i}", body="x")
+    store.poll()
+    page.set_viewport_size({"width": 480, "height": 800})
+    start(page, server)
+    page.wait_for_selector(".item")
+    v = js(page, "deskTest.S.visible")
+    reading = "document.getElementById('app').classList.contains('reading')"
+    cur = lambda: js(page, "[deskTest.S.current, deskTest.S.cursor, [...document.querySelectorAll('.item.cursor')].map(e => e.dataset.id)]")  # noqa: E731
+    page.focus("#list")
+    page.keyboard.press("j")
+    assert cur() == [None, v[0], [v[0]]] and not js(page, reading)
+    page.keyboard.press("j")
+    assert cur() == [None, v[1], [v[1]]]
+    page.wait_for_timeout(1000)
+    assert store.is_unread(store.msgs[v[0]]) and store.is_unread(store.msgs[v[1]])  # 光标扫过去不算读
+    # 光标那条有键盘焦点环；列表本身不再描整圈强调色的框
+    shadow = js(page, f"getComputedStyle(document.querySelector('.item[data-id=\"{v[1]}\"]')).boxShadow")
+    assert "inset" in shadow and js(page, "getComputedStyle(document.getElementById('list')).outlineStyle") == "none"
+    page.keyboard.press("Enter")
+    page.wait_for_function(reading)
+    assert js(page, "deskTest.S.current") == v[1]
+    page.keyboard.press("Escape")
+    page.wait_for_function("!" + reading)
+    assert cur() == [None, v[1], [v[1]]] and js(page, "document.activeElement.id") == "list"
+    page.keyboard.press("j")  # 接着往下，不是又回到第一条
+    assert cur() == [None, v[2], [v[2]]] and not js(page, reading)
+    page.keyboard.press("Enter")
+    page.wait_for_function(reading)
+    assert js(page, "deskTest.S.current") == v[2]
+    page.keyboard.press("Escape")
+    page.keyboard.press("k")
+    page.keyboard.press("k")
+    assert cur() == [None, v[0], [v[0]]]
+    page.keyboard.press("k")  # 到头了停住
+    assert cur()[1] == v[0]
+    # 宽窗口照旧：↓ 直接打开下一条
+    page.set_viewport_size({"width": 1300, "height": 800})
+    page.keyboard.press("j")
+    assert js(page, "deskTest.S.current") is not None
     assert errors == []

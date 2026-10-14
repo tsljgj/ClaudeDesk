@@ -50,7 +50,7 @@
   // ---------------------------------------------------------------- 状态
   var VIEWS = [
     { id: "all", label: "全部", empty: "收件箱是空的", emptySub: "一切都处理完了" },
-    { id: "decide", label: "决定", empty: "没有要你决定的事", emptySub: "会话需要你拍板时，会出现在这里" },
+    { id: "decide", label: "决定", empty: "没有待决定的事", emptySub: "会话需要你拍板时，会出现在这里" },
     { id: "answer", label: "回答", empty: "还没有回答", emptySub: "你问 Claude 的问题，完整答案收在这里" },
     { id: "archive", label: "归档", empty: "归档是空的", emptySub: "按 E 把处理完的消息收起来" },
   ];
@@ -63,6 +63,7 @@
     details: {}, shownKey: null, visible: [],
     drafts: {}, choiceIdx: null, submitting: {}, fresh: {}, // 每条的草稿（选项序号 + 文字）/ 正在提交的 id / 新到的高亮到期时间
     gone: {}, // 在这里删掉的 id：删除还在路上时到的旧快照里还有它们，不能让它们当成"新消息"闪回来
+    cursor: null, jump: null, // 窄窗口列表页的光标（↑↓ 只挪它）/ 新到提示里那条：{ id, el }，提示还在时 N 先打开它
   };
 
   function loadSet(k) { try { var v = JSON.parse(load(k, "[]")); return new Set(Array.isArray(v) ? v : []); } catch (e) { return new Set(); } }
@@ -121,15 +122,23 @@
     // 缓存瘦身：删掉的消息不留详情；已经有回复的不留草稿
     Object.keys(S.details).forEach(function (k) { if (!S.byId[k.split("|")[0]]) delete S.details[k]; });
     Object.keys(S.drafts).forEach(function (id) { if (!S.byId[id] || S.byId[id].answered) delete S.drafts[id]; });
-    var hot = first ? [] : arrivals(old);
+    var arr = first ? null : arrivals(old);
     if (S.query) runSearch(); else renderAll();
-    if (hot.length === 1) {
-      var h = hot[0];
-      toast(h.open ? projectOf(h) + " 需要你决定：" + h.title : "紧急：" + h.title, { action: "查看", run: function () { window.deskOpen(h.id); } });
-    } else if (hot.length) toast(hot.length + " 条新的待决定", { action: "查看", run: function () { window.deskOpen(hot[0].id); } });
+    if (!arr) return;
+    var hot = arr.hot, L = $("list").getBoundingClientRect(), covered = narrow() && S.current; // 窄窗口在看一条：阅读页盖住了列表
+    arr.lit.forEach(function (id) { // 在这个视图里、但滚出了屏幕（或被盖住）：也算没看见
+      var m = S.byId[id], el = rowEl(id), r = el && el.getBoundingClientRect();
+      if (m && (m.open || m.priority === "high") && (!r || covered || r.top < L.top || r.bottom > L.bottom)) hot.push(m);
+    });
+    if (!hot.length) return;
+    hot.sort(function (a, b) { return (b.open - a.open) || ((b.priority === "high") - (a.priority === "high")) || new Date(a.ts) - new Date(b.ts); });
+    var h = hot[0];
+    var t = toast(hot.length === 1 ? (h.open ? projectOf(h) + " 需要你决定：" + h.title : "紧急：" + h.title) : hot.length + " 条新的待决定",
+                  { action: "查看（N）", run: function () { window.deskOpen(h.id); } });
+    S.jump = { id: h.id, el: t }; // 提示还在时按 N：先打开它（跨项目）
   }
 
-  // 新到的消息：看得见的那几行高亮 1.6 秒；看不见的（别的标签 / 视图、被搜索筛掉）里有待决定或紧急的，返回给 apply 弹一条提示
+  // 新到的消息：看得见的那几行高亮 1.6 秒（lit）；看不见的（别的标签 / 视图、被搜索筛掉）里有待决定或紧急的（hot），交给 apply 弹提示
   function arrivals(old) {
     var hot = [], until = Date.now() + 1600, lit = [];
     S.msgs.forEach(function (m) {
@@ -145,7 +154,7 @@
         if (el) el.classList.remove("fresh");
       });
     }, 1650);
-    return hot;
+    return { hot: hot, lit: lit };
   }
 
   function applySettings(s) {
@@ -277,7 +286,7 @@
     if (full) return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日 " + hm;
     if (dayKey(d) === dayKey(now)) return hm;
     var yest = new Date(now); yest.setDate(now.getDate() - 1);
-    if (dayKey(d) === dayKey(yest)) return "昨天";
+    if (dayKey(d) === dayKey(yest)) return "昨天 " + hm; // 刚过午夜时，11 分钟前的也是"昨天"：带上时间
     if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + "月" + d.getDate() + "日";
     return d.getFullYear() + "/" + (d.getMonth() + 1) + "/" + d.getDate();
   }
@@ -310,25 +319,30 @@
   function queueText(q) {
     var urgent = q.filter(function (m) { return m.priority === "high"; }).length;
     var oldest = q.reduce(function (a, m) { return new Date(m.ts) < new Date(a.ts) ? m : a; });
-    return q.length + " 条待你决定" + (urgent ? " · " + urgent + " 条紧急" : "") + " · 最久已等 " + fmtWait(oldest.ts);
+    return q.length + " 条待决定" + (urgent ? " · " + urgent + " 条紧急" : "") + " · 最久已等 " + fmtWait(oldest.ts);
   }
-  function renderQueue() {
+  function renderQueue() { // 只在有待决定时出现（全部 / 决定视图）；没有就收起，把地方让给列表
     var b = $("queueBtn"), q = queue();
-    b.hidden = S.view !== "all" && S.view !== "decide";
-    b.disabled = !q.length;
-    b.classList.toggle("none", !q.length);
-    b.title = q.length ? "跳到下一条待决定（N / Shift+N 上一条）：紧急的在前，再按等得久的" : "";
-    b.innerHTML = q.length ? "<span>" + queueText(q) + "</span><kbd>N</kbd>" : "<span>没有待决定的事</span>";
+    b.hidden = !q.length || (S.view !== "all" && S.view !== "decide");
+    if (!q.length) return;
+    b.title = "跳到下一条待决定（N / Shift+N 上一条）：紧急的在前，再按等得久的";
+    b.innerHTML = "<span>" + queueText(q) + "</span><kbd>N</kbd>";
   }
-  function renderEmpty() { // 阅读区什么都没打开时
-    var q = queue();
+  function renderEmpty() { // 阅读区什么都没打开时：不重复队列条，写出 N 会打开的那条
+    var q = queue(), m = q[0], unread = q.length ? 0 : scopeCounts().unread;
     keepFocus($("empty"), function () {
       $("empty").innerHTML = '<div class="empty-box">' + (q.length
-        ? '<p class="empty-lead">' + queueText(q) + '</p><button class="primary" id="startBtn" title="按 N 也行">开始处理（N）</button>'
+        ? '<p class="empty-lead">' + esc(m.title) + '</p><p class="empty-sub">' + esc(projectOf(m)) + (m.priority === "high" ? " · 紧急" : "") +
+          " · 已等 " + fmtWait(m.ts) + (q.length > 1 ? " · 后面还有 " + (q.length - 1) + " 条" : "") + '</p><button class="primary" id="startBtn">开始处理（N）</button>'
+        : unread ? '<p class="empty-lead">没有待决定的事</p><p class="empty-sub">还有 ' + unread + " 条未读 · <kbd>↓</kbd> 开始看</p>"
         : '<p class="empty-lead">都处理完了</p><p class="empty-sub"><kbd>↑</kbd> <kbd>↓</kbd> 切换　<kbd>?</kbd> 快捷键</p>') + "</div>";
     });
   }
   function nextDecision(dir) { // N / Shift+N：下一条 / 上一条待决定，到头绕回来
+    if (dir > 0 && S.jump && document.contains(S.jump.el)) { // 新到提示还在：先打开它说的那条（跨项目）
+      var j = S.byId[S.jump.id]; S.jump.el.remove(); S.jump = null;
+      if (j && j.id !== S.current && (j.open || j.unread)) { window.deskOpen(j.id); return; }
+    }
     var q = queue();
     if (!q.length) { toast("没有待决定的事"); return; }
     var i = q.map(function (m) { return m.id; }).indexOf(S.current);
@@ -346,10 +360,10 @@
     renderQueue();
     var m = S.current && S.byId[S.current], d = currentDetail(), ds = $("eyebrow").querySelector(":scope > span[title]");
     if (!m) return renderEmpty();
-    if (ds) ds.textContent = fmtRel(m.ts); // 只换日期那几个字，不重画（焦点不丢）
+    if (ds) ds.textContent = ebDate(m); // 只换日期那几个字，不重画（焦点不丢）
     if (d && d.kind === "decision" && !d.response) $("decideState").textContent = waitState(d);
   }
-  function waitState(d) { return "会话已等待 " + fmtWait(d.ts) + " · 提交后立即继续"; }
+  function waitState(d) { return "会话已等 " + fmtWait(d.ts) + " · 提交后立即继续"; }
 
   // ---------------------------------------------------------------- 渲染
   function renderAll() {
@@ -365,7 +379,7 @@
 
   function renderNav() {
     var c = S.counts, sc = scopeCounts();
-    var n = { decide: [sc.open, true, " 条待你决定"], answer: [sc.unread_answers, false, " 条未读回答"], all: [sc.unread, false, " 条未读"], archive: [0] };
+    var n = { decide: [sc.open, true, " 条待决定"], answer: [sc.unread_answers, false, " 条未读回答"], all: [sc.unread, false, " 条未读"], archive: [0] };
     keepFocus($("nav"), function () {
       $("nav").innerHTML = VIEWS.map(function (v) {
         var k = n[v.id], tip = k[2] ? k[0] + k[2] : ""; // 数字是什么意思写在悬停提示里
@@ -415,6 +429,14 @@
     var b = $("projects");
     b.classList.toggle("fade-l", b.scrollLeft > 1);
     b.classList.toggle("fade-r", b.scrollLeft + b.clientWidth < b.scrollWidth - 1);
+    // 右边看不见的标签里有待决定：标签条右头亮一个小圆点，点了滚过去
+    var box = b.getBoundingClientRect(); // 用屏幕坐标量：标签的 offsetLeft 不是相对标签条算的
+    var hid = Array.prototype.filter.call(b.querySelectorAll(".ptab"), function (t) { return t.querySelector(".n.hot") && t.getBoundingClientRect().right > box.right + 1; });
+    var more = $("ptabMore"); more.hidden = !hid.length;
+    more.title = "右边还有 " + hid.length + " 个项目在等你决定";
+    more.onclick = function () {
+      if (hid[0]) b.scrollTo({ left: b.scrollLeft + hid[0].getBoundingClientRect().left - b.getBoundingClientRect().left - 8, behavior: reduced() ? "auto" : "smooth" });
+    };
   }
 
   // 右键标签 / 分组标题：把这个项目（或没认出来的来源）归到另一个项目下
@@ -454,15 +476,13 @@
           : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + v.empty) + "</b>" +
         (S.query ? (more ? "" : "换个关键词试试") : v.emptySub) + "</div>" + more);
     } else if (grouped()) {
-      var html = "", last = null, opens = {}; // 分组标题只在组里有待决定时显示胶囊，别的数不显示
-      items.forEach(function (m) { var p = projectOf(m); if (m.open) opens[p] = (opens[p] || 0) + 1; });
+      var html = "", last = null; // 分组标题不带数：顶部标签已经有，下面的行也各有圆点
       items.forEach(function (m) {
         var p = projectOf(m), other = m.project_kind === "other";
         if (p !== last) {
           html += '<div class="group-label' + (other ? " other" : "") + '" data-project="' + esc(p) + '" data-tab="' + esc(tabKey(m)) + '">' +
             '<span class="pdot" style="background:' + pcolor(other ? OTHER : p) + '"></span>' +
             '<button class="gname" title="' + (other ? "只看「未归类」：没认出属于哪个仓库的旧消息 · 右键或点「归到…」可以归到某个仓库" : "只看 " + esc(p)) + '">' + esc(p) + "</button>" +
-            (opens[p] ? '<span class="n hot" title="' + opens[p] + ' 条待你决定">' + opens[p] + "</span>" : "") +
             '<button class="gmerge" tabindex="-1" title="归到某个项目下">归到…</button></div>';
           last = p;
         }
@@ -491,10 +511,10 @@
   function itemHtml(m) {
     var checked = S.multi.has(m.id);
     var cls = "item" + (m.unread ? " unread" : "") + (m.open ? " open" : "") +
-      (m.id === S.current ? " selected" : "") + (checked ? " multi" : "") + (S.fresh[m.id] > Date.now() ? " fresh" : "");
-    // 状态圆点：实心 = 没读过；强调色 = 等你处理；空心环 = 看过、还没决定；外加一圈 = 紧急（处理完才消失）
-    var urgent = m.priority === "high" && (m.open || m.unread);
-    var dot = urgent ? "hot urgent" : m.open ? (m.unread ? "hot" : "hot seen") : m.unread ? "new" : "";
+      (m.id === S.current ? " selected" : "") + (checked ? " multi" : "") + (S.fresh[m.id] > Date.now() ? " fresh" : "") +
+      (!S.current && m.id === S.cursor ? " cursor" : "");
+    // 状态圆点：实心 = 没读过；强调色 = 等你处理；空心环 = 看过、还没决定；外加一圈 = 紧急的待决定（只给决定，处理完才消失）
+    var dot = m.open ? (m.priority === "high" ? "hot urgent" : m.unread ? "hot" : "hot seen") : m.unread ? (m.priority === "high" ? "hot" : "new") : "";
     var p = projectOf(m), sl = m.source.toLowerCase(), pl = p.toLowerCase();
     var src = sl === pl ? "" : sl.indexOf(pl + "/") === 0 ? m.source.slice(p.length + 1) : m.source;
     var bits = []; // 第二行：类型 · 状态 · 来源 · 摘要，缺哪段就跳过，不留多余的 " · "
@@ -531,7 +551,7 @@
     ca.classList.toggle("on", !!all);
     ca.classList.toggle("some", !all);
     $("bulkCount").textContent = "已选 " + n + " 条";
-    $("bulkResolve").style.visibility = hasOpen(ids) ? "" : "hidden";
+    $("bulkResolve").hidden = !hasOpen(ids); // 不留空位
     var allArch = ids.every(function (id) { return S.byId[id] && S.byId[id].archived; });
     $("bulkArchive").innerHTML = icon(allArch ? "unarchive" : "archive");
     $("bulkArchive").title = allArch ? "移出归档" : "归档";
@@ -584,14 +604,17 @@
     return d;
   }
 
-  function renderEyebrow(m) {
-    var bits = [KIND[m.kind], '<span class="src"><span class="pdot" style="background:' + pcolor(tabKey(m)) + '"></span>' + esc(m.source) + "</span>",
-      '<span title="' + fmtTime(m.ts, true) + '">' + fmtRel(m.ts) + "</span>"];
-    if (m.priority === "high") bits.push('<span class="hot">紧急</span>');
-    if (m.archived) bits.push("已归档");
+  // 待决定：卡片上已经写了"会话已等 25 分钟"，这里只写日期
+  function ebDate(m) { return m.open ? fmtRel(m.ts).split(" · ")[0] : fmtRel(m.ts); }
+  function renderEyebrow(m) { // 每段包一层 .eb，分隔点画在后一段前面（CSS），折行时不会挂在行末
+    var bits = ['<span class="eb">' + KIND[m.kind] + "</span>", '<span class="eb"><span class="src"><span class="pdot" style="background:' + pcolor(tabKey(m)) + '"></span>' + esc(m.source) + "</span></span>",
+      '<span class="eb" title="' + fmtTime(m.ts, true) + '">' + ebDate(m) + "</span>"];
+    if (m.priority === "high") bits.push('<span class="eb"><span class="hot">紧急</span></span>');
+    if (m.archived) bits.push('<span class="eb">已归档</span>');
     keepFocus($("eyebrow"), function () {
-      $("eyebrow").innerHTML = bits.join(" · ") + (m.open ? '<button class="jump" id="jumpBtn">去选择 ↓</button>' : "");
+      $("eyebrow").innerHTML = bits.join("") + (m.open ? '<button class="jump" id="jumpBtn">去选择 ↓</button>' : "");
     });
+    updateJump();
   }
   // 整块重写 innerHTML 会把焦点丢到 body：键盘停在里面某个按钮上时（长轮询、计时器随时会重画），重画后还给同一个按钮。
   // 只管键盘焦点（:focus-visible）：鼠标点过留下的看不见的焦点照旧丢掉，免得之后按 Enter 又点了一次这个按钮
@@ -605,6 +628,8 @@
     var b = sel && box.querySelector(sel);
     if (b && document.activeElement !== b) b.focus();
   }
+  // "去选择 ↓"：决定卡片已经露出来了就不显示
+  function updateJump() { var j = $("jumpBtn"); if (j) j.hidden = $("decide").hidden || $("decide").getBoundingClientRect().top < $("scroller").getBoundingClientRect().bottom - 48; }
 
   function showDetail(d, key) {
     var newMsg = !S.shownKey || S.shownKey.split("|")[0] !== d.id;
@@ -619,6 +644,7 @@
       $("scroller").scrollTop = 0;
       $("toolbar").classList.remove("scrolled");
     }
+    requestAnimationFrame(updateJump); // 正文、卡片排好之后再量
   }
   function renderBody(d) { // 设置（字号 / 字体）变了只重画正文，选项和没写完的回复不动
     var body = $("body");
@@ -645,7 +671,7 @@
     var opts = $("options");
     opts.innerHTML = (d.options || []).map(function (o, i) {
       var chosen = r && (r.choice_index ? r.choice_index === i + 1 : r.choice === o.label);
-      return '<button class="opt' + (chosen ? " chosen" : "") + (d.recommended === i + 1 ? " rec-opt" : "") + (!r && S.choiceIdx === i ? " checked" : "") + '" data-idx="' + i + '"' + (r || busy ? " disabled" : "") + ">" +
+      return '<button class="opt' + (chosen ? " chosen" : "") + (!r && S.choiceIdx === i ? " checked" : "") + '" data-idx="' + i + '"' + (r || busy ? " disabled" : "") + ">" +
         '<span class="num">' + (chosen ? icon("check") : i + 1) + "</span>" +
         '<span class="txt"><span class="lab">' + esc(o.label) +
         (d.recommended === i + 1 ? '<span class="rec">推荐</span>' : "") + "</span>" +
@@ -664,13 +690,13 @@
     $("decideTitle").textContent = r ? "你的回复" : (d.options || []).length ? "请选择一个选项" : "请写下你的回复";
     var done = $("doneBox");
     if (r) {
-      var when = r.ts ? fmtTime(r.ts, true) : "";
+      var when = r.ts ? fmtRel(r.ts).split(" · ")[0] : ""; // 和阅读区顶上一样写"今天 00:07"
       done.hidden = false;
       done.className = "reply-done" + (r.dismissed ? " skip" : "");
       if (r.resolved) done.innerHTML = "<b>已标为已解决</b> · " + when + "<div>没有选择选项，等待的会话已收到「已经处理好了」。</div>";
       else if (r.dismissed) done.innerHTML = "<b>已跳过</b> · " + when + "<div>没有作出选择，等待的会话已收到通知。</div>";
       else if (r.closed_by === "claude") done.innerHTML = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
-      else done.innerHTML = "<b>已提交</b> · 会话已收到你的" + (r.choice ? "选择" : "回复") + (when ? " · " + when : "") + (r.choice ? "　选择：<b>" + esc(r.choice) + "</b>" : "") +
+      else done.innerHTML = "<b>已提交</b> · " + (when ? when + " · " : "") + "会话已收到" + // 选了哪项看上面打了 ✓ 的那项，不再重复
         (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
       // 还有别的待决定：给个按钮过去，但不自动跳（列表和阅读区不突然变）
       if (queue().some(function (x) { return x.id !== d.id; })) done.insertAdjacentHTML("beforeend", '<button class="ghost next-dec" data-next>下一条待决定 →（N）</button>');
@@ -712,6 +738,7 @@
   // 卡片底部的提示要说真话：还没选 → 按数字选；选了 → Ctrl+Enter 提交「这一项」
   function renderHint(d) {
     if (!d || d.response) return;
+    if (S.submitting[d.id]) { $("decideHint").textContent = "正在发给会话…"; return; } // 提交中：不再说"Ctrl+Enter 提交"
     var n = (d.options || []).length, text = d.allow_text && $("replyText").value.trim();
     $("decideHint").textContent = S.choice != null ? "Ctrl+Enter 提交「" + S.choice + "」" :
       !n ? (text ? "Ctrl+Enter 提交" : "写好后 Ctrl+Enter 提交") :
@@ -756,6 +783,7 @@
   function select(id, opts) {
     opts = opts || {};
     S.current = id;
+    S.cursor = id; // 窄窗口返回列表时，光标停在刚看的这条
     if (!opts.keepMulti) { S.multi.clear(); S.anchor = id; } // 多选时锚点不动，Shift + ↑↓ 从它连选
     var m = S.byId[id];
     var marked = false;
@@ -791,6 +819,12 @@
   function move(delta, extend) {
     var ids = S.visible;
     if (!ids.length) return;
+    if (narrow() && !S.current && !extend) { // 窄窗口列表页：↑↓ 只挪光标，不打开（Enter 才打开）
+      var c = ids.indexOf(S.cursor), k = c < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, c + delta)), prev = S.cursor;
+      S.cursor = ids[k]; renderRow(prev); renderRow(S.cursor);
+      var ce = rowEl(S.cursor); if (ce) ce.scrollIntoView({ block: "nearest" });
+      return;
+    }
     var i = ids.indexOf(S.current);
     var j = i < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, i + delta));
     if (extend) {
@@ -991,6 +1025,8 @@
     var a = $("article").cloneNode(true);
     a.querySelectorAll(".code-copy, .katex-mathml").forEach(function (e) { e.remove(); });
     a.querySelectorAll(".math[data-tex]").forEach(function (e) { e.textContent = e.classList.contains("math-display") ? "$$" + e.dataset.tex + "$$" : "$" + e.dataset.tex + "$"; });
+    var eb = a.querySelector(".eyebrow"); // 顶上那行的分隔点是 CSS 画的：纯文本里补回 " · "
+    if (eb) eb.textContent = Array.prototype.map.call(eb.querySelectorAll(".eb"), function (e) { return e.textContent; }).join(" · ");
     return a.innerText.trim() + "\n";
   }
   function richOf() {
@@ -1161,6 +1197,7 @@
     t.onmouseenter = function () { clearTimeout(h); ms = Math.max(1500, ms - (Date.now() - t0)); };
     t.onmouseleave = arm;
     arm();
+    return t;
   }
 
   var modalResolve = null, modalBack = null;
@@ -1175,7 +1212,7 @@
     return new Promise(function (res) { modalResolve = res; });
   }
   function closeModal(v) {
-    $("modal").hidden = true; if (modalResolve) modalResolve(v); modalResolve = null;
+    $("modal").hidden = true; $("modal").firstElementChild.classList.remove("sheet"); if (modalResolve) modalResolve(v); modalResolve = null;
     if (modalBack && modalBack.focus && document.contains(modalBack)) modalBack.focus(); // 焦点回到打开对话框之前的地方
     modalBack = null;
   }
@@ -1267,18 +1304,19 @@
       if (a === "open_data") { act({ action: "open_data" }); closePopover(); }
     });
   }
-  function showShortcuts() {
-    var rows = [["↑ ↓ / J K", "上一条 / 下一条（有勾选时不会丢）"], ["Shift + ↑ ↓ / J K", "连续勾选"], ["1 – 9", "选择第 N 个选项"],
-      ["Ctrl + Enter", "提交决定（焦点在哪都行）"], ["Enter", "写补充说明；焦点在按钮上时按下按钮"],
-      ["E", "归档 / 移出归档"], ["Delete", "删除"], ["U", "标为已读 / 未读"], ["R", "标为已解决（先确认）"], ["Z / Ctrl + Z", "撤销刚才的归档 / 已读"],
-      ["X", "勾选当前这条"], ["C", "复制 Markdown"],
-      ["Ctrl + P", "导出 PDF"], ["/", "搜索（↓ / Enter 打开第一条）"], ["[ ]", "切换项目（顶部标签）"], ["Ctrl + 点标签", "同时看几个项目"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"],
-      ["Ctrl + ,", "设置"], ["Esc", "一次退一层：菜单 → 搜索 → 勾选 → 项目"], ["Esc / Backspace", "窄窗口：回到列表"]];
+  function showShortcuts() { // 分四组、宽时两栏；只列键盘（鼠标操作看悬停提示）
+    var groups = [["浏览", [["↑ ↓ / J K", "上一条 / 下一条"], ["N / Shift + N", "下一条 / 上一条待决定"], ["Shift + ↑ ↓", "连续勾选"],
+        ["/", "搜索"], ["[ ]", "切换项目"], ["Esc", "退一层"]]],
+      ["决定", [["1 – 9", "选第 N 项"], ["Ctrl + Enter", "提交"], ["Enter", "打开 / 写补充说明"], ["R", "标为已解决"]]],
+      ["整理", [["E", "归档"], ["U", "已读 / 未读"], ["X", "勾选"], ["Ctrl + A", "全选"], ["Delete", "删除"], ["Z", "撤销"]]],
+      ["其他", [["C", "复制 Markdown"], ["Ctrl + P", "导出 PDF"], ["Ctrl + ,", "设置"], ["?", "快捷键"]]]];
     $("modalTitle").textContent = "快捷键";
-    rows.splice(1, 0, ["N / Shift + N", "下一条 / 上一条待决定（紧急的、等得久的在前）"]);
-    $("modalText").innerHTML = '<span class="kbd-table">' + rows.map(function (r) {
-      return "<span>" + r[0].split(" ").map(function (k) { return /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
-    }).join("") + "</span>";
+    $("modal").firstElementChild.classList.add("sheet");
+    $("modalText").innerHTML = '<div class="kbd-groups">' + groups.map(function (g) {
+      return '<div class="kbd-group"><h4>' + g[0] + '</h4><span class="kbd-table">' + g[1].map(function (r) {
+        return "<span>" + r[0].split(" ").map(function (k, i, a) { return a.length > 1 && /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
+      }).join("") + "</span></div>";
+    }).join("") + "</div>";
     $("modalOk").textContent = "好的";
     $("modalOk").className = "primary";
     $("modalCancel").hidden = true;
@@ -1463,6 +1501,7 @@
     });
     $("scroller").addEventListener("scroll", function () {
       $("toolbar").classList.toggle("scrolled", $("scroller").scrollTop > 4);
+      updateJump();
     });
     $("body").addEventListener("click", function (e) {
       var b = e.target.closest(".code-copy");
@@ -1492,7 +1531,10 @@
 
   // 窄窗口（≤720px）阅读页铺满整个窗口：Esc / Backspace 回到列表
   function narrow() { return !!(window.matchMedia && matchMedia("(max-width: 720px)").matches); }
-  function backToList() { S.current = null; renderList(); renderReader(); $("list").focus(); }
+  function backToList() { // 光标留在刚看的那条：接着 ↓ 就是下一条
+    S.cursor = S.current; S.current = null; renderList(); renderReader(); $("list").focus();
+    var el = rowEl(S.cursor); if (el) el.scrollIntoView({ block: "nearest" });
+  }
   function findBox() { if (narrow() && S.current) backToList(); $("search").focus(); } // 窄窗口的阅读页盖住了搜索框：先回到列表，不然字打进看不见的框里
   // Esc 一次只退一层：菜单 → 窄窗口的阅读页 → 搜索 → 勾选 → 项目筛选
   function escLayer() {
@@ -1559,6 +1601,7 @@
     if (/^[1-9]$/.test(k)) { pick(+k - 1); revealDecide(); return; }
     if (k === "Enter") {
       if (document.activeElement && document.activeElement.closest && document.activeElement.closest("button")) return; // 让按钮自己响应
+      if (narrow() && !S.current && S.cursor && S.visible.indexOf(S.cursor) >= 0) { e.preventDefault(); select(S.cursor, { scroll: true }); return; } // 窄窗口列表页：打开光标那条
       var d = currentDetail();
       if (d && d.kind === "decision" && !d.response && d.allow_text) { e.preventDefault(); $("replyText").focus(); }
     }
