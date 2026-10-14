@@ -80,12 +80,15 @@ Answer a follow-up with `post --reply-to <follow-up id>`.
 |---|---|---|
 | `post … [--session S] [--body-from-chat] [--question-from-chat]` | message id | 0; 1 bad args / transcript text not found. stderr hints when this session has no `listen` running |
 | `listen [--session S] [--timeout s]` | one event per line | 0 delivered; 2 timeout; **4 session process gone (prints nothing)**; **5 this session already has a listener** (one stderr line); 1 no session |
-| `close --id ID [--text T]` | the closing reply, or the user's existing reply | 0; **3 the user already replied in ClaudeDesk** (that reply is printed and marked delivered) |
+| `close --id ID [--text T]` | the closing reply, or the user's existing reply | 0; **3 the user already replied in ClaudeDesk** (that reply is printed and marked delivered); 1 unknown id |
 | `close --mine [--text T]` | reply events for this session's decisions the user already answered, then `{"closed":[ids]}` | 0; 3 if any reply events were printed |
 | `inbox [--repo R] [--adopt] [--session S]` | events left by **gone** sessions in repo R (default: detected), with `session` (8-char prefix); with `--adopt`: the same lines as `listen` | 0; 1 `--adopt` without a session |
 | `status [--session S]` | `open=N undelivered=N listen=on/off[ orphaned=N]` | 0; 1 no session |
 | `wait --id ID` (legacy) | the reply | 0; 2 timeout. Holds a per-decision presence marker; marks the reply delivered |
 | `wait --followups --source X` (legacy) | one follow-up | 0; 2; 4. Marks into `deliveries.jsonl` |
+
+Usage errors (for example `close` with neither `--id` nor `--mine`) exit 2, argparse's code; that is the same code as a
+`--timeout`, so a caller that needs to tell them apart checks stderr.
 
 ### listen
 
