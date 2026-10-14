@@ -20,7 +20,7 @@ import desk
 
 KINDS = desk.KINDS
 DISMISS_TEXT = "（用户在 ClaudeDesk 里移除了这条决定，没有作出选择）"
-RESOLVE_TEXT = "（用户在 ClaudeDesk 里把这条标为已解决：已经处理好了，不需要你再按选项做什么）"
+RESOLVE_TEXT = "（用户在 ClaudeDesk 里把这条标为已处理：已经处理好了（可能已经在对话里直接处理），不需要你再按选项做什么）"
 COMPACT_RETRY_FIRST, COMPACT_RETRY_MAX = 5.0, 300.0  # 压缩失败后重试的间隔：5 秒起，每次翻倍，最长 5 分钟
 OTHER_TAB = "__other__"  # 界面上"未归类"标签的键：没认出属于哪个仓库的消息
 
@@ -73,7 +73,7 @@ def normalize(r: dict) -> dict:
     except (TypeError, ValueError):
         rec = None
     m["recommended"] = rec if rec and 1 <= rec <= len(m["options"]) else None
-    m["allow_text"] = bool(r.get("allow_text")) or (m["kind"] == "decision" and not m["options"])
+    m["allow_text"] = m["kind"] == "decision" or bool(r.get("allow_text"))  # 决定一律可以写补充说明（不管发的时候写没写）
     m["priority"] = "high" if r.get("priority") == "high" else "normal"
     m["_dt"] = desk.parse_ts(r.get("ts")) or _now()
     m["_search"] = " ".join([m["title"], m["body"], m["source"], m["question"],
@@ -438,7 +438,7 @@ class Store:
         return out
 
     def resolve(self, ids) -> int:
-        """标为已解决：还在等回复的决定写一条 resolved 回复（等待的会话会收到），所有选中的都标为已读。
+        """标为已处理：还在等回复的决定写一条 resolved 回复（等待的会话会收到），所有选中的都标为已读。
         返回实际解决的决定数。"""
         done = 0
         with self.lock:

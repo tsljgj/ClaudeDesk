@@ -68,9 +68,9 @@ def test_ctrl_enter_submits_from_anywhere_and_enter_presses_buttons(env):
     start(page, server)
     hint = lambda: page.inner_text("#decideHint")  # noqa: E731
 
-    # 只有选项（没有输入框）：2 → Ctrl+Enter
+    # 发的时候没写 allow_text：也有输入框（提示说可以直接写）；2 → Ctrl+Enter
     opened(page, a)
-    assert hint() == "按 1–2 选择"
+    assert hint() == "按 1–2 选择，或直接写回复" and page.is_visible("#replyText")
     page.keyboard.press("2")
     assert hint() == "Ctrl+Enter 提交「乙」"
     page.keyboard.press("Control+Enter")
@@ -396,9 +396,9 @@ def test_r_asks_before_resolving(env):
     opened(page, a)
     page.keyboard.press("r")
     page.wait_for_selector("#modal:not([hidden])")
-    assert page.inner_text("#modalTitle") == "标为已解决？"
+    assert page.inner_text("#modalTitle") == "标为已处理？"
     assert page.inner_text("#modalText") == "等待中的会话会收到「已经处理好了」，然后继续往下走。"
-    assert page.inner_text("#modalOk") == "标为已解决"
+    assert page.inner_text("#modalOk") == "标为已处理"
     page.wait_for_function("document.activeElement.id === 'modalOk'")
     page.keyboard.press("Escape")
     page.wait_for_timeout(300)
@@ -409,11 +409,13 @@ def test_r_asks_before_resolving(env):
     page.wait_for_function(f"() => !!document.querySelector('.item[data-id=\"{a}\"] .st.done')")
     assert resp(d, a)[0]["resolved"] is True
 
-    # 不是待决定的消息：R 什么都不做，只提示
+    # 不是待决定的消息：R 不问，直接标为已处理（= 标为已读，可以撤销）
     opened(page, b)
+    page.keyboard.press("u")
+    page.wait_for_function(f"() => !!document.querySelector('.item[data-id=\"{b}\"].unread')")
     page.keyboard.press("r")
-    page.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent === '只有待决定的消息可以标为已解决')")
-    assert js(page, "document.getElementById('modal').hidden")
+    page.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent === '已标为已处理 1 条撤销（Z）')")
+    assert js(page, "document.getElementById('modal').hidden") and not store.is_unread(store.msgs[b]) and resp(d, b) == []
 
     # 点 ✓ 按钮仍是一下就好（点击是有意的）
     page.locator(f'.item[data-id="{c}"]').hover()
@@ -474,6 +476,8 @@ def test_menus_and_settings_work_from_the_keyboard(env):
     page.wait_for_selector("#popover:not([hidden])")
     assert js(page, "document.activeElement.dataset.m") == "read"
     page.keyboard.press("ArrowDown")
+    assert js(page, "document.activeElement.dataset.m") == "resolve"  # 没读过的也能"标为已处理"
+    page.keyboard.press("ArrowDown")
     assert js(page, "document.activeElement.dataset.m") == "archive"
     page.keyboard.press("Escape")
     assert js(page, "document.activeElement.id") == "list"
@@ -482,10 +486,10 @@ def test_menus_and_settings_work_from_the_keyboard(env):
     page.keyboard.press("?")
     page.wait_for_function("document.activeElement.id === 'modalOk'")
     sheet = page.inner_text("#modalText")
-    for s in ["浏览", "整理", "设置", "撤销", "连续勾选", "退一层", "下一条 / 上一条待决定", "打开 / 写补充说明", "标为已解决", "Ctrl + A"]:
+    for s in ["浏览", "整理", "设置", "撤销", "连续勾选", "退一层", "下一条 / 上一条待决定", "打开 / 写补充说明", "标为已处理", "只看未处理（开 / 关）", "Ctrl + A"]:
         assert s in sheet, s
     keys = js(page, "[...document.querySelectorAll('#modalText .kbd-table > span:nth-child(odd)')].map(e => e.textContent)")
-    assert len(keys) == 20 and len(set(keys)) == 20
+    assert len(keys) == 21 and len(set(keys)) == 21
     assert js(page, "[...document.querySelectorAll('#modalText kbd')].some(k => k.textContent === '/')")  # "/" 单独一个键也画成按键
     page.keyboard.press("Enter")
     page.wait_for_selector("#modal", state="hidden")

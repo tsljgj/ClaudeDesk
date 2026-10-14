@@ -37,6 +37,8 @@
     rich: '<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h16"/><path d="M18 10l2 2-2 2"/>',
     sparkle: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
     eyeOff: '<path d="M10.7 5.1A10.7 10.7 0 0 1 21.9 11.7a1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.2-4.2"/><path d="M17.5 17.5a10.8 10.8 0 0 1-15.4-5.2 1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.4-5.1"/><path d="m2 2 20 20"/>',
+    filter: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
+    archiveDone: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="m9 14.5 2 2 4-4"/>',
   };
   function icon(name, cls) {
     return '<i data-icon class="' + (cls || "") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg></i>";
@@ -66,6 +68,7 @@
     gone: {}, // 在这里删掉的 id：删除还在路上时到的旧快照里还有它们，不能让它们当成"新消息"闪回来
     all: [], allById: {}, hidden: new Set(), // 全部消息（含关掉的标签里的）/ 关掉的标签键（服务端存）。msgs / byId 只有没关掉的
     cursor: null, jump: null, // 窄窗口列表页的光标（↑↓ 只挪它）/ 新到提示里那条：{ id, el }，提示还在时 N 先打开它
+    todo: load("todo", "") === "1", keep: null, // 只看未处理（记在本机）/ 正在看的那条：读完了也先留在列表里，换到别的才走
   };
 
   function loadSet(k) { try { var v = JSON.parse(load(k, "[]")); return new Set(Array.isArray(v) ? v : []); } catch (e) { return new Set(); } }
@@ -176,6 +179,9 @@
     if (v === "answer") return m.kind === "answer";
     return true;
   }
+  // 未处理 = 还在等你决定的，或者还没读过的（归档的不算）。"只看未处理"在归档视图里不起作用
+  function needsYou(m) { return !m.archived && (m.open || m.unread); }
+  function todoOn() { return S.todo && S.view !== "archive"; }
   // ---- 项目（仓库）。项目名由服务端给：desk.py 发消息时识别出的 git 仓库；旧消息按来源对到已知仓库，
   // 对不上的归"其他"（project_kind = other），可以右键"归到项目"。
   var OTHER = "__other__";
@@ -242,6 +248,7 @@
   function viewItems() {
     var v = S.view;
     var items = S.msgs.filter(function (m) { return inView(m, v) && inScope(m); });
+    if (todoOn()) items = items.filter(function (m) { return needsYou(m) || m.id === S.keep; }); // 正在看的那条读完了也先留着
     if (S.searchIds) items = items.filter(function (m) { return S.searchIds.has(m.id); });
     if (grouped()) { // 按项目分组，组内仍按时间倒序（服务端给的顺序）
       var order = groupOrder();
@@ -475,6 +482,7 @@
     });
     renderProjects();
     renderQueue();
+    renderTools();
     var t = [];
     if (c.open) t.push(c.open + " 待决定");
     if (c.unread) t.push(c.unread + " 未读");
@@ -512,6 +520,37 @@
     }
     ptabFade();
   }
+  // 搜索框右边的两个按钮："只看未处理"开关、一键归档已处理的。归档视图里都收起来
+  function handledIds() { // 已处理 = 已读、不用再决定；只算当前项目范围（和"⋯"菜单里"归档所有已处理的"一样）
+    return S.msgs.filter(function (m) { return !m.archived && inScope(m) && !m.unread && !m.open; }).map(function (m) { return m.id; });
+  }
+  function renderTools() {
+    var arch = S.view === "archive", t = $("todoBtn"), h = $("handledBtn"), n = arch ? 0 : handledIds().length;
+    t.hidden = h.hidden = arch;
+    t.classList.toggle("on", S.todo);
+    t.setAttribute("aria-pressed", S.todo ? "true" : "false");
+    h.setAttribute("aria-disabled", n ? "false" : "true"); // 不用 disabled：按不了也要能看到悬停提示
+    h.title = n ? "归档已处理的 " + n + " 条（" + (scopeLabel() ? scopeLabel() + " · " : "") + "已读、不用再决定）" : "没有已处理的可以归档（已读、不用再决定的）";
+    h.setAttribute("aria-label", h.title);
+  }
+  function setTodo(on) { // F 或点开关。正在看的这条留着（换到别的才走），勾选清掉（只作用在眼前这些）
+    S.todo = !!on;
+    save("todo", S.todo ? "1" : "");
+    S.keep = S.current;
+    S.multi.clear();
+    renderNav();
+    renderList();
+  }
+  function archiveHandled() { // 一键归档已处理的：不问，可以撤销（撤销只放回这一批）
+    var ids = handledIds();
+    if (!ids.length) return toast("没有已处理的可以归档");
+    dropUndo();
+    act({ action: "archive", ids: ids, on: true }).then(function (n) {
+      toast(n ? "已归档 " + n + " 条" : "没有已处理的可以归档", n ? { undo: undoArchive(ids, true, []) } : null);
+      return refreshNow(true);
+    }).catch(function (e) { toast(e.message, { bad: true }); });
+  }
+
   function ptabFade() { // 标签放不下时，哪头还有就在哪头淡出
     var b = $("projects");
     b.classList.toggle("fade-l", b.scrollLeft > 1);
@@ -562,8 +601,8 @@
     if (!items.length) {
       setList('<div class="list-empty"><b>' +
         (S.query ? (more ? "「" + v.label + (scopeLabel() ? " · " + esc(scopeLabel()) : "") + "」里没有「" + esc(S.query) + "」" : "没有找到「" + esc(S.query) + "」")
-          : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + v.empty) + "</b>" +
-        (S.query ? (more ? "" : "换个关键词试试") : v.emptySub) + "</div>" + more);
+          : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + (todoOn() ? "没有未处理的了" : v.empty)) + "</b>" +
+        (S.query ? (more ? "" : "换个关键词试试") : todoOn() ? "处理过的都收起来了 · 按 F 显示全部" : v.emptySub) + "</div>" + more);
     } else if (grouped()) {
       var html = "", last = null; // 分组标题不带数：顶部标签已经有，下面的行也各有圆点
       items.forEach(function (m) {
@@ -609,7 +648,7 @@
     var bits = []; // 第二行：类型 · 状态 · 来源 · 摘要，缺哪段就跳过，不留多余的 " · "
     if (!m.open && (S.view === "all" || S.view === "archive" || S.query) && m.kind !== "decision") bits.push('<span class="st kind">' + KIND[m.kind] + "</span>");
     if (m.open) bits.push('<span class="st open">' + (m.priority === "high" ? "紧急 · " : "") + "待决定</span>");
-    else if (m.kind === "decision" && m.resolved) bits.push('<span class="st done">✓ 已解决</span>');
+    else if (m.kind === "decision" && m.resolved) bits.push('<span class="st done">✓ 已处理</span>');
     else if (m.kind === "decision" && m.dismissed) bits.push('<span class="st skip">已跳过</span>');
     else if (m.kind === "decision" && m.answered) bits.push('<span class="st done">✓ ' + esc(m.choice || "已回复") + "</span>");
     else if (m.priority === "high" && m.unread) bits.push('<span class="st open">紧急</span>');
@@ -618,7 +657,7 @@
     // 悬停按钮和勾选框不进 Tab 顺序（平时看不见；键盘有 U / R / E / Delete / X）
     var acts = '<span class="acts">' +
       '<button class="act" tabindex="-1" data-act="read" title="' + (m.unread ? "标为已读" : "标为未读") + '（U）">' + icon(m.unread ? "mailOpen" : "mail") + "</button>" +
-      (m.open ? '<button class="act" tabindex="-1" data-act="resolve" title="标为已解决（R）">' + icon("check") + "</button>" : "") +
+      (m.open || m.unread ? '<button class="act" tabindex="-1" data-act="resolve" title="标为已处理（R）">' + icon("check") + "</button>" : "") +
       '<button class="act" tabindex="-1" data-act="archive" title="' + (m.archived ? "移出归档" : "归档") + '（E）">' + icon(m.archived ? "unarchive" : "archive") + "</button>" +
       '<button class="act danger" tabindex="-1" data-act="delete" title="删除（Delete）">' + icon("trash") + "</button></span>";
     return '<div class="' + cls + '" data-id="' + esc(m.id) + '" role="option" aria-selected="' + (m.id === S.current) + '">' +
@@ -639,8 +678,7 @@
     var ca = $("checkAll");
     ca.classList.toggle("on", !!all);
     ca.classList.toggle("some", !all);
-    $("bulkCount").textContent = "已选 " + n + " 条";
-    $("bulkResolve").hidden = !hasOpen(ids); // 不留空位
+    $("bulkCount").innerHTML = '<span class="pre">已选 </span>' + n + " 条"; // 列表 320px 时"已选"省掉，给"标为已处理"让地方
     var allArch = ids.every(function (id) { return S.byId[id] && S.byId[id].archived; });
     $("bulkArchive").innerHTML = icon(allArch ? "unarchive" : "archive");
     $("bulkArchive").title = allArch ? "移出归档" : "归档";
@@ -768,7 +806,7 @@
     }).join("");
     opts.hidden = !(d.options || []).length;
     var ta = $("replyText");
-    ta.hidden = !!r || !d.allow_text;
+    ta.hidden = !!r; // 每条决定都能写补充说明（不管发的时候 allow_text 写没写）
     if (reset) ta.value = !r && dr ? dr.text : "";
     ta.readOnly = busy;
     box.setAttribute("aria-busy", busy ? "true" : "false");
@@ -782,7 +820,7 @@
       var when = r.ts ? fmtRel(r.ts).split(" · ")[0] : ""; // 和阅读区顶上一样写"今天 00:07"
       done.hidden = false;
       done.className = "reply-done" + (r.dismissed ? " skip" : "");
-      if (r.resolved) done.innerHTML = "<b>已标为已解决</b> · " + when + "<div>没有选择选项，等待的会话已收到「已经处理好了」。</div>";
+      if (r.resolved) done.innerHTML = "<b>已标为已处理</b> · " + when + "<div>没有选择选项，等待的会话已收到「已经处理好了」。</div>";
       else if (r.dismissed) done.innerHTML = "<b>已跳过</b> · " + when + "<div>没有作出选择，等待的会话已收到通知。</div>";
       else if (r.closed_by === "claude") done.innerHTML = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
       else done.innerHTML = "<b>已提交</b> · " + (when ? when + " · " : "") + "会话已收到" + // 选了哪项看上面打了 ✓ 的那项，不再重复
@@ -820,7 +858,7 @@
   }
   function updateSubmit() {
     var d = currentDetail();
-    var ok = d && !d.response && !S.submitting[d.id] && (S.choice != null || (d.allow_text && $("replyText").value.trim()));
+    var ok = d && !d.response && !S.submitting[d.id] && (S.choice != null || !!$("replyText").value.trim()); // 只写字、不选选项也能交
     $("submitBtn").disabled = !ok;
     renderHint(d);
   }
@@ -828,10 +866,10 @@
   function renderHint(d) {
     if (!d || d.response) return;
     if (S.submitting[d.id]) { $("decideHint").textContent = "正在发给会话…"; return; } // 提交中：不再说"Ctrl+Enter 提交"
-    var n = (d.options || []).length, text = d.allow_text && $("replyText").value.trim();
+    var n = (d.options || []).length, text = $("replyText").value.trim();
     $("decideHint").textContent = S.choice != null ? "Ctrl+Enter 提交「" + S.choice + "」" :
       !n ? (text ? "Ctrl+Enter 提交" : "写好后 Ctrl+Enter 提交") :
-      "按 " + (n > 1 ? "1–" + Math.min(n, 9) : "1") + " 选择" + (text ? "，或 Ctrl+Enter 提交" : "");
+      "按 " + (n > 1 ? "1–" + Math.min(n, 9) : "1") + " 选择" + (text ? "，或 Ctrl+Enter 提交" : "，或直接写回复");
   }
   function reduced() { return !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches); }
   // 数字键选了之后：选中的那项不在屏幕上就滚过去，免得选在看不见的地方
@@ -845,7 +883,7 @@
   function submit() {
     var d = currentDetail();
     if (!d || d.kind !== "decision" || d.response || S.submitting[d.id] || $("submitBtn").disabled) return;
-    var text = d.allow_text ? $("replyText").value.trim() : "";
+    var text = $("replyText").value.trim();
     var o = S.choice != null && d.options && d.options[S.choiceIdx];
     var body = { action: "reply", id: d.id, choice: S.choice, text: text };
     if (o && o.label === S.choice) body.choice_index = S.choiceIdx + 1; // 按序号提交：同名的两个选项不会报错成第一个
@@ -871,7 +909,8 @@
   // ---------------------------------------------------------------- 选择 / 导航
   function select(id, opts) {
     opts = opts || {};
-    S.current = id;
+    var was = S.keep && S.byId[S.keep], drop = was && S.keep !== id && todoOn() && !needsYou(was); // 只看未处理：刚才看完的那条换走了，这才从列表里走
+    S.current = S.keep = id;
     S.cursor = id; // 窄窗口返回列表时，光标停在刚看的这条
     if (!opts.keepMulti) { S.multi.clear(); S.anchor = id; } // 多选时锚点不动，Shift + ↑↓ 从它连选
     var m = S.byId[id];
@@ -882,7 +921,7 @@
       else marked = markRead(id);
     }
     // 只改前后两行，不重建整个列表（上千条时每按一次 ↑↓ 都重建会卡）
-    if (S.multi.size || $("list").classList.contains("multi-mode") || !rowEl(id)) renderList();
+    if (drop || S.multi.size || $("list").classList.contains("multi-mode") || !rowEl(id)) renderList();
     else {
       $("list").querySelectorAll(".item.selected").forEach(function (el) { el.classList.remove("selected"); el.setAttribute("aria-selected", "false"); });
       $("list").querySelectorAll(".item.cursor").forEach(function (el) { el.classList.remove("cursor"); }); // 打开了一条：窄窗口的列表光标不再画
@@ -946,6 +985,10 @@
     for (k = i - 1; k >= 0; k--) if (!gone.has(vis[k])) return vis[k];
     return null;
   }
+  function moveOn(ids, next) { // 换到 next；"读完先留着的那条"跟着换（被移走的不再留）
+    if (S.current !== next || ids.indexOf(S.keep) >= 0) S.keep = next;
+    S.current = next;
+  }
 
   function targets() {
     if (S.multi.size) return Array.from(S.multi);
@@ -965,7 +1008,7 @@
       var next = leaves ? nextAfter(ids) : cur;
       ids.forEach(function (id) { if (S.byId[id]) S.byId[id].archived = on; });
       S.multi.clear();
-      S.current = next;
+      moveOn(ids, next);
       dropUndo();
       renderAll();
       refocusList();
@@ -993,7 +1036,7 @@
       ids.forEach(function (id) { S.gone[id] = 1; delete S.byId[id]; });
       S.msgs = S.msgs.filter(function (m) { return !S.gone[m.id]; });
       S.multi.clear();
-      S.current = next;
+      moveOn(ids, next);
       renderAll();
       refocusList();
       act({ action: "delete", ids: ids }).then(function () {
@@ -1003,15 +1046,26 @@
     });
   }
 
+  // 标为已处理（R / ✓ / 批量栏 / 右键 / 决定卡片）：待决定的告诉等待的会话"已经处理好了"，其余的标为已读。
+  // 只看未处理时，标完的从列表里走掉（正在看的也一样，和归档一样换到下一条）
   function doResolve(ids) {
     if (!ids.length) return;
     var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; }).length;
+    var unread = ids.filter(isUnread), n = ids.filter(function (id) { return S.byId[id] && (S.byId[id].open || S.byId[id].unread); }).length;
+    if (ids.indexOf(S.current) >= 0) clearTimeout(readTimer); // 撤销后停留计时不能再把它标回已读
+    dropUndo();
+    var next = todoOn() && ids.indexOf(S.current) >= 0 ? nextAfter(ids) : S.current;
+    unread.forEach(function (id) { S.byId[id].unread = false; }); // 先在本地改好再发请求（和归档一样）
+    S.multi.clear();
+    moveOn(ids, next);
+    renderAll();
+    refocusList();
+    if (!open && !unread.length) return toast(ids.length > 1 ? "选中的都已经处理过了" : "这条已经处理过了");
     act({ action: "resolve", ids: ids }).then(function () {
-      S.multi.clear();
       return refreshNow(true);
-    }).then(function () {
-      toast(open ? "已标为已解决 " + open + " 条，等待的会话已收到" : "已标为已读");
-    }).catch(function (e) { toast(e.message, { bad: true }); });
+    }).then(function () { // 已经发给会话的回复收不回来：有待决定的就不给撤销
+      toast("已标为已处理 " + n + " 条" + (open ? "，" + open + " 条待决定已告诉会话" : ""), open ? null : { undo: undoRead(unread, false) });
+    }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
   }
 
   function toggleCheck(id, range) {
@@ -1065,12 +1119,14 @@
     u.run();
     toast("已撤销");
   }
-  // R 键：会发给等待的会话、不能撤销，所以先确认；不是待决定的消息不做任何事
+  // R 键：牵涉待决定的会发给等待的会话、不能撤销，所以先确认；没有待决定的直接标（可以撤销）
   function askResolve(ids) {
-    var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; });
-    if (!open.length) return toast("只有待决定的消息可以标为已解决");
-    confirmBox(open.length > 1 ? "把 " + open.length + " 条标为已解决？" : "标为已解决？",
-      "等待中的会话会收到「已经处理好了」，然后继续往下走。", "标为已解决").then(function (ok) { if (ok) doResolve(open); });
+    if (!ids.length) return;
+    var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; }).length;
+    if (!open) return doResolve(ids);
+    confirmBox(ids.length > 1 ? "把 " + ids.length + " 条标为已处理？" : "标为已处理？",
+      ids.length > 1 ? "其中 " + open + " 条待决定会告诉等待中的会话「已经处理好了」。" : "等待中的会话会收到「已经处理好了」，然后继续往下走。",
+      "标为已处理").then(function (ok) { if (ok) doResolve(ids); });
   }
 
   // ---- 复制
@@ -1079,7 +1135,7 @@
     if (d.question) out += d.question.trim().split("\n").map(function (l) { return "> " + l; }).join("\n") + "\n\n";
     out += (d.body || "").trim() + "\n";
     if (d.response && d.response.choice) out += "\n---\n\n**我的选择：** " + d.response.choice + (d.response.text ? "\n\n" + d.response.text : "") + "\n";
-    else if (d.response && d.response.text && !d.response.dismissed && !d.response.resolved && !d.response.closed_by) { // 只写了文字的回复（跳过 / 已解决 / 对话里处理的不算）
+    else if (d.response && d.response.text && !d.response.dismissed && !d.response.resolved && !d.response.closed_by) { // 只写了文字的回复（跳过 / 已处理 / 对话里处理的不算）
       out += "\n---\n\n**我的回复：** " + d.response.text + "\n";
     }
     return out;
@@ -1214,13 +1270,13 @@
   // 搜到了、但被当前视图 / 项目挡住的条数：列表末尾给一行"另有 N 条…"，点了去能看到它们的地方
   function searchMore() {
     if (!S.searchIds) return "";
-    var shown = new Set(S.visible), live = 0, arch = 0, ch = closedHits();
+    var shown = new Set(S.visible), live = 0, arch = 0, done = 0, ch = closedHits(); // done：只是被"只看未处理"收起来的
     S.searchIds.forEach(function (id) {
       var m = S.byId[id];
-      if (m && !shown.has(id)) { if (m.archived) arch++; else live++; }
+      if (m && !shown.has(id)) { if (m.archived) arch++; else live++; if (todoOn() && !m.archived && !needsYou(m)) done++; }
     });
     return (live || arch ? '<button class="search-more" data-more="' + (live ? "all" : "archive") + '">另有 ' + (live + arch) +
-      " 条在其他视图或项目里<span>" + (live ? "查看全部结果" : "去归档里看") + " →</span></button>" : "") +
+      (done ? " 条已处理或在其他视图、项目里" : " 条在其他视图或项目里") + "<span>" + (live ? "查看全部结果" : "去归档里看") + " →</span></button>" : "") +
       (ch.n ? '<button class="search-more" data-more-closed>另有 ' + ch.n + " 条在已关闭的标签里<span>找回并查看 →</span></button>" : "");
   }
   function closedHits() { // 搜到了、但在关掉的标签里的：{ n, keys, live 有没归档的 }
@@ -1417,8 +1473,8 @@
   }
   function showShortcuts() { // 分四组、宽时两栏；只列键盘（鼠标操作看悬停提示）
     var groups = [["浏览", [["↑ ↓ / J K", "上一条 / 下一条"], ["N / Shift + N", "下一条 / 上一条待决定"], ["Shift + ↑ ↓", "连续勾选"],
-        ["/", "搜索"], ["[ ]", "切换项目"], ["Esc", "退一层"]]],
-      ["决定", [["1 – 9", "选第 N 项"], ["Ctrl + Enter", "提交"], ["Enter", "打开 / 写补充说明"], ["R", "标为已解决"]]],
+        ["/", "搜索"], ["[ ]", "切换项目"], ["F", "只看未处理（开 / 关）"], ["Esc", "退一层"]]],
+      ["决定", [["1 – 9", "选第 N 项"], ["Ctrl + Enter", "提交"], ["Enter", "打开 / 写补充说明"], ["R", "标为已处理"]]],
       ["整理", [["E", "归档"], ["U", "已读 / 未读"], ["X", "勾选"], ["Ctrl + A", "全选"], ["Delete", "删除"], ["Z", "撤销"]]],
       ["其他", [["C", "复制 Markdown"], ["Ctrl + P", "导出 PDF"], ["Ctrl + ,", "设置"], ["?", "快捷键"]]]];
     $("modalTitle").textContent = "快捷键";
@@ -1468,6 +1524,9 @@
       nextDecision(1);
       if (e.detail) $("list").focus();
     });
+    // 鼠标点的：焦点交给列表（不然之后按 Enter / 空格又按了一次这个按钮）
+    $("todoBtn").addEventListener("click", function (e) { setTodo(!S.todo); if (e.detail) $("list").focus(); });
+    $("handledBtn").addEventListener("click", function (e) { archiveHandled(); if (e.detail) $("list").focus(); });
     $("empty").addEventListener("click", function (e) { if (e.target.closest("#startBtn")) nextDecision(1); });
     $("doneBox").addEventListener("click", function (e) { if (e.target.closest("[data-next]")) nextDecision(1); });
     $("nav").addEventListener("click", function (e) {
@@ -1476,9 +1535,13 @@
     });
     $("list").addEventListener("click", function (e) {
       var more = e.target.closest("[data-more]"); // "另有 N 条在其他视图或项目里"
-      if (more) { S.projects = new Set(); setView(more.dataset.more); applyProjects(); return $("list").focus(); }
+      if (more) {
+        if (more.dataset.more === "all" && S.todo) { S.todo = false; save("todo", ""); } // 查看全部结果：已处理的也要露出来
+        S.projects = new Set(); setView(more.dataset.more); applyProjects(); return $("list").focus();
+      }
       if (e.target.closest("[data-more-closed]")) { // "另有 N 条在已关闭的标签里"：找回这些标签，去看得到它们的视图
         var ch = closedHits();
+        if (S.todo) { S.todo = false; save("todo", ""); } // 找回来的可能已经处理过了：别让"只看未处理"又把它们藏起来
         reopenTabs(ch.keys); S.projects = new Set(); setView(ch.live ? "all" : "archive"); applyProjects();
         return $("list").focus();
       }
@@ -1526,7 +1589,7 @@
       if (!S.multi.has(id)) select(id, { noRead: true });
       var ids = targets(), m = S.byId[id];
       var html = '<button class="menu-item" data-m="read">' + icon(m.unread ? "mailOpen" : "mail") + (m.unread ? "标为已读" : "标为未读") + '<span class="sub">U</span></button>' +
-        (hasOpen(ids) ? '<button class="menu-item" data-m="resolve">' + icon("check") + '标为已解决<span class="sub">R</span></button>' : "") +
+        (ids.some(function (x) { return S.byId[x] && (S.byId[x].open || S.byId[x].unread); }) ? '<button class="menu-item" data-m="resolve">' + icon("check") + '标为已处理<span class="sub">R</span></button>' : "") +
         '<button class="menu-item" data-m="archive">' + icon(m.archived ? "unarchive" : "archive") + (m.archived ? "移出归档" : "归档") + '<span class="sub">E</span></button>' +
         '<div class="menu-sep"></div><button class="menu-item danger" data-m="delete">' + icon("trash") + "删除" + (ids.length > 1 ? " " + ids.length + " 条" : "") + '<span class="sub">Del</span></button>';
       var fake = { getBoundingClientRect: function () { return { left: e.clientX, right: e.clientX + 1, top: e.clientY, bottom: e.clientY }; } };
@@ -1570,14 +1633,11 @@
         if (!b) return;
         closePopover();
         if (b.dataset.l === "select_all") return selectAll();
-        var mine = S.msgs.filter(function (m) { return !m.archived && inScope(m); });
-        var req = b.dataset.l === "read_all"
-          ? { action: "read", ids: mine.filter(function (m) { return m.unread; }).map(function (m) { return m.id; }) }
-          : { action: "archive", ids: mine.filter(function (m) { return !m.unread && !m.open; }).map(function (m) { return m.id; }) };
+        if (b.dataset.l === "archive_handled") return archiveHandled(); // 和搜索框右边的按钮同一条路
+        var req = { action: "read", ids: S.msgs.filter(function (m) { return !m.archived && inScope(m) && m.unread; }).map(function (m) { return m.id; }) };
         dropUndo();
         act(req).then(function (n) {
-          var undo = !n ? null : b.dataset.l === "read_all" ? undoRead(req.ids, false) : undoArchive(req.ids, true, []);
-          toast(b.dataset.l === "read_all" ? "已全部标为已读" : n ? "已归档 " + n + " 条" : "没有可以归档的", undo ? { undo: undo } : null);
+          toast("已全部标为已读", n ? { undo: undoRead(req.ids, false) } : null);
           refreshNow();
         });
       });
@@ -1719,6 +1779,7 @@
     if (k === "Delete" || k === "#") { doDelete(targets()); return; }
     if (k === "u" || k === "U") { doToggleRead(targets()); return; }
     if (k === "r" || k === "R") { askResolve(targets()); return; }
+    if (k === "f" || k === "F") { if (S.view === "archive") toast("归档里不分未处理"); else setTodo(!S.todo); return; }
     if ((k === "x" || k === "X") && S.current) { toggleCheck(S.current, e.shiftKey); return; }
     if (k === "c" || k === "C") { copy("md"); return; }
     if (/^[1-9]$/.test(k)) { pick(+k - 1); revealDecide(); return; }
@@ -1726,7 +1787,7 @@
       if (document.activeElement && document.activeElement.closest && document.activeElement.closest("button")) return; // 让按钮自己响应
       if (narrow() && !S.current && S.cursor && S.visible.indexOf(S.cursor) >= 0) { e.preventDefault(); select(S.cursor, { scroll: true }); return; } // 窄窗口列表页：打开光标那条
       var d = currentDetail();
-      if (d && d.kind === "decision" && !d.response && d.allow_text) { e.preventDefault(); $("replyText").focus(); }
+      if (d && d.kind === "decision" && !d.response) { e.preventDefault(); $("replyText").focus(); }
     }
   }
 

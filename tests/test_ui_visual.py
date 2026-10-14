@@ -351,13 +351,13 @@ def test_list_pane_lines_up_on_two_columns(env):
     page.evaluate("document.getElementById('list').scrollTop = 40")
     page.wait_for_timeout(100)
     assert page.locator(".group-label").first.bounding_box()["y"] == page.locator("#list").bounding_box()["y"]
-    # 批量栏：全选框和行里的勾选框同一列，"已选 N 条"在文字那一列；没有待决定时不留"标为已解决"的空位
+    # 批量栏：全选框和行里的勾选框同一列，"已选 N 条"在文字那一列；"标为已处理"是文字按钮，没有待决定时也在
     page.click(f'.item[data-id="{page.evaluate("deskTest.S.visible[1]")}"]')
     page.keyboard.press("x")
     page.wait_for_selector("#bulkbar:not([hidden])")
     assert page.locator("#checkAll").bounding_box()["x"] == page.locator(".item .cb").first.bounding_box()["x"] == 16
     assert page.evaluate("(() => { const r = document.createRange(); r.selectNodeContents(document.getElementById('bulkCount')); return Math.round(r.getBoundingClientRect().left); })()") == 40
-    assert page.locator("#bulkResolve").is_hidden()
+    assert page.locator("#bulkResolve").is_visible() and page.inner_text("#bulkResolve") == "标为已处理"
     gap = page.evaluate("""(() => { const b = [...document.querySelectorAll('#bulkbar .icon-btn')].filter(e => e.offsetParent).map(e => e.getBoundingClientRect());
         return b.slice(1).map((r, i) => Math.round(r.left - b[i].right)); })()""")
     assert len(set(gap)) == 1  # 按钮之间的距离都一样
