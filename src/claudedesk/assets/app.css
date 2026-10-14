@@ -159,10 +159,9 @@ i[data-icon] svg { width: 100%; height: 100%; }
 
 /* ------------------------------------------------------------------ 顶部：项目（仓库）标签页 */
 .topbar {
-  grid-column: 1 / -1; display: flex; align-items: flex-end; gap: 6px; height: 44px; padding: 0 8px 0 14px;
+  grid-column: 1 / -1; display: flex; align-items: flex-end; gap: 6px; height: 44px; padding: 0 8px 0 5px; /* "全部项目"的字落在列表的图标列（x 20） */
   background: var(--chrome); border-bottom: 1px solid var(--line); min-width: 0;
 }
-.topbar .mark { align-self: center; width: 20px; height: 20px; flex: none; margin: 0 6px 0 0; }
 .topbar #settingsBtn { align-self: center; flex: none; }
 .ptabs { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; scrollbar-width: none; }
 .ptabs::-webkit-scrollbar { display: none; }
@@ -174,6 +173,19 @@ i[data-icon] svg { width: 100%; height: 100%; }
 /* 右边淡出去的标签里还有待决定：标签条右头一个强调色小圆点，点了滚过去 */
 .ptab-more { align-self: center; flex: none; width: 8px; height: 8px; margin: 0 6px 0 2px; border-radius: 50%; background: var(--hot); }
 .ptab .pname { overflow: hidden; text-overflow: ellipsis; }
+/* 关闭按钮（×）：一直占着位置，悬停 / 选中时才显示，所以它出现时标签不变宽、不挤别的 */
+.ptab:not(.all) { padding-right: 6px; }
+.ptab .pclose { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: -3px; border-radius: 5px; color: var(--ink-3); visibility: hidden; }
+.ptab .pclose i[data-icon] { width: 12px; height: 12px; }
+.ptab:hover .pclose, .ptab.on .pclose, .ptab:focus-visible .pclose { visibility: visible; }
+.ptab .pclose:hover { background: var(--press); color: var(--ink); }
+/* 关掉的标签：标签条右头"已关闭 N"，点开找回 */
+.ptab-closed {
+  align-self: center; flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px;
+  border-radius: 7px; font-size: 12.5px; font-weight: 550; color: var(--ink-3); white-space: nowrap;
+}
+.ptab-closed:hover { background: var(--hover); color: var(--ink); }
+.ptab-closed i[data-icon] { width: 15px; height: 15px; }
 .ptab:hover { color: var(--ink); background: color-mix(in srgb, var(--bg) 55%, transparent); }
 .ptab.on { color: var(--ink); background: var(--bg); border-color: var(--line); z-index: 1; }
 .ptab + .ptab:not(.on):not(:hover)::before { /* 未选中标签之间的细分隔线，像浏览器标签 */
@@ -496,7 +508,8 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .menu-item { display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 10px; border-radius: 6px; text-align: left; font-size: 13px; color: var(--ink); }
 .menu-item:hover { background: var(--hover); }
 .menu-item i[data-icon] { width: 15px; height: 15px; color: var(--ink-3); }
-.menu-item .sub { margin-left: auto; padding-left: 12px; color: var(--ink-4); font-size: 12px; }
+.menu-item .sub { flex: none; margin-left: auto; padding-left: 12px; color: var(--ink-4); font-size: 12px; }
+.menu-item .mname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* 长项目名：省略号，不把右边的数挤出去 */
 .menu-item.danger { color: var(--danger); }
 .menu-item.danger i[data-icon] { color: var(--danger); }
 .menu-sep { height: 1px; background: var(--line); margin: 5px 4px; }
@@ -555,6 +568,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
   .tab { padding: 0 7px; }
   .toasts { left: 16px; right: 16px; transform: none; } /* 提示条用满宽度，不挤成一半 */
   .toast { max-width: 100%; }
+  .ptab-closed .lbl { display: none; } /* 窄窗口：只留图标和数 */
 }
 
 /* ------------------------------------------------------------------ 键盘：焦点环、搜索结果提示、减少动效 */

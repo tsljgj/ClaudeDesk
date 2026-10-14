@@ -22,6 +22,7 @@ KINDS = desk.KINDS
 DISMISS_TEXT = "（用户在 ClaudeDesk 里移除了这条决定，没有作出选择）"
 RESOLVE_TEXT = "（用户在 ClaudeDesk 里把这条标为已解决：已经处理好了，不需要你再按选项做什么）"
 COMPACT_RETRY_FIRST, COMPACT_RETRY_MAX = 5.0, 300.0  # 压缩失败后重试的间隔：5 秒起，每次翻倍，最长 5 分钟
+OTHER_TAB = "__other__"  # 界面上"未归类"标签的键：没认出属于哪个仓库的消息
 
 
 def _now() -> dt.datetime:
@@ -103,6 +104,8 @@ class Store:
         self.deleted: set[str] = set(self.state.get("deleted", []))
         aliases = self.state.get("aliases")
         self.aliases: dict[str, str] = {str(k): str(v) for k, v in aliases.items()} if isinstance(aliases, dict) else {}
+        hp = self.state.get("hidden_projects")  # 用户关掉的项目标签（标签键）：消息不显示、不计数，来新消息时自动回来
+        self.hidden_projects: set[str] = {str(k) for k in hp} if isinstance(hp, list) else set()
         self._repos: dict[str, str] = {}  # 消息里见过的仓库名：规范化名 -> 原名
         self._discovered: dict[str, str] = {}  # 从 Claude Code 会话记录里找到的项目名
         self._loaded = False
@@ -135,6 +138,7 @@ class Store:
                 self.state["archived"] = sorted(self.archived & present)
                 self.state["deleted"] = sorted(self.deleted & present)  # 压缩成功后自然清掉
                 self.state["aliases"] = dict(self.aliases)
+                self.state["hidden_projects"] = sorted(self.hidden_projects)
                 data = json.dumps(self.state, ensure_ascii=False, indent=1)
                 self._dirty = False
             tmp = self.state_path.with_name(self.state_path.name + ".tmp")
@@ -241,6 +245,7 @@ class Store:
             if new:
                 for m in new:
                     self.notified.add(m["id"])
+                    self.hidden_projects.discard(self.tab_key(m))  # 关掉的标签来了新消息：标签自动回来（通知、计数跟着对）
                 self.schedule_save()
             if changed or first:
                 self._bump()
@@ -277,16 +282,20 @@ class Store:
     def is_urgent(self, m: dict) -> bool:
         return self.is_unread(m) and m["id"] not in self.archived and (self.is_open(m) or m["priority"] == "high")
 
+    def closed(self, m: dict) -> bool:
+        """在用户关掉的标签里：界面不显示，托盘 / 任务栏也不计数。"""
+        return bool(self.hidden_projects) and self.tab_key(m) in self.hidden_projects
+
     def counts(self) -> dict:
         with self.lock:
-            vis = self.visible()
+            vis = [m for m in self.visible() if not self.closed(m)]
             return {
                 "unread": sum(1 for m in vis if self.is_unread(m)),
                 "open": sum(1 for m in vis if self.is_open(m)),
                 "urgent": sum(1 for m in vis if self.is_urgent(m)),
                 "unread_answers": sum(1 for m in vis if m["kind"] == "answer" and self.is_unread(m)),
                 "unread_info": sum(1 for m in vis if m["kind"] == "info" and self.is_unread(m)),
-                "archived": len(self.visible(archived=True)),
+                "archived": sum(1 for m in self.visible(archived=True) if not self.closed(m)),
                 "total": len(vis),
             }
 
@@ -303,6 +312,11 @@ class Store:
         if key in self.aliases:
             name, kind = self.aliases[key], "repo"
         return name, kind, key
+
+    def tab_key(self, m: dict) -> str:
+        """界面上这条消息所在的标签：归类后的项目名；没认出仓库的都在 OTHER_TAB（"未归类"）。"""
+        name, kind, _ = self.project_info(m)
+        return OTHER_TAB if kind == "other" else name
 
     def _match_repo(self, raw: str) -> str | None:
         """旧消息的来源名对到已知仓库：完全一样；或来源是"仓库名-后缀"（取最长的那个）；
@@ -385,7 +399,8 @@ class Store:
         return n
 
     def mark_all_read(self, project: str | None = None) -> int:
-        return self.mark_read([m["id"] for m in self.visible() if not project or self.project_info(m)[0] == project])
+        return self.mark_read([m["id"] for m in self.visible() if not self.closed(m)
+                               and (not project or self.project_info(m)[0] == project)])
 
     def _dismiss_open(self, ids) -> None:
         """移走还在等回复的决定之前，先告诉等待的会话"用户跳过了"，免得它永远等下去。"""
@@ -410,6 +425,10 @@ class Store:
                 for k, v in list(self.aliases.items()):  # 已经归到 frm 的，一起改到 to（不留链）
                     if v == frm:
                         self.aliases[k] = to
+                # frm 不再是单独的标签：它的"已关闭"作废（关掉的 frm 归到开着的 to，消息跟着 to 显示，to 不会跟着不见）；
+                # 归到一个关掉的 to：用户刚明确要把 frm 放进去，to 回来，免得 frm 一归过去就不见了
+                self.hidden_projects.discard(frm)
+                self.hidden_projects.discard(to)
             else:
                 self.aliases.pop(frm, None)
             self.schedule_save()
@@ -462,9 +481,33 @@ class Store:
     def archive_handled(self, project: str | None = None) -> int:
         """把已读、且不用再处理（不是待决定）的消息全部归档。给了 project 就只动这个项目的。"""
         with self.lock:
-            ids = [m["id"] for m in self.visible() if not self.is_unread(m) and not self.is_open(m)
+            ids = [m["id"] for m in self.visible() if not self.is_unread(m) and not self.is_open(m) and not self.closed(m)
                    and (not project or self.project_info(m)[0] == project)]
         return self.archive(ids)
+
+    def hide_project(self, key: str) -> list[str]:
+        """关掉一个项目标签（key：归类后的项目名，或 OTHER_TAB）。返回关着的全部标签。"""
+        key = str(key or "").strip()
+        if not key:
+            raise ValueError("缺少要关闭的项目")
+        return self._set_hidden(lambda h: h.add(key))
+
+    def show_project(self, key: str | None = None) -> list[str]:
+        """找回关掉的标签；key 为 None 时全部找回。"""
+        return self._set_hidden(lambda h: h.clear() if key is None else h.discard(str(key)))
+
+    def _set_hidden(self, change) -> list[str]:
+        with self.lock:
+            before = set(self.hidden_projects)
+            change(self.hidden_projects)
+            changed = self.hidden_projects != before
+            if changed:
+                self.schedule_save()
+                self._bump()
+            out = sorted(self.hidden_projects)
+        if changed:
+            self._emit_changed()
+        return out
 
     def delete(self, ids) -> int:
         with self.lock:

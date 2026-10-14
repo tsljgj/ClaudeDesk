@@ -2,7 +2,7 @@ import json
 
 import desk
 import pytest
-from claudedesk.store import DISMISS_TEXT, Store, plain_summary
+from claudedesk.store import DISMISS_TEXT, OTHER_TAB, Store, plain_summary
 
 
 def post(d, **kw):
@@ -296,3 +296,70 @@ def test_concurrent_save_state_keeps_newest(tmp_path):
         t.join()
         st = json.loads((tmp_path / desk.STATE).read_text(encoding="utf-8"))
         assert len(st["read"]) == len(ids)
+
+
+def test_closed_tabs_leave_counts_and_come_back_on_a_new_message(tmp_path):
+    a = post(tmp_path, kind="decision", options=["A"], repo="alpha", priority="high")
+    b = post(tmp_path, kind="answer", repo="beta")
+    o = post(tmp_path, kind="info", source="随手记")  # 没认出仓库：在"未归类"
+    s = Store(tmp_path)
+    s.poll()
+    assert s.counts()["unread"] == 3 and s.counts()["open"] == 1 and s.tab_key(s.msgs[o]) == OTHER_TAB
+    changed = []
+    s.on_changed.append(lambda: changed.append(1))
+    v = s.version
+    assert s.hide_project("alpha") == ["alpha"]
+    assert s.version > v and changed  # 长轮询、托盘图标都会被叫醒
+    c = s.counts()
+    assert (c["open"], c["urgent"], c["unread"], c["total"]) == (0, 0, 2, 2)  # 托盘 / 任务栏的数字跟着掉
+    assert s.hide_project("alpha") == ["alpha"] and s.hide_project(OTHER_TAB) == [OTHER_TAB, "alpha"]
+    assert s.counts()["unread"] == 1
+    with pytest.raises(ValueError):
+        s.hide_project("  ")
+    s.save_state()
+    assert json.loads((tmp_path / desk.STATE).read_text(encoding="utf-8"))["hidden_projects"] == [OTHER_TAB, "alpha"]
+    s2 = Store(tmp_path)  # 重启后还关着
+    s2.poll()
+    assert s2.hidden_projects == {OTHER_TAB, "alpha"} and s2.counts()["unread"] == 1
+    # 托盘的"全部标为已读"、"归档所有已处理的"不动关掉的标签
+    s2.mark_all_read()
+    assert s2.is_unread(s2.msgs[a]) and s2.is_unread(s2.msgs[o]) and not s2.is_unread(s2.msgs[b])
+    s2.mark_read([o])
+    s2.archive_handled()
+    assert s2.archived == {b}
+    # 关掉的项目来了新消息：标签自动回来，照常通知、计数
+    arrived = []
+    s2.on_arrived.append(arrived.extend)
+    n = post(tmp_path, kind="decision", options=["X"], repo="alpha")
+    s2.poll()
+    assert [m["id"] for m in arrived] == [n]
+    assert s2.hidden_projects == {OTHER_TAB} and s2.counts()["open"] == 2
+    # 旧消息被重读（删除后压缩重写 inbox）不算新到：关着的"未归类"不会回来
+    s2.delete([b])
+    assert b not in s2.msgs and s2.hidden_projects == {OTHER_TAB}
+    assert s2.show_project(OTHER_TAB) == [] and s2.counts()["unread"] == 2  # o 刚标过已读
+    s2.hide_project("alpha")
+    s2.hide_project(OTHER_TAB)
+    assert s2.show_project() == [] and s2.counts()["unread"] == 2  # 全部找回
+
+
+def test_merging_and_closed_tabs_follow_the_resolved_name(tmp_path):
+    a = post(tmp_path, kind="answer", repo="alpha")
+    post(tmp_path, kind="answer", repo="beta")
+    g = post(tmp_path, kind="answer", repo="gamma")
+    s = Store(tmp_path)
+    s.poll()
+    # 关掉的 alpha 归到开着的 beta：beta 的消息不会跟着不见，alpha 的消息跟着 beta 显示；alpha 的"已关闭"作废
+    s.hide_project("alpha")
+    s.set_alias("alpha", "beta")
+    assert s.hidden_projects == set() and s.counts()["unread"] == 3 and s.tab_key(s.msgs[a]) == "beta"
+    # 开着的 gamma 归到关掉的 beta：beta 回来（刚明确放进去的，不能一归过去就不见了）
+    s.hide_project("beta")
+    assert s.counts()["unread"] == 1
+    s.set_alias("gamma", "beta")
+    assert s.hidden_projects == set() and s.counts()["unread"] == 3
+    # 关掉 beta：归过来的 alpha、gamma 一起关；把 gamma 拆出来，它自己回来，beta 还关着
+    s.hide_project("beta")
+    assert s.counts()["unread"] == 0
+    s.set_alias("gamma", "")
+    assert s.hidden_projects == {"beta"} and s.counts()["unread"] == 1 and s.tab_key(s.msgs[g]) == "gamma"

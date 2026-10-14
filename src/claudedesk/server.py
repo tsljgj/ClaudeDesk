@@ -108,7 +108,7 @@ class DeskServer:
         st = self.store
         with st.lock:
             return {"version": st.version, "messages": st.summaries(), "counts": st.counts(), "aliases": dict(st.aliases),
-                    "settings": self.settings(), "meta": self.meta}
+                    "hidden_projects": sorted(st.hidden_projects), "settings": self.settings(), "meta": self.meta}
 
     def action(self, body: dict):
         st = self.store
@@ -124,6 +124,13 @@ class DeskServer:
             return st.set_alias(str(body.get("from") or ""), body.get("to"))
         if name == "resolve":
             return st.resolve(ids)
+        if name in ("hide_project", "show_project"):  # 关掉 / 找回项目标签：消息还在，只是不显示、不计数。找回全部：{all: true}
+            key = str(body.get("key") or "").strip()
+            if name == "show_project" and body.get("all"):
+                return st.show_project(None)
+            if not key:
+                raise ActionError("缺少项目名")
+            return st.hide_project(key) if name == "hide_project" else st.show_project(key)
         if name == "archive_handled":
             return st.archive_handled(body.get("project") or None)
         if name == "delete":

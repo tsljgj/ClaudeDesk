@@ -36,6 +36,7 @@
     text: '<path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/>',
     rich: '<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h16"/><path d="M18 10l2 2-2 2"/>',
     sparkle: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
+    eyeOff: '<path d="M10.7 5.1A10.7 10.7 0 0 1 21.9 11.7a1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.2-4.2"/><path d="M17.5 17.5a10.8 10.8 0 0 1-15.4-5.2 1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.4-5.1"/><path d="m2 2 20 20"/>',
   };
   function icon(name, cls) {
     return '<i data-icon class="' + (cls || "") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg></i>";
@@ -63,6 +64,7 @@
     details: {}, shownKey: null, visible: [],
     drafts: {}, choiceIdx: null, submitting: {}, fresh: {}, // 每条的草稿（选项序号 + 文字）/ 正在提交的 id / 新到的高亮到期时间
     gone: {}, // 在这里删掉的 id：删除还在路上时到的旧快照里还有它们，不能让它们当成"新消息"闪回来
+    all: [], allById: {}, hidden: new Set(), // 全部消息（含关掉的标签里的）/ 关掉的标签键（服务端存）。msgs / byId 只有没关掉的
     cursor: null, jump: null, // 窄窗口列表页的光标（↑↓ 只挪它）/ 新到提示里那条：{ id, el }，提示还在时 N 先打开它
   };
 
@@ -107,12 +109,14 @@
 
   function apply(st, force) {
     if (st.version < S.version) return; // 晚到的旧快照（操作后的 refreshNow 被更新的长轮询抢先了）：不能把界面倒回去
-    if (!force && st.version === S.version && S.msgs.length) return;
-    var old = S.byId, first = S.version < 0;
+    if (!force && st.version === S.version && S.all.length) return;
+    var old = S.allById, first = S.version < 0; // 和全部消息比：找回的标签里的旧消息不算新到
     S.version = st.version;
-    S.msgs = (st.messages || []).filter(function (m) { return !S.gone[m.id]; });
-    S.byId = {};
-    S.msgs.forEach(function (m) { S.byId[m.id] = m; });
+    S.all = (st.messages || []).filter(function (m) { return !S.gone[m.id]; });
+    S.allById = {};
+    S.all.forEach(function (m) { S.allById[m.id] = m; });
+    S.hidden = new Set(st.hidden_projects || []);
+    filterClosed();
     S.counts = st.counts || {};
     S.meta = st.meta || {};
     S.aliases = st.aliases || {};
@@ -120,8 +124,8 @@
     S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
     if (S.current && !S.byId[S.current]) S.current = null;
     // 缓存瘦身：删掉的消息不留详情；已经有回复的不留草稿
-    Object.keys(S.details).forEach(function (k) { if (!S.byId[k.split("|")[0]]) delete S.details[k]; });
-    Object.keys(S.drafts).forEach(function (id) { if (!S.byId[id] || S.byId[id].answered) delete S.drafts[id]; });
+    Object.keys(S.details).forEach(function (k) { if (!S.allById[k.split("|")[0]]) delete S.details[k]; }); // 关掉的标签里的留着：找回来还在
+    Object.keys(S.drafts).forEach(function (id) { if (!S.allById[id] || S.allById[id].answered) delete S.drafts[id]; });
     var arr = first ? null : arrivals(old);
     if (S.query) runSearch(); else renderAll();
     if (!arr) return;
@@ -217,9 +221,8 @@
       if (m.open) e.open++;
       if (m.unread) e.unread++;
     });
-    return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
-      return (a.key === OTHER) - (b.key === OTHER) || byName(a.name, b.name);
-    });
+    return Object.keys(map).map(function (k) { return map[k]; }).filter(function (p) { return p.key !== OTHER || p.total; }) // "未归类"只剩归档的：不要标签（归档视图里照样分组显示）
+      .sort(function (a, b) { return (a.key === OTHER) - (b.key === OTHER) || byName(a.name, b.name); });
   }
   function byName(a, b) { return a.localeCompare(b, "zh-CN", { sensitivity: "base", numeric: true }); }
   function groupOrder() { // 分组顺序和标签一样按名字，"未归类"里的各来源排在最后；不随消息进出而跳动
@@ -277,6 +280,88 @@
     if (!S.projects.size) return "";
     if (S.projects.size === 1) { var k = S.projects.values().next().value; return k === OTHER ? "未归类" : k; }
     return S.projects.size + " 个项目";
+  }
+
+  // ---- 关掉的标签：它的消息不进 msgs / byId（列表、计数、搜索、队列、N 键、[ ] 都只看这两个），服务端也不计数；
+  // 这个项目来新消息时服务端把标签放回来。标签条右头"已关闭 N"、设置里都能找回
+  function closedOf(m) { return S.hidden.has(tabKey(m)); }
+  function tabName(k) { return k === OTHER ? "未归类" : k; }
+  function filterClosed() {
+    S.msgs = S.all.filter(function (m) { return !S.gone[m.id] && !closedOf(m); });
+    S.byId = {};
+    S.msgs.forEach(function (m) { S.byId[m.id] = m; });
+    var n = S.projects.size;
+    S.projects.forEach(function (k) { if (S.hidden.has(k)) S.projects.delete(k); }); // 选着的标签关掉了：从选择里拿掉
+    if (S.projects.size !== n) save("projects", JSON.stringify(Array.from(S.projects)));
+  }
+  function closedList() { // 关着、还有消息的标签：[{ key, name, live 没归档的, total, open }]，和标签一样按名字排
+    var map = {};
+    S.all.forEach(function (m) {
+      if (S.gone[m.id] || !closedOf(m)) return;
+      var k = tabKey(m), e = map[k] || (map[k] = { key: k, name: tabName(k), live: 0, total: 0, open: 0 });
+      e.total++;
+      if (!m.archived) e.live++;
+      if (m.open) e.open++;
+    });
+    return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return (a.key === OTHER) - (b.key === OTHER) || byName(a.name, b.name); });
+  }
+  // 关掉一个标签：先在本地关好、重画，再发请求；还有待决定的先确认。可以撤销（Z）
+  function closeTab(key) {
+    if (!key) return;
+    var name = tabName(key), open = S.msgs.filter(function (m) { return m.open && tabKey(m) === key; }).length;
+    var go = function () {
+      var was = S.projects.has(key);
+      dropUndo();
+      S.hidden.add(key);
+      filterClosed();
+      S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
+      if (S.current && !S.byId[S.current]) S.current = null;
+      renderAll();
+      refocusList();
+      act({ action: "hide_project", key: key }).then(function () { return refreshNow(true); }).then(function () {
+        toast("已关闭「" + name + "」", { undo: function () {
+          reopenTabs([key]);
+          if (was) S.projects.add(key); // 关之前选着它：撤销后还选着
+          applyProjects();
+        } });
+      }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
+    };
+    if (open) confirmBox("关闭「" + name + "」？", "「" + name + "」还有 " + open + " 条待决定没回复。关掉后它们不再显示、也不计入未读；这个项目来新消息时标签会自动回来。", "关闭").then(function (ok) { if (ok) go(); });
+    else go();
+  }
+  // 找回关掉的标签（keys 为 null：全部）。先在本地放回来；选不选它、什么时候重画由调用的人定
+  function reopenTabs(keys) {
+    (keys || Array.from(S.hidden)).forEach(function (k) { S.hidden.delete(k); });
+    filterClosed();
+    var reqs = keys ? keys.map(function (k) { return act({ action: "show_project", key: k }); }) : [act({ action: "show_project", all: true })];
+    return Promise.all(reqs).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
+  }
+  function closedSub(p) { return (p.live ? p.live + " 条" : p.total + " 条已归档") + (p.open ? " · " + p.open + " 待决定" : ""); }
+  function renderClosed() { // 标签条右头"已关闭 N"：有关掉的标签才出现
+    var b = $("closedBtn"), n = closedList().length;
+    b.hidden = !n;
+    if (!n || b.dataset.n === String(n)) return;
+    b.dataset.n = n;
+    b.innerHTML = icon("eyeOff") + '<span class="lbl">已关闭</span><span>' + n + "</span>";
+    b.title = "已关闭 " + n + " 个标签：它们的消息不显示、不计数。点开找回";
+    b.setAttribute("aria-label", b.title);
+  }
+  function openClosedMenu() {
+    var cs = closedList();
+    var html = '<div class="menu-label">已关闭的标签 · 点一个找回</div>' + cs.map(function (p) {
+      return '<button class="menu-item" data-reopen="' + esc(p.key) + '"><span class="pdot" style="background:' + pcolor(p.key) + '"></span>' +
+        '<span class="mname">' + esc(p.name) + '</span><span class="sub">' + closedSub(p) + "</span></button>";
+    }).join("") + (cs.length > 1 ? '<div class="menu-sep"></div><button class="menu-item" data-reopen-all>' + icon("refresh") + "全部恢复</button>" : "");
+    openPopover($("closedBtn"), html, "", function (e) {
+      var b = e.target.closest("[data-reopen],[data-reopen-all]");
+      if (!b) return;
+      closePopover();
+      var k = b.dataset.reopen;
+      reopenTabs(k ? [k] : null);
+      if (k) S.projects = new Set([k]); // 找回的那个：选中它
+      applyProjects();
+      $("list").focus();
+    });
   }
 
   function dayKey(d) { return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); }
@@ -407,11 +492,12 @@
       var badge = '<span class="n' + (p.open ? " hot" : "") + '">' + (p.open || p.unread || "") + "</span>";
       var tip = (p.key === OTHER ? "没认出属于哪个仓库的旧消息 · 右键或点「归到…」可以归到某个仓库" : p.name +
         (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "")) +
-        "\n点：只看它 · Ctrl/Shift + 点：多选" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
+        "\n点：只看它 · Ctrl/Shift + 点：多选 · ×（或中键）：关掉" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
       return '<button class="ptab' + (on ? " on" : "") + (p.key === OTHER ? " other" : "") + '" data-project="' + esc(p.key) +
         '" role="tab" aria-selected="' + on + '" title="' + esc(tip) + '">' +
         '<span class="pdot" style="background:' + pcolor(p.key) + '"></span>' +
-        '<span class="pname">' + esc(p.name) + "</span>" + badge + "</button>";
+        '<span class="pname">' + esc(p.name) + "</span>" + badge +
+        '<span class="pclose" title="关闭这个标签：它的消息不再显示、不计数，来新消息时自动回来">' + icon("x") + "</span></button>";
     };
     var box = $("projects"), open = ps.reduce(function (s, p) { return s + p.open; }, 0), all = !S.projects.size;
     keepFocus(box, function () {
@@ -419,6 +505,7 @@
         (open ? " · " + open + " 条待决定" : "") + '（Esc）">全部项目<span class="n' + (open ? " hot" : "") + '">' + (open || "") + "</span></button>" +
         ps.map(tab).join("");
     });
+    renderClosed(); // 先定好右头按钮在不在：下面量标签条宽度要用
     var on = box.querySelector(".ptab.on");
     if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) {
       box.scrollLeft = on.offsetLeft - 8;
@@ -440,7 +527,7 @@
   }
 
   // 右键标签 / 分组标题：把这个项目（或没认出来的来源）归到另一个项目下
-  function mergeMenu(x, y, from) {
+  function mergeMenu(x, y, from, tab) { // tab：右键的是顶上的标签，最后再加"关闭这个标签"（"未归类"只有这一项）
     var targets = projectList().filter(function (p) { return p.key !== OTHER && p.key !== from; });
     var undo = Object.keys(S.aliases || {}).filter(function (k) { return S.aliases[k] === from; });
     var html = '<div class="menu-label">把「' + esc(from) + "」归到：</div>" +
@@ -450,11 +537,13 @@
       (undo.length ? '<div class="menu-sep"></div>' + undo.map(function (k) {
         return '<button class="menu-item" data-undo="' + esc(k) + '">' + icon("x") + "把「" + esc(k) + "」拆出来</button>";
       }).join("") : "");
+    if (tab) html = (from === OTHER ? "" : html + '<div class="menu-sep"></div>') + '<button class="menu-item" data-close>' + icon("eyeOff") + "关闭这个标签<span class=\"sub\">中键</span></button>";
     var fake = { getBoundingClientRect: function () { return { left: x, right: x + 1, top: y, bottom: y }; } };
     openPopover(fake, html, "", function (ev) {
-      var b = ev.target.closest("[data-to],[data-undo]");
+      var b = ev.target.closest("[data-to],[data-undo],[data-close]");
       if (!b) return;
       closePopover();
+      if (b.hasAttribute("data-close")) return closeTab(from);
       var body = b.dataset.to ? { action: "alias", from: from, to: b.dataset.to } : { action: "alias", from: b.dataset.undo, to: "" };
       act(body).then(function () {
         toast(b.dataset.to ? "已把「" + from + "」归到「" + b.dataset.to + "」" : "已拆出「" + b.dataset.undo + "」");
@@ -1125,14 +1214,25 @@
   // 搜到了、但被当前视图 / 项目挡住的条数：列表末尾给一行"另有 N 条…"，点了去能看到它们的地方
   function searchMore() {
     if (!S.searchIds) return "";
-    var shown = new Set(S.visible), live = 0, arch = 0;
+    var shown = new Set(S.visible), live = 0, arch = 0, ch = closedHits();
     S.searchIds.forEach(function (id) {
       var m = S.byId[id];
       if (m && !shown.has(id)) { if (m.archived) arch++; else live++; }
     });
-    if (!live && !arch) return "";
-    return '<button class="search-more" data-more="' + (live ? "all" : "archive") + '">另有 ' + (live + arch) +
-      " 条在其他视图或项目里<span>" + (live ? "查看全部结果" : "去归档里看") + " →</span></button>";
+    return (live || arch ? '<button class="search-more" data-more="' + (live ? "all" : "archive") + '">另有 ' + (live + arch) +
+      " 条在其他视图或项目里<span>" + (live ? "查看全部结果" : "去归档里看") + " →</span></button>" : "") +
+      (ch.n ? '<button class="search-more" data-more-closed>另有 ' + ch.n + " 条在已关闭的标签里<span>找回并查看 →</span></button>" : "");
+  }
+  function closedHits() { // 搜到了、但在关掉的标签里的：{ n, keys, live 有没归档的 }
+    var r = { n: 0, keys: [], live: false };
+    if (S.searchIds) S.searchIds.forEach(function (id) {
+      var m = S.allById[id];
+      if (!m || S.byId[id] || S.gone[id] || !closedOf(m)) return;
+      r.n++;
+      if (!m.archived) r.live = true;
+      if (r.keys.indexOf(tabKey(m)) < 0) r.keys.push(tabKey(m));
+    });
+    return r;
   }
 
   // ---------------------------------------------------------------- 弹层 / 提示
@@ -1260,6 +1360,13 @@
         return '<button class="menu-item" data-unalias="' + esc(k) + '">' + esc(k) + ' → ' + esc(S.aliases[k]) + '<span class="sub">×</span></button>';
       }).join("");
     }
+    var cs = closedList();
+    if (cs.length) {
+      h += '<div class="menu-sep"></div><div class="set-row"><div class="menu-label">已关闭的标签</div></div>' + cs.map(function (p) {
+        return '<button class="menu-item" data-reopen="' + esc(p.key) + '"><span class="pdot" style="background:' + pcolor(p.key) + '"></span>' +
+          '<span class="mname">' + esc(p.name) + '</span><span class="sub">恢复</span></button>';
+      }).join("") + '<div class="menu-sep"></div>'; // 和下面的"快捷键"隔开，不像是同一串
+    }
     h += '<button class="menu-item" data-app="shortcuts">' + icon("keyboard") + "快捷键<span class=\"sub\">?</span></button>";
     return h;
   }
@@ -1284,6 +1391,7 @@
         if (cd && shownId() === cd.id) renderBody(cd);
         return;
       }
+      if (b.dataset.reopen) { reopenTabs([b.dataset.reopen]); renderAll(); repaintSettings(); return; } // 找回关掉的标签（不改当前选的）
       if (b.dataset.unalias) {
         act({ action: "alias", from: b.dataset.unalias, to: "" }).then(function () { return refreshNow(); })
           .then(function () { repaintSettings(); });
@@ -1334,14 +1442,21 @@
     paintIcons();
     $("projects").addEventListener("click", function (e) {
       var b = e.target.closest(".ptab");
-      if (b) clickTab(b.dataset.project, e.ctrlKey || e.metaKey || e.shiftKey);
+      if (b && e.target.closest(".pclose")) closeTab(b.dataset.project);
+      else if (b) clickTab(b.dataset.project, e.ctrlKey || e.metaKey || e.shiftKey);
+    });
+    $("projects").addEventListener("mousedown", function (e) { if (e.button === 1 && e.target.closest(".ptab:not(.all)")) e.preventDefault(); }); // 中键：不要进自动滚动
+    $("projects").addEventListener("auxclick", function (e) { // 中键点标签：关掉（和浏览器一样）
+      var b = e.target.closest(".ptab:not(.all)");
+      if (e.button === 1 && b) { e.preventDefault(); closeTab(b.dataset.project); }
     });
     $("projects").addEventListener("contextmenu", function (e) {
       var b = e.target.closest(".ptab");
-      if (!b || !b.dataset.project || b.dataset.project === OTHER) return;
+      if (!b || !b.dataset.project) return;
       e.preventDefault();
-      mergeMenu(e.clientX, e.clientY, b.dataset.project);
+      mergeMenu(e.clientX, e.clientY, b.dataset.project, true);
     });
+    $("closedBtn").addEventListener("click", openClosedMenu);
     $("projects").addEventListener("wheel", function (e) { // 竖着滚轮也能横着翻标签
       var b = $("projects");
       if (b.scrollWidth <= b.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
@@ -1362,6 +1477,11 @@
     $("list").addEventListener("click", function (e) {
       var more = e.target.closest("[data-more]"); // "另有 N 条在其他视图或项目里"
       if (more) { S.projects = new Set(); setView(more.dataset.more); applyProjects(); return $("list").focus(); }
+      if (e.target.closest("[data-more-closed]")) { // "另有 N 条在已关闭的标签里"：找回这些标签，去看得到它们的视图
+        var ch = closedHits();
+        reopenTabs(ch.keys); S.projects = new Set(); setView(ch.live ? "all" : "archive"); applyProjects();
+        return $("list").focus();
+      }
       var gl = e.target.closest(".group-label");
       if (gl) {
         if (e.target.closest(".gmerge")) {
@@ -1620,6 +1740,8 @@
   // 外部（托盘 / 通知点击）要求打开某条消息
   window.deskOpen = function (id, view) {
     var go = function () {
+      var c = S.allById[id];
+      if (c && !S.byId[id] && !S.gone[id] && closedOf(c)) { reopenTabs([tabKey(c)]); renderAll(); } // 关掉的标签里的（点了旧通知）：先找回标签
       if (!S.byId[id]) return false;
       var m = S.byId[id];
       if (!inScope(m)) { S.projects = new Set([tabKey(m)]); applyProjects(); }

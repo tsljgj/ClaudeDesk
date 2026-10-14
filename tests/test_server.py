@@ -119,3 +119,31 @@ def test_reply_with_choice_index(srv):
     assert reply(id=b, choice="继续")["result"]["choice_index"] == 1  # 旧界面：只有名字
     got = {x["id"]: (x["choice"], x["choice_index"]) for x in desk.read_all(d / desk.RESPONSES)}
     assert got == {a: ("继续", 2), b: ("继续", 1)}
+
+
+def test_hide_and_show_project_actions(srv):
+    d, store, server = srv
+    a = desk.post_message(desk.make_message("decision", "s", "甲", repo="alpha", options=["A"]), d)
+    b = desk.post_message(desk.make_message("answer", "s", "乙", repo="beta"), d)
+    store.poll()
+
+    def act(**kw):
+        return json.loads(call(server, "POST", "/api/action", kw)[1])
+
+    def state():
+        return json.loads(call(server, "GET", "/api/state")[1])
+
+    assert state()["hidden_projects"] == []
+    assert act(action="hide_project", key="alpha") == {"ok": True, "result": ["alpha"]}
+    st = state()
+    assert st["hidden_projects"] == ["alpha"] and st["counts"]["open"] == 0 and st["counts"]["unread"] == 1
+    # 消息照样给界面："已关闭"菜单要数条数，搜索要能说"另有 N 条在已关闭的标签里"，点旧通知要能找回
+    assert {m["id"] for m in st["messages"]} == {a, b}
+    assert act(action="hide_project", key="beta")["result"] == ["alpha", "beta"]
+    assert state()["counts"]["unread"] == 0
+    assert act(action="show_project", key="alpha")["result"] == ["beta"]
+    assert act(action="show_project", all=True)["result"] == []
+    assert state()["counts"]["unread"] == 2
+    for bad in ({"action": "hide_project"}, {"action": "show_project", "key": " "}):
+        r = act(**bad)
+        assert r["ok"] is False and r["message"] == "缺少项目名"
