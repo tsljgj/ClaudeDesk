@@ -62,6 +62,7 @@
     current: null, multi: new Set(), anchor: null, choice: null,
     details: {}, shownKey: null, visible: [],
     drafts: {}, choiceIdx: null, submitting: {}, fresh: {}, // 每条的草稿（选项序号 + 文字）/ 正在提交的 id / 新到的高亮到期时间
+    gone: {}, // 在这里删掉的 id：删除还在路上时到的旧快照里还有它们，不能让它们当成"新消息"闪回来
   };
 
   function loadSet(k) { try { var v = JSON.parse(load(k, "[]")); return new Set(Array.isArray(v) ? v : []); } catch (e) { return new Set(); } }
@@ -104,10 +105,11 @@
   }
 
   function apply(st, force) {
+    if (st.version < S.version) return; // 晚到的旧快照（操作后的 refreshNow 被更新的长轮询抢先了）：不能把界面倒回去
     if (!force && st.version === S.version && S.msgs.length) return;
     var old = S.byId, first = S.version < 0;
     S.version = st.version;
-    S.msgs = st.messages || [];
+    S.msgs = (st.messages || []).filter(function (m) { return !S.gone[m.id]; });
     S.byId = {};
     S.msgs.forEach(function (m) { S.byId[m.id] = m; });
     S.counts = st.counts || {};
@@ -320,9 +322,11 @@
   }
   function renderEmpty() { // 阅读区什么都没打开时
     var q = queue();
-    $("empty").innerHTML = '<div class="empty-box">' + (q.length
-      ? '<p class="empty-lead">' + queueText(q) + '</p><button class="primary" id="startBtn" title="按 N 也行">开始处理（N）</button>'
-      : '<p class="empty-lead">都处理完了</p><p class="empty-sub"><kbd>↑</kbd> <kbd>↓</kbd> 切换　<kbd>?</kbd> 快捷键</p>') + "</div>";
+    keepFocus($("empty"), function () {
+      $("empty").innerHTML = '<div class="empty-box">' + (q.length
+        ? '<p class="empty-lead">' + queueText(q) + '</p><button class="primary" id="startBtn" title="按 N 也行">开始处理（N）</button>'
+        : '<p class="empty-lead">都处理完了</p><p class="empty-sub"><kbd>↑</kbd> <kbd>↓</kbd> 切换　<kbd>?</kbd> 快捷键</p>') + "</div>";
+    });
   }
   function nextDecision(dir) { // N / Shift+N：下一条 / 上一条待决定，到头绕回来
     var q = queue();
@@ -362,12 +366,14 @@
   function renderNav() {
     var c = S.counts, sc = scopeCounts();
     var n = { decide: [sc.open, true, " 条待你决定"], answer: [sc.unread_answers, false, " 条未读回答"], all: [sc.unread, false, " 条未读"], archive: [0] };
-    $("nav").innerHTML = VIEWS.map(function (v) {
-      var k = n[v.id], tip = k[2] ? k[0] + k[2] : ""; // 数字是什么意思写在悬停提示里
-      return '<button class="tab' + (S.view === v.id ? " active" : "") + '" data-view="' + v.id + '"' +
-        (tip ? ' title="' + tip + '" aria-label="' + v.label + "，" + tip + '"' : "") + ">" + v.label +
-        '<span class="n' + (k[0] && k[1] ? " hot" : "") + '">' + (k[0] || "") + "</span></button>";
-    }).join("");
+    keepFocus($("nav"), function () {
+      $("nav").innerHTML = VIEWS.map(function (v) {
+        var k = n[v.id], tip = k[2] ? k[0] + k[2] : ""; // 数字是什么意思写在悬停提示里
+        return '<button class="tab' + (S.view === v.id ? " active" : "") + '" data-view="' + v.id + '"' +
+          (tip ? ' title="' + tip + '" aria-label="' + v.label + "，" + tip + '"' : "") + ">" + v.label +
+          '<span class="n' + (k[0] && k[1] ? " hot" : "") + '">' + (k[0] || "") + "</span></button>";
+      }).join("");
+    });
     renderProjects();
     renderQueue();
     var t = [];
@@ -394,9 +400,11 @@
         '<span class="pname">' + esc(p.name) + "</span>" + badge + "</button>";
     };
     var box = $("projects"), open = ps.reduce(function (s, p) { return s + p.open; }, 0), all = !S.projects.size;
-    box.innerHTML = '<button class="ptab all' + (all ? " on" : "") + '" data-project="" role="tab" aria-selected="' + all + '" title="看所有仓库' +
-      (open ? " · " + open + " 条待决定" : "") + '（Esc）">全部项目<span class="n' + (open ? " hot" : "") + '">' + (open || "") + "</span></button>" +
-      ps.map(tab).join("");
+    keepFocus(box, function () {
+      box.innerHTML = '<button class="ptab all' + (all ? " on" : "") + '" data-project="" role="tab" aria-selected="' + all + '" title="看所有仓库' +
+        (open ? " · " + open + " 条待决定" : "") + '（Esc）">全部项目<span class="n' + (open ? " hot" : "") + '">' + (open || "") + "</span></button>" +
+        ps.map(tab).join("");
+    });
     var on = box.querySelector(".ptab.on");
     if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) {
       box.scrollLeft = on.offsetLeft - 8;
@@ -437,6 +445,8 @@
     var v = VIEWS.filter(function (x) { return x.id === S.view; })[0] || VIEWS[0];
     var items = viewItems();
     S.visible = items.map(function (m) { return m.id; });
+    var vis = new Set(S.visible); // 勾选只留看得见的（在别处归档了、被搜索筛掉的不留）：批量操作只作用在眼前这些
+    S.multi.forEach(function (id) { if (!vis.has(id)) S.multi.delete(id); });
     var more = searchMore(); // 搜索命中但被视图 / 项目挡住的："另有 N 条…"一行，和列表一起写
     if (!items.length) {
       setList('<div class="list-empty"><b>' +
@@ -511,6 +521,7 @@
 
   function renderBulk() {
     var n = S.multi.size;
+    if (n < 1 && $("bulkbar").contains(document.activeElement)) $("list").focus(); // 批量栏要收起来了，焦点还在它的按钮上：交给列表
     $("bulkbar").hidden = n < 1;
     $("list").classList.toggle("multi-mode", n > 0);
     if (!n) return;
@@ -559,7 +570,8 @@
     api("/api/message?id=" + encodeURIComponent(m.id)).then(function (d) {
       if (!d || d.error) return;
       keepDetail(key, d);
-      if (S.current === m.id) showDetail(d, key);
+      var cm = S.current && S.byId[S.current]; // 回来晚了：这期间它可能已经有了回复（在对话里处理掉了），旧的"未回复"版不能再盖上去
+      if (cm && cm.id + "|" + cm.answered === key) showDetail(d, key);
     });
   }
   // 详情缓存：最近用过的排在最后，最多留 60 条；有了"已回复"版就丢掉旧的"未回复"版
@@ -577,7 +589,21 @@
       '<span title="' + fmtTime(m.ts, true) + '">' + fmtRel(m.ts) + "</span>"];
     if (m.priority === "high") bits.push('<span class="hot">紧急</span>');
     if (m.archived) bits.push("已归档");
-    $("eyebrow").innerHTML = bits.join(" · ") + (m.open ? '<button class="jump" id="jumpBtn">去选择 ↓</button>' : "");
+    keepFocus($("eyebrow"), function () {
+      $("eyebrow").innerHTML = bits.join(" · ") + (m.open ? '<button class="jump" id="jumpBtn">去选择 ↓</button>' : "");
+    });
+  }
+  // 整块重写 innerHTML 会把焦点丢到 body：键盘停在里面某个按钮上时（长轮询、计时器随时会重画），重画后还给同一个按钮。
+  // 只管键盘焦点（:focus-visible）：鼠标点过留下的看不见的焦点照旧丢掉，免得之后按 Enter 又点了一次这个按钮
+  function keepFocus(box, write) {
+    var a = document.activeElement, sel = null;
+    if (a && a !== box && box.contains(a) && a.matches(":focus-visible")) {
+      sel = a.id ? "#" + cssEsc(a.id) : a.dataset.view ? '[data-view="' + cssEsc(a.dataset.view) + '"]' :
+        a.dataset.project != null ? '[data-project="' + cssEsc(a.dataset.project) + '"]' : null;
+    }
+    write();
+    var b = sel && box.querySelector(sel);
+    if (b && document.activeElement !== b) b.focus();
   }
 
   function showDetail(d, key) {
@@ -816,7 +842,9 @@
       ids.forEach(function (id) { if (S.byId[id]) S.byId[id].archived = on; });
       S.multi.clear();
       S.current = next;
+      dropUndo();
       renderAll();
+      refocusList();
       act({ action: "archive", ids: ids, on: on }).then(function () {
         return refreshNow(true);
       }).then(function () {
@@ -837,16 +865,17 @@
     confirmBox(ids.length > 1 ? "删除这 " + ids.length + " 条消息？" : one ? "删除「" + t + "」？" : "删除这条消息？", text, "删除", true).then(function (ok) {
       if (!ok) return;
       // 和归档一样：先在本地删掉、选好下一条并重画，再发请求
-      var cur = S.current, next = ids.indexOf(cur) >= 0 ? nextAfter(ids) : cur, gone = new Set(ids);
-      S.msgs = S.msgs.filter(function (m) { return !gone.has(m.id); });
-      ids.forEach(function (id) { delete S.byId[id]; });
+      var cur = S.current, next = ids.indexOf(cur) >= 0 ? nextAfter(ids) : cur;
+      ids.forEach(function (id) { S.gone[id] = 1; delete S.byId[id]; });
+      S.msgs = S.msgs.filter(function (m) { return !S.gone[m.id]; });
       S.multi.clear();
       S.current = next;
       renderAll();
+      refocusList();
       act({ action: "delete", ids: ids }).then(function () {
         return refreshNow(true);
       }).then(function () { toast("已删除 " + ids.length + " 条"); })
-        .catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
+        .catch(function (e) { ids.forEach(function (id) { delete S.gone[id]; }); toast(e.message, { bad: true }); refreshNow(true); });
     });
   }
 
@@ -875,6 +904,8 @@
     if (!ids.length) return;
     var anyUnread = ids.some(function (id) { return S.byId[id] && S.byId[id].unread; });
     var flip = ids.filter(function (id) { return S.byId[id] && !!S.byId[id].unread === anyUnread; }); // 真的会变的那些
+    if (ids.indexOf(S.current) >= 0) clearTimeout(readTimer); // 自己按了 U：停留计时不能事后再把它标回已读（撤销后也一样）
+    dropUndo();
     act({ action: "read", ids: ids, read: anyUnread }).then(function () {
       if (ids.length > 1) S.multi.clear();
       toast((anyUnread ? "已标为已读" : "已标为未读") + (ids.length > 1 ? " " + ids.length + " 条" : ""), { undo: undoRead(flip, !anyUnread) });
@@ -895,6 +926,13 @@
     };
   }
   var lastUndo = null; // 最近一个还能撤销的操作 { run, el }：跟着它的提示条，提示条没了就不能撤销了
+  // 新的可撤销操作一开始就作废旧的：它的提示条要等请求回来才出现，这之间按 Z 不能撤到更早的那个上
+  function dropUndo() { if (lastUndo) { lastUndo.el.remove(); lastUndo = null; } }
+  // 归档 / 删除拿掉了有焦点的按钮（行上的悬停按钮、批量栏）：焦点回到列表，键盘接着用
+  function refocusList() {
+    var a = document.activeElement;
+    if (!a || a === document.body || !a.offsetParent) $("list").focus();
+  }
   function undoLast() {
     var u = lastUndo;
     if (!u) return toast("没有可以撤销的操作");
@@ -1026,14 +1064,15 @@
       runSearch();
     }, 120);
   }
+  var searching = null; // 还在路上的那次搜索：↓ / Enter 要等它回来，才知道第一条结果是谁
   function runSearch() {
-    if (!S.query) { S.searchIds = null; renderAll(); return; }
+    if (!S.query) { S.searchIds = null; searching = null; renderAll(); return; }
     var q = S.query;
-    return api("/api/search?q=" + encodeURIComponent(q)).then(function (r) {
+    return (searching = api("/api/search?q=" + encodeURIComponent(q)).then(function (r) {
       if (q !== S.query) return;
       S.searchIds = new Set(r.ids || []);
       renderAll();
-    });
+    }));
   }
   function clearSearch() { $("search").value = ""; clearTimeout(searchTimer); S.query = ""; runSearch(); }
   // 搜索框里 ↓ / Enter：打开第一条结果，焦点回到列表（还在防抖、没搜的先搜完）
@@ -1041,7 +1080,7 @@
     var go = function () { if (S.visible.length) select(S.visible[0], { scroll: true }); $("list").focus(); };
     var q = $("search").value.trim();
     clearTimeout(searchTimer);
-    if (q === S.query) return go();
+    if (q === S.query) return searching ? searching.then(go, go) : go(); // 防抖已过、结果还没回来：等它
     S.query = q;
     var p = runSearch();
     if (p) p.then(go); else go();
@@ -1269,7 +1308,10 @@
       e.preventDefault();
     }, { passive: false });
     $("projects").addEventListener("scroll", ptabFade);
-    $("queueBtn").addEventListener("click", function () { nextDecision(1); });
+    $("queueBtn").addEventListener("click", function (e) { // 鼠标点的：焦点交给列表，不然之后按 Enter（写补充说明）会再按一次队列条，跳到别的决定
+      nextDecision(1);
+      if (e.detail) $("list").focus();
+    });
     $("empty").addEventListener("click", function (e) { if (e.target.closest("#startBtn")) nextDecision(1); });
     $("doneBox").addEventListener("click", function (e) { if (e.target.closest("[data-next]")) nextDecision(1); });
     $("nav").addEventListener("click", function (e) {
@@ -1348,8 +1390,9 @@
       if (b.dataset.bulk === "clear") { S.multi.clear(); renderList(); }
       if (b.dataset.bulk === "read") {
         var was = ids.filter(isUnread);
+        dropUndo();
         act({ action: "read", ids: ids }).then(function () {
-          S.multi.clear(); toast("已标为已读 " + ids.length + " 条", was.length ? { undo: undoRead(was, false) } : null); return refreshNow();
+          S.multi.clear(); toast("已标为已读 " + ids.length + " 条", was.length ? { undo: undoRead(was, false) } : null); return refreshNow(true); // 勾选清了：长轮询先到了也要重画
         });
       }
       if (b.dataset.bulk === "resolve") doResolve(ids);
@@ -1370,6 +1413,7 @@
         var req = b.dataset.l === "read_all"
           ? { action: "read", ids: mine.filter(function (m) { return m.unread; }).map(function (m) { return m.id; }) }
           : { action: "archive", ids: mine.filter(function (m) { return !m.unread && !m.open; }).map(function (m) { return m.id; }) };
+        dropUndo();
         act(req).then(function (n) {
           var undo = !n ? null : b.dataset.l === "read_all" ? undoRead(req.ids, false) : undoArchive(req.ids, true, []);
           toast(b.dataset.l === "read_all" ? "已全部标为已读" : n ? "已归档 " + n + " 条" : "没有可以归档的", undo ? { undo: undo } : null);
@@ -1449,6 +1493,7 @@
   // 窄窗口（≤720px）阅读页铺满整个窗口：Esc / Backspace 回到列表
   function narrow() { return !!(window.matchMedia && matchMedia("(max-width: 720px)").matches); }
   function backToList() { S.current = null; renderList(); renderReader(); $("list").focus(); }
+  function findBox() { if (narrow() && S.current) backToList(); $("search").focus(); } // 窄窗口的阅读页盖住了搜索框：先回到列表，不然字打进看不见的框里
   // Esc 一次只退一层：菜单 → 窄窗口的阅读页 → 搜索 → 勾选 → 项目筛选
   function escLayer() {
     if (!$("popover").hidden) return closePopover();
@@ -1470,7 +1515,7 @@
     var typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName);
     var k = e.key;
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "p") { e.preventDefault(); pdf(); return; }
-    if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "f") { e.preventDefault(); $("search").focus(); $("search").select(); return; }
+    if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "f") { e.preventDefault(); findBox(); $("search").select(); return; }
     if ((e.ctrlKey || e.metaKey) && k === ",") { e.preventDefault(); openSettings(); return; }
     if ((e.ctrlKey || e.metaKey) && k === "Enter") { // 决定还没回复：焦点在哪都能提交
       var dd = currentDetail();
@@ -1490,7 +1535,7 @@
     if (k === "z" || k === "Z") { undoLast(); return; }
     if (k === "ArrowDown" || k === "j" || k === "J") { e.preventDefault(); move(1, e.shiftKey); return; }
     if (k === "ArrowUp" || k === "k" || k === "K") { e.preventDefault(); move(-1, e.shiftKey); return; }
-    if (k === "/") { e.preventDefault(); $("search").focus(); return; }
+    if (k === "/") { e.preventDefault(); findBox(); return; }
     if (k === "[" || k === "]") {
       var names = [""].concat(projectList().map(function (p) { return p.key; }));
       if (names.length > 2) {
@@ -1539,5 +1584,5 @@
     };
     if (!go()) refreshNow().then(go);
   };
-  window.deskTest = { setProject: setProject, S: S, select: select, setView: setView, pick: pick, submit: submit, copy: copy, markdownOf: markdownOf };
+  window.deskTest = { setProject: setProject, S: S, select: select, setView: setView, pick: pick, submit: submit, copy: copy, markdownOf: markdownOf, itemHtml: itemHtml };
 })();
