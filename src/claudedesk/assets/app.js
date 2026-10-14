@@ -1512,9 +1512,25 @@
     bs[j].focus();
   }
 
+  // 提示条不浮在内容上面：放进占位的槽里，出现时把旁边挤开一点，不盖住正文和决定卡片。
+  // 宽窗口、窄窗口的列表页：列表底栏；窄窗口在看一条（阅读页盖住了列表）：工具栏正下方，把正文往下推
+  function placeToasts() {
+    var box = $("toasts"), bar = $("toolbar"), foot = document.querySelector(".list-foot");
+    if (narrow() && $("app").classList.contains("reading")) { if (box.previousElementSibling !== bar) bar.parentNode.insertBefore(box, bar.nextSibling); }
+    else if (box.parentNode !== foot) foot.insertBefore(box, foot.firstChild);
+  }
+  var toastWatch = false;
+  function watchToasts() { // 第一次弹提示时挂上：窗口变宽变窄、阅读页开合，提示条跟着换地方（不用改开合阅读页的代码）
+    if (toastWatch) return;
+    toastWatch = true;
+    new MutationObserver(placeToasts).observe($("app"), { attributes: true, attributeFilter: ["class"] });
+    var mq = window.matchMedia && matchMedia("(max-width: 720px)");
+    if (mq && mq.addEventListener) mq.addEventListener("change", placeToasts);
+  }
+
   function toast(text, opts) {
     opts = opts || {};
-    var t = document.createElement("div");
+    var box = $("toasts"), t = document.createElement("div");
     t.className = "toast" + (opts.bad ? " bad" : "");
     t.innerHTML = "<span>" + esc(text) + "</span>";
     var gone = function () { t.remove(); if (lastUndo && lastUndo.el === t) lastUndo = null; };
@@ -1525,7 +1541,14 @@
       t.appendChild(b);
     }
     if (opts.undo) { if (lastUndo) lastUndo.el.remove(); lastUndo = { run: opts.undo, el: t }; } // 只留最新的一个撤销
-    $("toasts").appendChild(t);
+    watchToasts(); placeToasts();
+    // 最多两条，新的在下面：再来一条就挤掉最旧的；它带的撤销也跟着作废（提示条没了就不能撤销了）
+    while (box.children.length >= 2) {
+      var old = box.firstElementChild;
+      old.remove();
+      if (lastUndo && lastUndo.el === old) lastUndo = null;
+    }
+    box.appendChild(t);
     // 带撤销的留 8 秒；鼠标停在上面时暂停计时
     var ms = opts.undo ? 8000 : opts.run ? 6000 : 2600, h, t0;
     var arm = function () { t0 = Date.now(); h = setTimeout(gone, ms); };

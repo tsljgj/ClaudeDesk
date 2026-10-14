@@ -592,17 +592,29 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .modal p { margin: 0 0 18px; color: var(--ink-2); line-height: 1.6; font-size: 13.5px; white-space: pre-line; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 6px; }
 
-.toasts { position: fixed; z-index: 70; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+/* 提示条：不浮在内容上面，占一个槽（列表底栏；窄窗口在看一条时是工具栏下面一条），出现时把旁边挤开。
+   安静的状态行：浅灰底、正文色；出错才用红色。最多两条，新的在下面（app.js 管） */
+.toasts { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.toasts:empty { display: none; }
+.list-foot .toasts { flex: 1; }
+.list-foot:has(.toast) { padding: 6px 14px 8px 8px; } /* 和列表的行左右对齐（列表右边还有滚动条的位置） */
+.list-foot:has(.toast) > :not(.toasts) { display: none; } /* 提示在的时候版本号和更新入口先让开：列表最多少一两行 */
+.toolbar + .toasts { flex: none; padding: 0 16px 8px; } /* 窄窗口阅读页：工具栏正下方，把正文往下推 */
 .toast {
-  pointer-events: auto; display: flex; align-items: center; gap: 10px; max-width: 440px; padding: 8px 10px 8px 14px; border-radius: 9px;
-  background: var(--ink); color: var(--bg); font-size: 13px; box-shadow: var(--shadow);
+  display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 5px 5px 5px 12px; border-radius: 8px;
+  background: var(--sunken); color: var(--ink-2); font-size: 12.5px; line-height: 1.45;
+  animation: toast-in .16s ease-out;
 }
-.toast span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; } /* 长标题最多两行 */
-.toast.bad { background: var(--danger-btn); color: #fff; }
-.toast button { flex: none; white-space: nowrap; color: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; padding: 2px 4px; }
-@media (min-width: 721px) { /* 宽窗口：提示放右下角，不挡居中的正文和决定卡片 */
-  .toasts { left: auto; right: 20px; transform: none; align-items: flex-end; }
+.toast span { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; } /* 长标题最多两行 */
+.toast button {
+  flex: none; height: 24px; padding: 0 9px; border-radius: 6px; white-space: nowrap;
+  background: var(--bg); color: var(--ink); font-weight: 600; font-size: 12px; box-shadow: inset 0 0 0 1px var(--line-2);
 }
+.toast button:hover { box-shadow: inset 0 0 0 1px var(--ink-4); }
+.toast.bad { background: color-mix(in srgb, var(--danger-soft) 60%, var(--bg)); color: var(--danger); } /* 底色比 --danger-soft 再淡一点：浅色主题里红字也 ≥ 4.5:1 */
+.toast.bad button { color: var(--danger); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
 .kbd-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px 32px; } /* 快捷键分四组，宽时两栏 */
 .kbd-group h4 { margin: 0 0 8px; font-size: 12px; font-weight: 650; color: var(--ink-3); }
@@ -626,8 +638,6 @@ i[data-icon] svg { width: 100%; height: 100%; }
   .toolbar .back { display: inline-grid; }
   .article, .decide, .followup, .thread-ref { padding-left: 20px; padding-right: 20px; }
   .tab { padding: 0 7px; }
-  .toasts { left: 16px; right: 16px; transform: none; } /* 提示条用满宽度，不挤成一半 */
-  .toast { max-width: 100%; }
   .ptab-closed .lbl { display: none; } /* 窄窗口：只留图标和数 */
 }
 

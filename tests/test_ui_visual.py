@@ -263,7 +263,7 @@ def test_hit_area_hover_title_caret_and_toast_corner(env):
     item.locator('[data-act="archive"]').click()
     page.wait_for_selector(".toast")
     tb = page.locator(".toast").bounding_box()
-    assert tb["x"] > 650 and 1300 - (tb["x"] + tb["width"]) <= 24  # 宽窗口：右下角，不挡正文
+    assert tb["x"] + tb["width"] <= 360 and tb["y"] > 700  # 宽窗口：列表底栏（左下角），不挡右边的正文
     assert errors == []
 
 
