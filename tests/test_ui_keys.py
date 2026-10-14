@@ -164,15 +164,15 @@ def test_search_keys_stay_in_the_box_and_esc_is_layered(env):
     # a2 本来就是当前这条（上面 ↓ 选的）：要等搜完、焦点回到列表，不然下面的 x 会打进搜索框
     page.wait_for_function(f"deskTest.S.current === '{a2}' && document.activeElement.id === 'list'")
 
-    # 列表里 Esc 一次一层：搜索 → 勾选 → 项目
+    # 列表里 Esc 一次一层：搜索 → 勾选；项目选择不归 Esc 管（没有"全部项目"可退）
     page.keyboard.press("x")
     assert js(page, "deskTest.S.multi.size") == 1
     page.keyboard.press("Escape")
     assert js(page, "deskTest.S.query") == "" and js(page, "deskTest.S.multi.size") == 1
     page.keyboard.press("Escape")
-    assert js(page, "deskTest.S.multi.size") == 0 and js(page, "deskTest.S.projects.size") == 1
+    assert js(page, "deskTest.S.multi.size") == 0 and js(page, "Array.from(deskTest.S.projects)") == ["alpha"]
     page.keyboard.press("Escape")
-    assert js(page, "deskTest.S.projects.size") == 0
+    assert js(page, "Array.from(deskTest.S.projects)") == ["alpha"]
 
     # 菜单开着：Esc 只关菜单，勾选和项目都不动，焦点回到列表
     page.click('.ptab[data-project="alpha"]')
@@ -196,8 +196,8 @@ def test_search_tells_about_hits_hidden_by_view_or_project(env):
     page.click('[data-view="answer"]')
     page.fill("#search", "发布窗口")
     page.wait_for_selector(".search-more")
-    assert "「回答」里没有「发布窗口」" in page.inner_text(".list-empty")
-    assert "另有 1 条在其他视图或项目里" in page.inner_text(".search-more")
+    assert "「回答 · 未归类」里没有「发布窗口」" in page.inner_text(".list-empty")
+    assert "另有 1 条在其他视图里" in page.inner_text(".search-more")
     page.click(".search-more")
     page.wait_for_selector(f'.item[data-id="{a}"]')
     assert js(page, "deskTest.S.view") == "all" and page.locator(".search-more").count() == 0
@@ -244,6 +244,7 @@ def test_focus_is_visible_and_hidden_controls_are_not_tab_stops(env):
     mk("answer", "回答", "beta")
     store.poll()
     start(page, server)
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])  # 两个项目都选上：有分组标题
     page.wait_for_selector(".group-label .gmerge")
     assert js(page, "[...document.querySelectorAll('.item .cb, .item .act, .gmerge')].every(b => b.tabIndex === -1)")
     # Tab 走一圈：每一站都看得见，而且有焦点环
