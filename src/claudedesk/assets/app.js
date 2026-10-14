@@ -328,11 +328,12 @@
     var v = VIEWS.filter(function (x) { return x.id === S.view; })[0] || VIEWS[0];
     var items = viewItems();
     S.visible = items.map(function (m) { return m.id; });
-    var list = $("list");
+    var list = $("list"), more = searchMore();
     if (!items.length) {
       list.innerHTML = '<div class="list-empty"><b>' +
-        (S.query ? "没有找到「" + esc(S.query) + "」" : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + v.empty) + "</b>" +
-        (S.query ? "换个关键词试试" : v.emptySub) + "</div>";
+        (S.query ? (more ? "「" + v.label + (scopeLabel() ? " · " + esc(scopeLabel()) : "") + "」里没有「" + esc(S.query) + "」" : "没有找到「" + esc(S.query) + "」")
+          : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + v.empty) + "</b>" +
+        (S.query ? (more ? "" : "换个关键词试试") : v.emptySub) + "</div>";
     } else if (grouped()) {
       var html = "", last = null, counts = {};
       items.forEach(function (m) { var p = projectOf(m); counts[p] = (counts[p] || 0) + 1; });
@@ -343,7 +344,7 @@
             '<span class="pdot" style="background:' + pcolor(other ? OTHER : p) + '"></span>' +
             '<button class="gname" title="' + (other ? "只看「未归类」" : "只看 " + esc(p)) + '">' + esc(p) + "</button>" +
             '<span class="gcount">' + counts[p] + "</span>" + (other ? '<span class="gtag">未识别</span>' : "") +
-            '<button class="gmerge" title="归到某个项目下">归到…</button></div>';
+            '<button class="gmerge" tabindex="-1" title="归到某个项目下">归到…</button></div>';
           last = p;
         }
         html += itemHtml(m);
@@ -352,6 +353,7 @@
     } else {
       list.innerHTML = items.map(itemHtml).join("");
     }
+    if (more) list.insertAdjacentHTML("beforeend", more);
     renderBulk();
   }
 
@@ -369,13 +371,14 @@
     else if (m.kind === "decision" && m.answered) st = '<span class="st done">✓ ' + esc(m.choice || "已回复") + "</span> · ";
     else if (m.priority === "high" && m.unread) st = '<span class="st open">紧急</span> · ';
     if (!m.open && (S.view === "all" || S.view === "archive" || S.query) && m.kind !== "decision") st = '<span class="st kind">' + KIND[m.kind] + "</span> · " + st;
+    // 悬停按钮和勾选框不进 Tab 顺序（平时看不见；键盘有 U / R / E / Delete / X）
     var acts = '<span class="acts">' +
-      '<button class="act" data-act="read" title="' + (m.unread ? "标为已读" : "标为未读") + '（U）">' + icon(m.unread ? "mailOpen" : "mail") + "</button>" +
-      (m.open ? '<button class="act" data-act="resolve" title="标为已解决（R）">' + icon("check") + "</button>" : "") +
-      '<button class="act" data-act="archive" title="' + (m.archived ? "移出归档" : "归档") + '（E）">' + icon(m.archived ? "unarchive" : "archive") + "</button>" +
-      '<button class="act danger" data-act="delete" title="删除（Delete）">' + icon("trash") + "</button></span>";
+      '<button class="act" tabindex="-1" data-act="read" title="' + (m.unread ? "标为已读" : "标为未读") + '（U）">' + icon(m.unread ? "mailOpen" : "mail") + "</button>" +
+      (m.open ? '<button class="act" tabindex="-1" data-act="resolve" title="标为已解决（R）">' + icon("check") + "</button>" : "") +
+      '<button class="act" tabindex="-1" data-act="archive" title="' + (m.archived ? "移出归档" : "归档") + '（E）">' + icon(m.archived ? "unarchive" : "archive") + "</button>" +
+      '<button class="act danger" tabindex="-1" data-act="delete" title="删除（Delete）">' + icon("trash") + "</button></span>";
     return '<div class="' + cls + '" data-id="' + esc(m.id) + '" role="option" aria-selected="' + (m.id === S.current) + '">' +
-      '<button class="cb' + (checked ? " on" : "") + '" data-act="check" title="选择（X）" aria-label="选择"></button>' +
+      '<button class="cb' + (checked ? " on" : "") + '" tabindex="-1" data-act="check" title="选择（X）" aria-label="选择"></button>' +
       (m.unread || m.open ? '<span class="dot' + (hot ? " hot" : "") + '"></span>' : "") +
       '<div class="row1"><span class="t">' + esc(m.title) + '</span><span class="time">' + fmtTime(m.ts) + "</span>" + acts + "</div>" +
       '<div class="row2">' + st + (src ? '<span class="src">' + esc(src) + "</span>" + (m.snippet ? " · " : "") : "") + esc(m.snippet || "") + "</div></div>";
@@ -520,6 +523,24 @@
     var d = currentDetail();
     var ok = d && !d.response && (S.choice != null || (d.allow_text && $("replyText").value.trim()));
     $("submitBtn").disabled = !ok;
+    renderHint(d);
+  }
+  // 卡片底部的提示要说真话：还没选 → 按数字选；选了 → Ctrl+Enter 提交「这一项」
+  function renderHint(d) {
+    if (!d || d.response) return;
+    var n = (d.options || []).length, text = d.allow_text && $("replyText").value.trim();
+    $("decideHint").textContent = S.choice != null ? "Ctrl+Enter 提交「" + S.choice + "」" :
+      !n ? (text ? "Ctrl+Enter 提交" : "写好后 Ctrl+Enter 提交") :
+      "按 " + (n > 1 ? "1–" + Math.min(n, 9) : "1") + " 选择" + (text ? "，或 Ctrl+Enter 提交" : "");
+  }
+  function reduced() { return !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches); }
+  // 数字键选了之后：选中的那项不在屏幕上就滚过去，免得选在看不见的地方
+  function revealDecide() {
+    var o = $("options").querySelector(".opt.checked"), box = $("decide");
+    if (!o || box.hidden) return;
+    var r = o.getBoundingClientRect(), s = $("scroller").getBoundingClientRect();
+    if (r.top >= s.top && r.bottom <= s.bottom) return;
+    (box.offsetHeight <= s.height ? box : o).scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" });
   }
   function submit() {
     var d = currentDetail();
@@ -539,8 +560,7 @@
   function select(id, opts) {
     opts = opts || {};
     S.current = id;
-    if (!opts.keepMulti) S.multi.clear();
-    S.anchor = id;
+    if (!opts.keepMulti) { S.multi.clear(); S.anchor = id; } // 多选时锚点不动，Shift + ↑↓ 从它连选
     var m = S.byId[id];
     if (m && m.unread && !opts.noRead) {
       m.unread = false; // 乐观更新
@@ -554,12 +574,26 @@
     }
   }
   function cssEsc(s) { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
-  function move(delta) {
+  // ↑↓：有勾选时只挪光标，不丢勾选、不标已读；extend（Shift）= 从锚点连选到光标
+  var ext = null; // 这一轮 Shift 连选：{ base: 开始前已勾的, anchor, at: 光标, size }，往回按能缩回去
+  function move(delta, extend) {
     var ids = S.visible;
     if (!ids.length) return;
     var i = ids.indexOf(S.current);
     var j = i < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, i + delta));
-    select(ids[j], { scroll: true });
+    if (extend) {
+      if (!ext || ext.at !== S.current || ext.anchor !== S.anchor || ext.size !== S.multi.size) { // 新的一轮
+        if (!S.multi.size || !S.anchor || ids.indexOf(S.anchor) < 0) S.anchor = i < 0 ? ids[j] : ids[i];
+        ext = { base: new Set(S.multi), anchor: S.anchor };
+      }
+      var a = ids.indexOf(S.anchor);
+      S.multi = new Set(ext.base);
+      ids.slice(Math.min(a, j), Math.max(a, j) + 1).forEach(function (x) { S.multi.add(x); });
+      ext.at = ids[j]; ext.size = S.multi.size;
+    } else ext = null;
+    var keep = extend || S.multi.size > 0;
+    select(ids[j], keep ? { scroll: true, keepMulti: true, noRead: true } : { scroll: true });
+    if (extend) renderList(); // 勾选变了：列表要重画（select 以后可能只挪高亮）
   }
   function setView(v) {
     S.view = v;
@@ -588,6 +622,7 @@
   function doArchive(ids, on) {
     if (!ids.length) return;
     if (on == null) on = !ids.every(function (id) { return S.byId[id] && S.byId[id].archived; });
+    var unread = ids.filter(isUnread); // 归档会顺手标已读：撤销时把它们改回未读
     var go = function () {
       var next = S.view !== "all" || on ? nextAfter(ids) : S.current;
       act({ action: "archive", ids: ids, on: on }).then(function () {
@@ -595,9 +630,7 @@
         if (ids.indexOf(S.current) >= 0 && (S.view !== "archive" ? on : !on)) S.current = next;
         return refreshNow();
       }).then(function () {
-        toast((on ? "已归档 " : "已移出归档 ") + ids.length + " 条", on ? {
-          undo: function () { act({ action: "archive", ids: ids, on: false }).then(refreshNow); },
-        } : null);
+        toast((on ? "已归档 " : "已移出归档 ") + ids.length + " 条", { undo: undoArchive(ids, on, unread) });
       }).catch(function (e) { toast(e.message, { bad: true }); });
     };
     if (on && hasOpen(ids)) {
@@ -645,10 +678,41 @@
   function doToggleRead(ids) {
     if (!ids.length) return;
     var anyUnread = ids.some(function (id) { return S.byId[id] && S.byId[id].unread; });
+    var flip = ids.filter(function (id) { return S.byId[id] && !!S.byId[id].unread === anyUnread; }); // 真的会变的那些
     act({ action: "read", ids: ids, read: anyUnread }).then(function () {
-      if (ids.length > 1) { S.multi.clear(); toast((anyUnread ? "已标为已读 " : "已标为未读 ") + ids.length + " 条"); }
+      if (ids.length > 1) S.multi.clear();
+      toast((anyUnread ? "已标为已读" : "已标为未读") + (ids.length > 1 ? " " + ids.length + " 条" : ""), { undo: undoRead(flip, !anyUnread) });
       return refreshNow();
     });
+  }
+
+  // ---- 撤销（Z / Ctrl+Z 或提示条上的按钮）：把刚才的操作反过来做一遍
+  function isUnread(id) { return !!(S.byId[id] && S.byId[id].unread); }
+  function undoRead(ids, read) {
+    return function () { act({ action: "read", ids: ids, read: read }).then(refreshNow).catch(function (e) { toast(e.message, { bad: true }); }); };
+  }
+  function undoArchive(ids, on, unread) {
+    return function () {
+      act({ action: "archive", ids: ids, on: !on }).then(function () {
+        return on && unread.length ? act({ action: "read", ids: unread, read: false }) : null;
+      }).then(refreshNow).catch(function (e) { toast(e.message, { bad: true }); });
+    };
+  }
+  var lastUndo = null; // 最近一个还能撤销的操作 { run, el }：跟着它的提示条，提示条没了就不能撤销了
+  function undoLast() {
+    var u = lastUndo;
+    if (!u) return toast("没有可以撤销的操作");
+    lastUndo = null;
+    u.el.remove();
+    u.run();
+    toast("已撤销");
+  }
+  // R 键：会发给等待的会话、不能撤销，所以先确认；不是待决定的消息不做任何事
+  function askResolve(ids) {
+    var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; });
+    if (!open.length) return toast("只有待决定的消息可以标为已解决");
+    confirmBox(open.length > 1 ? "把 " + open.length + " 条标为已解决？" : "标为已解决？",
+      "等待中的会话会收到「已经处理好了」，然后继续往下走。", "标为已解决").then(function (ok) { if (ok) doResolve(open); });
   }
 
   // ---- 复制
@@ -747,7 +811,8 @@
 
   // ---------------------------------------------------------------- 搜索
   var searchTimer = null;
-  function onSearch() {
+  function onSearch(e) {
+    if (e && e.isComposing) return; // 输入法还在拼字（拼音）：等 compositionend 再搜
     clearTimeout(searchTimer);
     searchTimer = setTimeout(function () {
       S.query = $("search").value.trim();
@@ -757,11 +822,34 @@
   function runSearch() {
     if (!S.query) { S.searchIds = null; renderAll(); return; }
     var q = S.query;
-    api("/api/search?q=" + encodeURIComponent(q)).then(function (r) {
+    return api("/api/search?q=" + encodeURIComponent(q)).then(function (r) {
       if (q !== S.query) return;
       S.searchIds = new Set(r.ids || []);
       renderAll();
     });
+  }
+  function clearSearch() { $("search").value = ""; clearTimeout(searchTimer); S.query = ""; runSearch(); }
+  // 搜索框里 ↓ / Enter：打开第一条结果，焦点回到列表（还在防抖、没搜的先搜完）
+  function searchFirst() {
+    var go = function () { if (S.visible.length) select(S.visible[0], { scroll: true }); $("list").focus(); };
+    var q = $("search").value.trim();
+    clearTimeout(searchTimer);
+    if (q === S.query) return go();
+    S.query = q;
+    var p = runSearch();
+    if (p) p.then(go); else go();
+  }
+  // 搜到了、但被当前视图 / 项目挡住的条数：列表末尾给一行"另有 N 条…"，点了去能看到它们的地方
+  function searchMore() {
+    if (!S.searchIds) return "";
+    var shown = new Set(S.visible), live = 0, arch = 0;
+    S.searchIds.forEach(function (id) {
+      var m = S.byId[id];
+      if (m && !shown.has(id)) { if (m.archived) arch++; else live++; }
+    });
+    if (!live && !arch) return "";
+    return '<button class="search-more" data-more="' + (live ? "all" : "archive") + '">另有 ' + (live + arch) +
+      " 条在其他视图或项目里<span>" + (live ? "查看全部结果" : "去归档里看") + " →</span></button>";
   }
 
   // ---------------------------------------------------------------- 弹层 / 提示
@@ -782,49 +870,92 @@
     p.style.left = left + "px";
     p.style.top = top + "px";
     p.onclick = function (e) { onClick && onClick(e); };
+    var first = p.querySelector("button:not([disabled])");
+    if (first) first.focus(); // 焦点进菜单，键盘能直接 ↑↓ / 回车
   }
-  function closePopover() { $("popover").hidden = true; popOwner = null; }
+  function closePopover() {
+    var p = $("popover"), back = !p.hidden && p.contains(document.activeElement);
+    p.hidden = true;
+    if (back) (popOwner && popOwner.focus ? popOwner : $("list")).focus(); // 焦点还给打开它的按钮；右键菜单还给列表
+    popOwner = null;
+  }
+  // 菜单 / 设置里的键盘：↑↓ ←→ Home End 在按钮间移动，Esc 关掉，Tab 关掉并接着往下走
+  function popoverKey(e) {
+    var k = e.key, bs = Array.prototype.filter.call($("popover").querySelectorAll("button"), function (b) { return !b.disabled; });
+    var n = bs.length, i = bs.indexOf(document.activeElement), j = -1;
+    if (k === "Escape") { e.preventDefault(); e.stopPropagation(); closePopover(); return; }
+    if (k === "Tab") { closePopover(); return; }
+    if (!n) return;
+    if (k === "ArrowDown" || k === "ArrowRight") j = (i + 1) % n;
+    else if (k === "ArrowUp" || k === "ArrowLeft") j = i <= 0 ? n - 1 : i - 1;
+    else if (k === "Home") j = 0;
+    else if (k === "End") j = n - 1;
+    if (j < 0) return;
+    e.preventDefault(); e.stopPropagation();
+    bs[j].focus();
+  }
 
   function toast(text, opts) {
     opts = opts || {};
     var t = document.createElement("div");
     t.className = "toast" + (opts.bad ? " bad" : "");
     t.innerHTML = "<span>" + esc(text) + "</span>";
+    var gone = function () { t.remove(); if (lastUndo && lastUndo.el === t) lastUndo = null; };
     if (opts.undo || opts.run) {
       var b = document.createElement("button");
-      b.textContent = opts.undo ? "撤销" : opts.action;
-      b.onclick = function () { (opts.undo || opts.run)(); t.remove(); };
+      b.textContent = opts.undo ? "撤销（Z）" : opts.action;
+      b.onclick = function () { (opts.undo || opts.run)(); gone(); };
       t.appendChild(b);
     }
+    if (opts.undo) { if (lastUndo) lastUndo.el.remove(); lastUndo = { run: opts.undo, el: t }; } // 只留最新的一个撤销
     $("toasts").appendChild(t);
-    setTimeout(function () { t.remove(); }, opts.undo || opts.run ? 6000 : 2600);
+    // 带撤销的留 8 秒；鼠标停在上面时暂停计时
+    var ms = opts.undo ? 8000 : opts.run ? 6000 : 2600, h, t0;
+    var arm = function () { t0 = Date.now(); h = setTimeout(gone, ms); };
+    t.onmouseenter = function () { clearTimeout(h); ms = Math.max(1500, ms - (Date.now() - t0)); };
+    t.onmouseleave = arm;
+    arm();
   }
 
-  var modalResolve = null;
+  var modalResolve = null, modalBack = null;
   function confirmBox(title, text, okLabel, danger) {
     $("modalTitle").textContent = title;
     $("modalText").textContent = text;
     $("modalOk").textContent = okLabel || "确定";
     $("modalOk").className = "primary" + (danger ? " danger" : "");
+    modalBack = document.activeElement;
     $("modal").hidden = false;
     setTimeout(function () { $("modalOk").focus(); }, 0);
     return new Promise(function (res) { modalResolve = res; });
   }
-  function closeModal(v) { $("modal").hidden = true; if (modalResolve) modalResolve(v); modalResolve = null; }
+  function closeModal(v) {
+    $("modal").hidden = true; if (modalResolve) modalResolve(v); modalResolve = null;
+    if (modalBack && modalBack.focus && document.contains(modalBack)) modalBack.focus(); // 焦点回到打开对话框之前的地方
+    modalBack = null;
+  }
+  // 对话框里：Tab / Shift+Tab 只在对话框的按钮之间转
+  function trapModalTab(back) {
+    var bs = Array.prototype.filter.call($("modal").querySelectorAll("button"), function (b) { return !b.hidden; });
+    var i = bs.indexOf(document.activeElement), n = bs.length;
+    if (n) bs[i < 0 ? (back ? n - 1 : 0) : (i + (back ? n - 1 : 1)) % n].focus();
+  }
 
   // ---- 设置
   function seg(key, opts) {
     return '<div class="seg">' + opts.map(function (o) {
-      return '<button data-set="' + key + '" data-val="' + o[0] + '" class="' + (S.settings[key] === o[0] ? "on" : "") + '">' + o[1] + "</button>";
+      return '<button data-set="' + key + '" data-val="' + o[0] + '" class="' + (S.settings[key] === o[0] ? "on" : "") +
+        '" aria-pressed="' + (S.settings[key] === o[0]) + '">' + o[1] + "</button>";
     }).join("") + "</div>";
   }
   function settingsHtml() {
     var sw = { ember: "#F2541B", indigo: "#5146F5", jade: "#0E9F7A", rose: "#E62F6B" };
+    var swName = { ember: "珊瑚橙", indigo: "靛蓝", jade: "翡翠绿", rose: "玫红" };
     var h = '<div class="set-row"><div class="menu-label">外观</div>' +
       seg("theme", [["system", "跟随系统"], ["light", "浅色"], ["dark", "深色"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">强调色</div><div class="swatches">' +
       Object.keys(sw).map(function (k) {
-        return '<button class="swatch' + (S.settings.accent === k ? " on" : "") + '" data-set="accent" data-val="' + k + '" style="background:' + sw[k] + '" title="' + k + '"></button>';
+        return '<button class="swatch' + (S.settings.accent === k ? " on" : "") + '" data-set="accent" data-val="' + k + '" style="background:' + sw[k] +
+          '" title="' + swName[k] + '" aria-label="' + swName[k] + '" aria-pressed="' + (S.settings.accent === k) + '"></button>';
       }).join("") + "</div></div>" +
       '<div class="set-row"><div class="menu-label">正文字体</div>' + seg("font", [["sans", "无衬线 · 清晰"], ["serif", "衬线 · 书卷"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">字号</div>' + seg("size", [["s", "小"], ["m", "中"], ["l", "大"]]) + "</div>" +
@@ -846,6 +977,13 @@
     h += '<button class="menu-item" data-app="shortcuts">' + icon("keyboard") + "快捷键<span class=\"sub\">?</span></button>";
     return h;
   }
+  // 重画设置面板；焦点留在同一个位置的按钮上（键盘改设置时不丢焦点）
+  function repaintSettings() {
+    var p = $("popover"), i = Array.prototype.indexOf.call(p.querySelectorAll("button"), document.activeElement);
+    p.innerHTML = settingsHtml();
+    var bs = p.querySelectorAll("button");
+    if (i >= 0 && bs.length) bs[Math.min(i, bs.length - 1)].focus();
+  }
   function openSettings() {
     openPopover($("settingsBtn"), settingsHtml(), "settings", function (e) {
       var b = e.target.closest("button");
@@ -855,13 +993,13 @@
         var s = Object.assign({}, S.settings, vals);
         applySettings(s);
         act({ action: "settings", values: vals }).catch(function () {});
-        $("popover").innerHTML = settingsHtml();
+        repaintSettings();
         if (S.current) { S.shownKey = null; renderReader(); } // 字号变了，公式重排
         return;
       }
       if (b.dataset.unalias) {
         act({ action: "alias", from: b.dataset.unalias, to: "" }).then(function () { return refreshNow(); })
-          .then(function () { $("popover").innerHTML = settingsHtml(); });
+          .then(function () { repaintSettings(); });
         return;
       }
       var a = b.dataset.app;
@@ -869,7 +1007,7 @@
       if (a === "autostart" || a === "auto_update") {
         act({ action: a, on: !S.meta[a] }).then(function (r) {
           S.meta[a] = !!r;
-          $("popover").innerHTML = settingsHtml();
+          repaintSettings();
         }).catch(function (e2) { toast(e2.message, { bad: true }); });
         return;
       }
@@ -883,9 +1021,12 @@
     });
   }
   function showShortcuts() {
-    var rows = [["↑ ↓ / J K", "上一条 / 下一条"], ["1 – 9", "选择第 N 个选项"], ["Ctrl + Enter", "提交回复"],
-      ["E", "归档 / 移出归档"], ["Delete", "删除"], ["U", "标为已读 / 未读"], ["R", "标为已解决"], ["X", "勾选当前这条"], ["C", "复制 Markdown"],
-      ["Ctrl + P", "导出 PDF"], ["/", "搜索"], ["[ ]", "切换项目（顶部标签）"], ["Ctrl + 点标签", "同时看几个项目"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"], ["Esc", "取消选择 / 关闭"]];
+    var rows = [["↑ ↓ / J K", "上一条 / 下一条（有勾选时不会丢）"], ["Shift + ↑ ↓ / J K", "连续勾选"], ["1 – 9", "选择第 N 个选项"],
+      ["Ctrl + Enter", "提交决定（焦点在哪都行）"], ["Enter", "写补充说明；焦点在按钮上时按下按钮"],
+      ["E", "归档 / 移出归档"], ["Delete", "删除"], ["U", "标为已读 / 未读"], ["R", "标为已解决（先确认）"], ["Z / Ctrl + Z", "撤销刚才的归档 / 已读"],
+      ["X", "勾选当前这条"], ["C", "复制 Markdown"],
+      ["Ctrl + P", "导出 PDF"], ["/", "搜索（↓ / Enter 打开第一条）"], ["[ ]", "切换项目（顶部标签）"], ["Ctrl + 点标签", "同时看几个项目"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"],
+      ["Ctrl + ,", "设置"], ["Esc", "一次退一层：菜单 → 搜索 → 勾选 → 项目"], ["Esc / Backspace", "窄窗口：回到列表"]];
     $("modalTitle").textContent = "快捷键";
     $("modalText").innerHTML = '<span class="kbd-table">' + rows.map(function (r) {
       return "<span>" + r[0].split(" ").map(function (k) { return /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
@@ -893,7 +1034,9 @@
     $("modalOk").textContent = "好的";
     $("modalOk").className = "primary";
     $("modalCancel").hidden = true;
+    modalBack = document.activeElement;
     $("modal").hidden = false;
+    setTimeout(function () { $("modalOk").focus(); }, 0);
     modalResolve = function () { $("modalCancel").hidden = false; };
   }
 
@@ -915,6 +1058,8 @@
       if (b) setView(b.dataset.view);
     });
     $("list").addEventListener("click", function (e) {
+      var more = e.target.closest("[data-more]"); // "另有 N 条在其他视图或项目里"
+      if (more) { S.projects = new Set(); setView(more.dataset.more); applyProjects(); return $("list").focus(); }
       var gl = e.target.closest(".group-label");
       if (gl) {
         if (e.target.closest(".gmerge")) {
@@ -982,9 +1127,12 @@
         renderList();
       }
       if (b.dataset.bulk === "clear") { S.multi.clear(); renderList(); }
-      if (b.dataset.bulk === "read") act({ action: "read", ids: ids }).then(function () {
-        S.multi.clear(); toast("已标为已读 " + ids.length + " 条"); return refreshNow();
-      });
+      if (b.dataset.bulk === "read") {
+        var was = ids.filter(isUnread);
+        act({ action: "read", ids: ids }).then(function () {
+          S.multi.clear(); toast("已标为已读 " + ids.length + " 条", was.length ? { undo: undoRead(was, false) } : null); return refreshNow();
+        });
+      }
       if (b.dataset.bulk === "resolve") doResolve(ids);
       if (b.dataset.bulk === "archive") doArchive(ids);
       if (b.dataset.bulk === "delete") doDelete(ids);
@@ -1004,24 +1152,27 @@
           ? { action: "read", ids: mine.filter(function (m) { return m.unread; }).map(function (m) { return m.id; }) }
           : { action: "archive", ids: mine.filter(function (m) { return !m.unread && !m.open; }).map(function (m) { return m.id; }) };
         act(req).then(function (n) {
-          toast(b.dataset.l === "read_all" ? "已全部标为已读" : n ? "已归档 " + n + " 条" : "没有可以归档的");
+          var undo = !n ? null : b.dataset.l === "read_all" ? undoRead(req.ids, false) : undoArchive(req.ids, true, []);
+          toast(b.dataset.l === "read_all" ? "已全部标为已读" : n ? "已归档 " + n + " 条" : "没有可以归档的", undo ? { undo: undo } : null);
           refreshNow();
         });
       });
     });
     $("search").addEventListener("input", onSearch);
+    $("search").addEventListener("compositionend", onSearch); // 输入法选完字才搜
     $("search").addEventListener("keydown", function (e) {
-      if (e.key === "Escape") { $("search").value = ""; onSearch(); $("search").blur(); }
-      if (e.key === "ArrowDown" || e.key === "Enter") { e.preventDefault(); $("search").blur(); if (!S.current) move(0); }
+      if (e.isComposing || e.keyCode === 229) return; // 输入法拼字时的回车 / Esc 是给输入法的
+      var k = e.key;
+      if (k !== "Escape" && k !== "ArrowDown" && k !== "Enter") return;
+      e.preventDefault(); e.stopPropagation(); // 自己处理完，别再触发全局快捷键
+      if (k === "Escape") { if ($("search").value) clearSearch(); else $("list").focus(); return; } // 先清字，再离开
+      searchFirst();
     });
     $("options").addEventListener("click", function (e) {
       var b = e.target.closest(".opt");
       if (b && !b.disabled) pick(+b.dataset.idx);
     });
     $("replyText").addEventListener("input", updateSubmit);
-    $("replyText").addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
-    });
     $("submitBtn").addEventListener("click", submit);
     $("resolveBtn").addEventListener("click", function () { var d = currentDetail(); if (d) doResolve([d.id]); });
     $("copyBtn").addEventListener("click", function () { copy("md"); });
@@ -1045,7 +1196,7 @@
     $("modalCancel").addEventListener("click", function () { closeModal(false); });
     $("modal").addEventListener("click", function (e) { if (e.target === $("modal")) closeModal(false); });
     $("eyebrow").addEventListener("click", function (e) {
-      if (e.target.closest("#jumpBtn")) $("decide").scrollIntoView({ behavior: "smooth", block: "start" });
+      if (e.target.closest("#jumpBtn")) $("decide").scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" });
     });
     $("scroller").addEventListener("scroll", function () {
       $("toolbar").classList.toggle("scrolled", $("scroller").scrollTop > 4);
@@ -1064,6 +1215,7 @@
       if (!p.hidden && !p.contains(e.target) && !(popOwner && popOwner.contains && popOwner.contains(e.target))) closePopover();
     });
     window.addEventListener("resize", closePopover);
+    $("popover").addEventListener("keydown", popoverKey);
     document.addEventListener("keydown", onKey);
     window.addEventListener("beforeprint", function () { var d = currentDetail(); if (d && !$("printRoot").firstChild) preparePrint(d); });
     window.addEventListener("afterprint", function () { $("printRoot").innerHTML = ""; });
@@ -1074,31 +1226,50 @@
     renderList();
   }
 
+  // 窄窗口（≤720px）阅读页铺满整个窗口：Esc / Backspace 回到列表
+  function narrow() { return !!(window.matchMedia && matchMedia("(max-width: 720px)").matches); }
+  function backToList() { S.current = null; renderList(); renderReader(); $("list").focus(); }
+  // Esc 一次只退一层：菜单 → 窄窗口的阅读页 → 搜索 → 勾选 → 项目筛选
+  function escLayer() {
+    if (!$("popover").hidden) return closePopover();
+    if (narrow() && S.current) return backToList();
+    if (S.query || $("search").value) return clearSearch();
+    if (S.multi.size) { S.multi.clear(); return renderList(); }
+    if (S.projects.size) { S.projects = new Set(); applyProjects(); }
+  }
+
   function onKey(e) {
+    if (e.isComposing || e.keyCode === 229) return; // 输入法正在拼字
     if (!$("modal").hidden) {
+      var onBtn = $("modal").contains(document.activeElement) && document.activeElement.tagName === "BUTTON";
       if (e.key === "Escape") closeModal(false);
-      if (e.key === "Enter") { e.preventDefault(); closeModal(true); }
+      else if (e.key === "Tab") { e.preventDefault(); trapModalTab(e.shiftKey); }
+      else if (e.key === "Enter" && !onBtn) { e.preventDefault(); closeModal(true); } // 焦点在按钮上：回车按的就是那个按钮
       return;
     }
     var typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName);
     var k = e.key;
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "p") { e.preventDefault(); pdf(); return; }
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "f") { e.preventDefault(); $("search").focus(); $("search").select(); return; }
+    if ((e.ctrlKey || e.metaKey) && k === ",") { e.preventDefault(); openSettings(); return; }
+    if ((e.ctrlKey || e.metaKey) && k === "Enter") { // 决定还没回复：焦点在哪都能提交
+      var dd = currentDetail();
+      if (dd && dd.kind === "decision" && !dd.response) { e.preventDefault(); submit(); }
+      return;
+    }
     if (typing) return;
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "a") { e.preventDefault(); selectAll(); return; }
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "c") {
       if (!String(window.getSelection())) { e.preventDefault(); copy("md"); }
       return;
     }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && k.toLowerCase() === "z") { e.preventDefault(); undoLast(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (k === "Escape") {
-      closePopover();
-      if (S.multi.size) { S.multi.clear(); renderList(); }
-      else if (S.projects.size) { S.projects = new Set(); applyProjects(); }
-      return;
-    }
-    if (k === "ArrowDown" || k === "j") { e.preventDefault(); move(1); return; }
-    if (k === "ArrowUp" || k === "k") { e.preventDefault(); move(-1); return; }
+    if (k === "Escape") { escLayer(); return; }
+    if (k === "Backspace" && narrow() && S.current) { e.preventDefault(); backToList(); return; }
+    if (k === "z" || k === "Z") { undoLast(); return; }
+    if (k === "ArrowDown" || k === "j" || k === "J") { e.preventDefault(); move(1, e.shiftKey); return; }
+    if (k === "ArrowUp" || k === "k" || k === "K") { e.preventDefault(); move(-1, e.shiftKey); return; }
     if (k === "/") { e.preventDefault(); $("search").focus(); return; }
     if (k === "[" || k === "]") {
       var names = [""].concat(projectList().map(function (p) { return p.key; }));
@@ -1116,11 +1287,12 @@
     if (k === "e" || k === "E") { doArchive(targets()); return; }
     if (k === "Delete" || k === "#") { doDelete(targets()); return; }
     if (k === "u" || k === "U") { doToggleRead(targets()); return; }
-    if (k === "r" || k === "R") { doResolve(targets()); return; }
+    if (k === "r" || k === "R") { askResolve(targets()); return; }
     if ((k === "x" || k === "X") && S.current) { toggleCheck(S.current, e.shiftKey); return; }
     if (k === "c" || k === "C") { copy("md"); return; }
-    if (/^[1-9]$/.test(k)) { pick(+k - 1); return; }
+    if (/^[1-9]$/.test(k)) { pick(+k - 1); revealDecide(); return; }
     if (k === "Enter") {
+      if (document.activeElement && document.activeElement.closest && document.activeElement.closest("button")) return; // 让按钮自己响应
       var d = currentDetail();
       if (d && d.kind === "decision" && !d.response && d.allow_text) { e.preventDefault(); $("replyText").focus(); }
     }

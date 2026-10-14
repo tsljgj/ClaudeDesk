@@ -71,7 +71,7 @@
     </div>
     <div class="detail" id="detail" hidden>
       <div class="toolbar" id="toolbar">
-        <button class="icon-btn back" id="backBtn" title="返回列表"><i data-icon="chevronLeft"></i></button>
+        <button class="icon-btn back" id="backBtn" title="返回列表（Esc）"><i data-icon="chevronLeft"></i></button>
         <div class="grow"></div>
         <button class="icon-btn" id="copyBtn" title="复制 Markdown（C）"><i data-icon="copy"></i></button>
         <button class="icon-btn caret" id="copyMenuBtn" title="更多复制方式"><i data-icon="chevronDown"></i></button>
@@ -93,7 +93,7 @@
           <div class="options" id="options"></div>
           <textarea id="replyText" rows="2" placeholder="补充说明（可选）"></textarea>
           <div class="decide-foot" id="decideFoot">
-            <span class="hint">1–9 选择　Ctrl+Enter 提交</span>
+            <span class="hint" id="decideHint">1–9 选择　Ctrl+Enter 提交</span>
             <div class="grow"></div>
             <button class="ghost" id="resolveBtn" title="不选选项，直接告诉会话这件事已经处理好了（R）">标为已解决</button>
             <button class="primary" id="submitBtn" disabled>提交</button>
