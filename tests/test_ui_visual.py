@@ -472,3 +472,24 @@ def test_decision_card_states_stay_distinct(env):
     page.click("#jumpBtn")
     page.wait_for_selector("#jumpBtn", state="hidden")
     assert errors == []
+
+
+def test_reading_width_setting(env):
+    """正文宽度：默认"宽"（920px、左右 32px），设置里可以换成"适中"（720px）或"铺满"；决定卡片跟着一起变。"""
+    d, store, server, page, errors = env
+    a = post(d, kind="decision", title="宽度", body="正文" * 400, options=["A", "B"])
+    store.poll()
+    page.set_viewport_size({"width": 1600, "height": 900})
+    page.goto(server.url)
+    page.click(f'.item[data-id="{a}"]')
+    page.wait_for_selector("#detail:not([hidden]) .opt")
+    css = lambda sel, prop: page.locator(sel).evaluate(f"e => getComputedStyle(e).{prop}")  # noqa: E731
+    assert css("#article", "maxWidth") == "920px" and css("#article", "paddingLeft") == "32px"
+    assert css("#decide", "maxWidth") == "920px"
+    page.click("#settingsBtn")
+    page.click('[data-set="width"][data-val="full"]')
+    assert css("#article", "maxWidth") == "none" and css("#decide", "maxWidth") == "none"
+    page.click('[data-set="width"][data-val="m"]')
+    assert css("#article", "maxWidth") == "720px" and css("#article", "paddingLeft") == "48px"
+    assert server.settings()["width"] == "m"
+    assert errors == []

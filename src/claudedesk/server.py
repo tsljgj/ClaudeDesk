@@ -29,8 +29,9 @@ SETTINGS = {  # 界面设置：键 -> 允许的值
     "font": ("sans", "serif"),
     "size": ("s", "m", "l"),
     "density": ("cozy", "compact"),
+    "width": ("m", "l", "full"),
 }
-SETTING_DEFAULTS = {"theme": "system", "accent": "ember", "font": "sans", "size": "m", "density": "cozy"}
+SETTING_DEFAULTS = {"theme": "system", "accent": "ember", "font": "sans", "size": "m", "density": "cozy", "width": "l"}
 GONE = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)  # 客户端自己断开了（长轮询被放弃、页面刷新）
 log = logging.getLogger("claudedesk")
 

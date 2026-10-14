@@ -168,7 +168,7 @@
     S.settings = s;
     var d = document.documentElement;
     d.dataset.theme = s.theme; d.dataset.accent = s.accent; d.dataset.font = s.font;
-    d.dataset.size = s.size; d.dataset.density = s.density;
+    d.dataset.size = s.size; d.dataset.density = s.density; d.dataset.width = s.width || "l";
   }
 
   // ---------------------------------------------------------------- 列表筛选
@@ -1507,6 +1507,7 @@
       }).join("") + "</div></div>" +
       '<div class="set-row"><div class="menu-label">正文字体</div>' + seg("font", [["sans", "无衬线 · 清晰"], ["serif", "衬线 · 书卷"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">字号</div>' + seg("size", [["s", "小"], ["m", "中"], ["l", "大"]]) + "</div>" +
+      '<div class="set-row"><div class="menu-label">正文宽度</div>' + seg("width", [["m", "适中"], ["l", "宽"], ["full", "铺满"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">列表密度</div>' + seg("density", [["cozy", "舒展"], ["compact", "紧凑"]]) + "</div>";
     if (BOOT.app) {
       var m = S.meta;
