@@ -265,17 +265,19 @@ def test_projects_are_separated(env):
     page.wait_for_selector(".ptab")
     names = [t.split("\n")[0] for t in page.locator(".ptab .pname").all_inner_texts()]
     assert names == ["acme-data-pipeline", "webapp", "未归类"]  # 标签就是仓库名，按名字排；没认出来的放最后
-    # 全部：按项目分组，同一项目挨在一起；对不上的在最后、标着"未识别"
+    # 全部：按项目分组，同一项目挨在一起；对不上的在最后（灰点，属于"未归类"）
     assert page.locator(".group-label .gname").all_inner_texts() == ["acme-data-pipeline", "webapp", "随手记"]
     order = page.evaluate("deskTest.S.visible")
     assert order[0] == c and set(order[1:3]) == {a, b} and order[3] == o
-    assert page.locator(".group-label.other .gtag").count() == 1
-    # 点标签：只看它；视图计数跟着变；再点一次取消
+    assert page.locator(".group-label.other").count() == 1
+    # 点标签：只看它；视图计数跟着变；再点一次不变，点"全部项目"回到全部
     page.click('.ptab[data-project="acme-data-pipeline"]')
     page.wait_for_function("() => document.querySelectorAll('.item').length === 1")
     assert page.inner_text('.tab[data-view="decide"]').strip() == "决定"
     assert page.locator(".group-label").count() == 0
     page.click('.ptab[data-project="acme-data-pipeline"]')
+    assert page.locator(".item").count() == 1
+    page.click('.ptab.all')
     page.wait_for_function("() => document.querySelectorAll('.item').length === 4")
     # Ctrl + 点：同时看两个
     page.click('.ptab[data-project="acme-data-pipeline"]')
@@ -287,8 +289,8 @@ def test_projects_are_separated(env):
     page.click('[data-l="read_all"]')
     page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{c}\"].unread')")
     assert store.is_unread(store.msgs[a]) and not store.is_unread(store.msgs[o])
-    # 把"未识别"的来源归到 webapp（先点 × 取消选择，回到全部）
-    page.click('.ptab-clear')
+    # 把"未归类"的来源归到 webapp（先点"全部项目"，回到全部）
+    page.click('.ptab.all')
     page.locator('.group-label.other .gmerge').click()
     page.click('.popover [data-to="webapp"]')
     page.wait_for_function("() => !document.querySelector('.ptab[data-project=\"__other__\"]')")
@@ -324,7 +326,7 @@ def test_nothing_moves_when_clicking(env):
     page.click('.ptab[data-project="webapp"]')
     assert page.evaluate(boxes, ".tab") == tabs0
     assert page.evaluate(boxes, ".ptab") == ptabs0
-    page.click('.ptab[data-project="webapp"]')
+    page.click('.ptab.all')
     page.click('.tab[data-view="all"]')
 
     # 读一条（未读 -> 已读、计数变少）：标签和列表项位置不变，标题宽度不变

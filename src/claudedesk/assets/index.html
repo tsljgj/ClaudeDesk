@@ -57,6 +57,7 @@
           <button class="icon-btn" data-bulk="clear" title="取消选择（Esc）"><i data-icon="x"></i></button>
         </div>
       </div>
+      <button class="queue none" id="queueBtn" disabled><span>没有待决定的事</span></button>
     </header>
     <div class="list" id="list" tabindex="0" role="listbox" aria-label="消息列表"></div>
     <footer class="list-foot">
@@ -117,7 +118,7 @@
     </div>
   </div>
 </div>
-<div class="toasts" id="toasts"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <div id="printRoot" class="print-root"></div>
 
 <script src="assets/vendor/markdown-it.min.js"></script>

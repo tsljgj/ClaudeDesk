@@ -141,7 +141,7 @@
   function projectOf(m) { return m.project || "unknown"; }
   function tabKey(m) { return m.project_kind === "other" ? OTHER : projectOf(m); }
   function pcolor(name) {
-    if (name === OTHER) return "var(--ink-4)";
+    if (name === OTHER) return "var(--ink-5)";
     if (!(name in pcolorMap)) { // 新项目：给第一个还没人用的颜色，记下来，以后不变
       var used = {};
       Object.keys(pcolorMap).forEach(function (k) { used[pcolorMap[k]] = 1; });
@@ -217,11 +217,10 @@
     return c;
   }
 
-  // 点标签：只看这个；再点一次（它是唯一选中的）= 取消，回到全部。Ctrl / Shift + 点 = 加选 / 减选
+  // 点标签：只看这个（再点一次不变）；点"全部项目"回到全部。Ctrl / Shift + 点 = 加选 / 减选
   function clickTab(key, multi) {
     if (!key) S.projects = new Set();
     else if (multi) { if (S.projects.has(key)) S.projects.delete(key); else S.projects.add(key); }
-    else if (S.projects.size === 1 && S.projects.has(key)) S.projects = new Set();
     else S.projects = new Set([key]);
     applyProjects();
   }
@@ -250,6 +249,72 @@
     return d.getFullYear() + "/" + (d.getMonth() + 1) + "/" + d.getDate();
   }
   function pad(n) { return n < 10 ? "0" + n : "" + n; }
+  // 等了多久：短的给列表时间格（"等 25 分"），长的放句子里（"25 分钟"）
+  function waitMin(ts) { return Math.max(0, Math.floor((Date.now() - new Date(ts)) / 60000)); }
+  function fmtWait(ts, short) {
+    var n = waitMin(ts);
+    if (n < 60) return Math.max(1, n) + (short ? " 分" : " 分钟");
+    return n < 1440 ? Math.floor(n / 60) + " 小时" : Math.floor(n / 1440) + " 天";
+  }
+  function fmtRel(ts) { // 阅读区顶上的日期："今天 22:59 · 25 分钟前" / "昨天 18:02" / "10月3日 18:02"
+    var d = new Date(ts), now = new Date(), hm = pad(d.getHours()) + ":" + pad(d.getMinutes()), n = waitMin(ts);
+    var yest = new Date(now); yest.setDate(now.getDate() - 1);
+    if (dayKey(d) === dayKey(now)) return "今天 " + hm + " · " + (n < 1 ? "刚刚" : n < 60 ? n + " 分钟前" : Math.floor(n / 60) + " 小时前");
+    if (dayKey(d) === dayKey(yest)) return "昨天 " + hm;
+    return (d.getFullYear() === now.getFullYear() ? "" : d.getFullYear() + "年") + (d.getMonth() + 1) + "月" + d.getDate() + "日 " + hm;
+  }
+  function timeCell(m) { // 待决定的那行显示等了多久（≥ 30 分钟变强调色），别的显示时间；悬停看完整日期
+    if (!m.open) return '<span class="time">' + fmtTime(m.ts) + "</span>";
+    return '<span class="time wait' + (waitMin(m.ts) >= 30 ? " long" : "") + '" data-ts="' + esc(m.ts) + '" title="' + fmtTime(m.ts, true) + '">等 ' + fmtWait(m.ts, true) + "</span>";
+  }
+
+  // ---- 待你决定的队列（当前项目范围内）：紧急的在前，再按等得最久的在前。列表本身不重排
+  function queue() {
+    return S.msgs.filter(function (m) { return m.open && !m.archived && inScope(m); }).sort(function (a, b) {
+      return (b.priority === "high") - (a.priority === "high") || new Date(a.ts) - new Date(b.ts);
+    });
+  }
+  function queueText(q) {
+    var urgent = q.filter(function (m) { return m.priority === "high"; }).length;
+    var oldest = q.reduce(function (a, m) { return new Date(m.ts) < new Date(a.ts) ? m : a; });
+    return q.length + " 条待你决定" + (urgent ? " · " + urgent + " 条紧急" : "") + " · 最久已等 " + fmtWait(oldest.ts);
+  }
+  function renderQueue() {
+    var b = $("queueBtn"), q = queue();
+    b.hidden = S.view !== "all" && S.view !== "decide";
+    b.disabled = !q.length;
+    b.classList.toggle("none", !q.length);
+    b.title = q.length ? "跳到下一条待决定（N / Shift+N 上一条）：紧急的在前，再按等得久的" : "";
+    b.innerHTML = q.length ? "<span>" + queueText(q) + "</span><kbd>N</kbd>" : "<span>没有待决定的事</span>";
+  }
+  function renderEmpty() { // 阅读区什么都没打开时
+    var q = queue();
+    $("empty").innerHTML = '<div class="empty-box">' + (q.length
+      ? '<p class="empty-lead">' + queueText(q) + '</p><button class="primary" id="startBtn" title="按 N 也行">开始处理（N）</button>'
+      : '<p class="empty-lead">都处理完了</p><p class="empty-sub"><kbd>↑</kbd> <kbd>↓</kbd> 切换　<kbd>?</kbd> 快捷键</p>') + "</div>";
+  }
+  function nextDecision(dir) { // N / Shift+N：下一条 / 上一条待决定，到头绕回来
+    var q = queue();
+    if (!q.length) { toast("没有待决定的事"); return; }
+    var i = q.map(function (m) { return m.id; }).indexOf(S.current);
+    var m = q[i < 0 ? (dir > 0 ? 0 : q.length - 1) : (i + dir + q.length) % q.length];
+    if (S.query && !(S.searchIds && S.searchIds.has(m.id))) { $("search").value = ""; S.query = ""; S.searchIds = null; renderAll(); }
+    if (!inView(m, S.view)) setView("decide");
+    select(m.id, { scroll: true });
+  }
+  function tickWaits() { // 每分钟走一次：只改等待时间、队列条和阅读区那几行字，不重画列表
+    document.querySelectorAll(".item .time.wait[data-ts]").forEach(function (el) {
+      var ts = el.getAttribute("data-ts");
+      el.textContent = "等 " + fmtWait(ts, true);
+      el.classList.toggle("long", waitMin(ts) >= 30);
+    });
+    renderQueue();
+    var m = S.current && S.byId[S.current], d = currentDetail(), ds = $("eyebrow").querySelector(":scope > span[title]");
+    if (!m) return renderEmpty();
+    if (ds) ds.textContent = fmtRel(m.ts); // 只换日期那几个字，不重画（焦点不丢）
+    if (d && d.kind === "decision" && !d.response) $("decideState").textContent = waitState(d);
+  }
+  function waitState(d) { return "会话已等待 " + fmtWait(d.ts) + " · 提交后立即继续"; }
 
   // ---------------------------------------------------------------- 渲染
   function renderAll() {
@@ -261,13 +326,15 @@
 
   function renderNav() {
     var c = S.counts, sc = scopeCounts();
-    var n = { decide: [sc.open, true], answer: [sc.unread_answers], all: [sc.unread], archive: [0] };
+    var n = { decide: [sc.open, true, " 条待你决定"], answer: [sc.unread_answers, false, " 条未读回答"], all: [sc.unread, false, " 条未读"], archive: [0] };
     $("nav").innerHTML = VIEWS.map(function (v) {
-      var k = n[v.id];
-      return '<button class="tab' + (S.view === v.id ? " active" : "") + '" data-view="' + v.id + '">' + v.label +
+      var k = n[v.id], tip = k[2] ? k[0] + k[2] : ""; // 数字是什么意思写在悬停提示里
+      return '<button class="tab' + (S.view === v.id ? " active" : "") + '" data-view="' + v.id + '"' +
+        (tip ? ' title="' + tip + '" aria-label="' + v.label + "，" + tip + '"' : "") + ">" + v.label +
         '<span class="n' + (k[0] && k[1] ? " hot" : "") + '">' + (k[0] || "") + "</span></button>";
     }).join("");
     renderProjects();
+    renderQueue();
     var t = [];
     if (c.open) t.push(c.open + " 待决定");
     if (c.unread) t.push(c.unread + " 未读");
@@ -283,21 +350,28 @@
     var tab = function (p) {
       var on = S.projects.has(p.key);
       var badge = '<span class="n' + (p.open ? " hot" : "") + '">' + (p.open || p.unread || "") + "</span>";
-      var tip = (p.key === OTHER ? "认不出是哪个仓库的旧消息。点分组标题旁的「归到…」可以归到某个仓库" : p.name +
+      var tip = (p.key === OTHER ? "没认出属于哪个仓库的旧消息 · 右键或点「归到…」可以归到某个仓库" : p.name +
         (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "")) +
-        "\n点：只看它，再点一次取消（都不选 = 看全部）· Ctrl/Shift + 点：多选" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
+        "\n点：只看它 · Ctrl/Shift + 点：多选" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
       return '<button class="ptab' + (on ? " on" : "") + (p.key === OTHER ? " other" : "") + '" data-project="' + esc(p.key) +
         '" role="tab" aria-selected="' + on + '" title="' + esc(tip) + '">' +
         '<span class="pdot" style="background:' + pcolor(p.key) + '"></span>' +
         '<span class="pname">' + esc(p.name) + "</span>" + badge + "</button>";
     };
-    var box = $("projects");
-    box.innerHTML = ps.map(tab).join("") +
-      (S.projects.size ? '<button class="ptab-clear" data-project="" title="取消选择，看全部仓库（Esc）">' + icon("x") + "</button>" : "");
+    var box = $("projects"), open = ps.reduce(function (s, p) { return s + p.open; }, 0), all = !S.projects.size;
+    box.innerHTML = '<button class="ptab all' + (all ? " on" : "") + '" data-project="" role="tab" aria-selected="' + all + '" title="看所有仓库' +
+      (open ? " · " + open + " 条待决定" : "") + '（Esc）">全部项目<span class="n' + (open ? " hot" : "") + '">' + (open || "") + "</span></button>" +
+      ps.map(tab).join("");
     var on = box.querySelector(".ptab.on");
     if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) {
       box.scrollLeft = on.offsetLeft - 8;
     }
+    ptabFade();
+  }
+  function ptabFade() { // 标签放不下时，哪头还有就在哪头淡出
+    var b = $("projects");
+    b.classList.toggle("fade-l", b.scrollLeft > 1);
+    b.classList.toggle("fade-r", b.scrollLeft + b.clientWidth < b.scrollWidth - 1);
   }
 
   // 右键标签 / 分组标题：把这个项目（或没认出来的来源）归到另一个项目下
@@ -335,15 +409,15 @@
           : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + v.empty) + "</b>" +
         (S.query ? (more ? "" : "换个关键词试试") : v.emptySub) + "</div>";
     } else if (grouped()) {
-      var html = "", last = null, counts = {};
-      items.forEach(function (m) { var p = projectOf(m); counts[p] = (counts[p] || 0) + 1; });
+      var html = "", last = null, opens = {}; // 分组标题只在组里有待决定时显示胶囊，别的数不显示
+      items.forEach(function (m) { var p = projectOf(m); if (m.open) opens[p] = (opens[p] || 0) + 1; });
       items.forEach(function (m) {
         var p = projectOf(m), other = m.project_kind === "other";
         if (p !== last) {
           html += '<div class="group-label' + (other ? " other" : "") + '" data-project="' + esc(p) + '" data-tab="' + esc(tabKey(m)) + '">' +
             '<span class="pdot" style="background:' + pcolor(other ? OTHER : p) + '"></span>' +
-            '<button class="gname" title="' + (other ? "只看「未归类」" : "只看 " + esc(p)) + '">' + esc(p) + "</button>" +
-            '<span class="gcount">' + counts[p] + "</span>" + (other ? '<span class="gtag">未识别</span>' : "") +
+            '<button class="gname" title="' + (other ? "只看「未归类」：没认出属于哪个仓库的旧消息 · 右键或点「归到…」可以归到某个仓库" : "只看 " + esc(p)) + '">' + esc(p) + "</button>" +
+            (opens[p] ? '<span class="n hot" title="' + opens[p] + ' 条待你决定">' + opens[p] + "</span>" : "") +
             '<button class="gmerge" tabindex="-1" title="归到某个项目下">归到…</button></div>';
           last = p;
         }
@@ -384,7 +458,7 @@
     return '<div class="' + cls + '" data-id="' + esc(m.id) + '" role="option" aria-selected="' + (m.id === S.current) + '">' +
       '<button class="cb' + (checked ? " on" : "") + '" tabindex="-1" data-act="check" title="选择（X）" aria-label="选择"></button>' +
       (dot ? '<span class="dot ' + dot + '"></span>' : "") +
-      '<div class="row1"><span class="t">' + esc(m.title) + '</span><span class="time">' + fmtTime(m.ts) + "</span>" + acts + "</div>" +
+      '<div class="row1"><span class="t">' + esc(m.title) + "</span>" + timeCell(m) + acts + "</div>" +
       '<div class="row2">' + (bits.join(" · ") || "&nbsp;") + "</div></div>";
   }
 
@@ -426,6 +500,7 @@
       $("empty").hidden = false;
       $("detail").hidden = true;
       S.shownKey = null;
+      renderEmpty();
       return;
     }
     $("empty").hidden = true;
@@ -442,7 +517,8 @@
   }
 
   function renderEyebrow(m) {
-    var bits = [KIND[m.kind], '<span class="src"><span class="pdot" style="background:' + pcolor(projectOf(m)) + '"></span>' + esc(m.source) + "</span>", fmtTime(m.ts, true)];
+    var bits = [KIND[m.kind], '<span class="src"><span class="pdot" style="background:' + pcolor(projectOf(m)) + '"></span>' + esc(m.source) + "</span>",
+      '<span title="' + fmtTime(m.ts, true) + '">' + fmtRel(m.ts) + "</span>"];
     if (m.priority === "high") bits.push('<span class="hot">紧急</span>');
     if (m.archived) bits.push("已归档");
     $("eyebrow").innerHTML = bits.join(" · ") + (m.open ? '<button class="jump" id="jumpBtn">去选择 ↓</button>' : "");
@@ -478,7 +554,7 @@
     var opts = $("options");
     opts.innerHTML = (d.options || []).map(function (o, i) {
       var chosen = r && r.choice === o.label;
-      return '<button class="opt' + (chosen ? " chosen" : "") + '" data-idx="' + i + '"' + (r ? " disabled" : "") + ">" +
+      return '<button class="opt' + (chosen ? " chosen" : "") + (d.recommended === i + 1 ? " rec-opt" : "") + '" data-idx="' + i + '"' + (r ? " disabled" : "") + ">" +
         '<span class="num">' + (chosen ? icon("check") : i + 1) + "</span>" +
         '<span class="txt"><span class="lab">' + esc(o.label) +
         (d.recommended === i + 1 ? '<span class="rec">推荐</span>' : "") + "</span>" +
@@ -501,10 +577,12 @@
       else if (r.closed_by === "claude") done.innerHTML = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
       else done.innerHTML = "<b>已提交</b> · " + when + (r.choice ? "　选择：<b>" + esc(r.choice) + "</b>" : "") +
         (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
+      // 还有别的待决定：给个按钮过去，但不自动跳（列表和阅读区不突然变）
+      if (queue().some(function (x) { return x.id !== d.id; })) done.insertAdjacentHTML("beforeend", '<button class="ghost next-dec" data-next>下一条待决定 →（N）</button>');
       $("decideState").textContent = "";
     } else {
       done.hidden = true;
-      $("decideState").textContent = d.recommended ? "推荐第 " + d.recommended + " 项" : "";
+      $("decideState").textContent = waitState(d);
     }
     updateSubmit();
   }
@@ -1032,6 +1110,7 @@
       ["Ctrl + P", "导出 PDF"], ["/", "搜索（↓ / Enter 打开第一条）"], ["[ ]", "切换项目（顶部标签）"], ["Ctrl + 点标签", "同时看几个项目"], ["点左边的方框 / Ctrl + 点击", "多选（Shift 连选）"], ["Ctrl + A", "全选当前列表"],
       ["Ctrl + ,", "设置"], ["Esc", "一次退一层：菜单 → 搜索 → 勾选 → 项目"], ["Esc / Backspace", "窄窗口：回到列表"]];
     $("modalTitle").textContent = "快捷键";
+    rows.splice(1, 0, ["N / Shift + N", "下一条 / 上一条待决定（紧急的、等得久的在前）"]);
     $("modalText").innerHTML = '<span class="kbd-table">' + rows.map(function (r) {
       return "<span>" + r[0].split(" ").map(function (k) { return /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
     }).join("") + "</span>";
@@ -1048,7 +1127,7 @@
   function bind() {
     paintIcons();
     $("projects").addEventListener("click", function (e) {
-      var b = e.target.closest(".ptab, .ptab-clear");
+      var b = e.target.closest(".ptab");
       if (b) clickTab(b.dataset.project, e.ctrlKey || e.metaKey || e.shiftKey);
     });
     $("projects").addEventListener("contextmenu", function (e) {
@@ -1057,6 +1136,16 @@
       e.preventDefault();
       mergeMenu(e.clientX, e.clientY, b.dataset.project);
     });
+    $("projects").addEventListener("wheel", function (e) { // 竖着滚轮也能横着翻标签
+      var b = $("projects");
+      if (b.scrollWidth <= b.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      b.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }, { passive: false });
+    $("projects").addEventListener("scroll", ptabFade);
+    $("queueBtn").addEventListener("click", function () { nextDecision(1); });
+    $("empty").addEventListener("click", function (e) { if (e.target.closest("#startBtn")) nextDecision(1); });
+    $("doneBox").addEventListener("click", function (e) { if (e.target.closest("[data-next]")) nextDecision(1); });
     $("nav").addEventListener("click", function (e) {
       var b = e.target.closest(".tab");
       if (b) setView(b.dataset.view);
@@ -1220,6 +1309,7 @@
     });
     window.addEventListener("resize", closePopover);
     $("popover").addEventListener("keydown", popoverKey);
+    window.addEventListener("resize", ptabFade);
     document.addEventListener("keydown", onKey);
     window.addEventListener("beforeprint", function () { var d = currentDetail(); if (d && !$("printRoot").firstChild) preparePrint(d); });
     window.addEventListener("afterprint", function () { $("printRoot").innerHTML = ""; });
@@ -1287,6 +1377,7 @@
       }
       return;
     }
+    if (k === "n" || k === "N") { nextDecision(e.shiftKey ? -1 : 1); return; }
     if (k === "?") { showShortcuts(); return; }
     if (k === "e" || k === "E") { doArchive(targets()); return; }
     if (k === "Delete" || k === "#") { doDelete(targets()); return; }
@@ -1308,6 +1399,7 @@
   renderNav();
   renderFoot();
   poll();
+  setInterval(tickWaits, 60000); // 等待时间每分钟走一次
   // 外部（托盘 / 通知点击）要求打开某条消息
   window.deskOpen = function (id, view) {
     var go = function () {
