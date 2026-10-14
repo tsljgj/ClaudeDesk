@@ -152,3 +152,147 @@ def test_legacy_matching_uses_discovered_projects(tmp_path):
     assert got == {"webapp": ("WebApp", "repo"), "webapp/eval": ("WebApp", "repo"),
                    "WebApp-runner": ("WebApp", "repo"), "acme-data": ("acme-data-pipeline", "repo"),
                    "acme-data-pipeline": ("acme-data-pipeline", "repo"), "随便写的": ("随便写的", "other")}
+
+
+def test_malformed_record_does_not_drop_later_ones(tmp_path):
+    first = post(tmp_path, kind="info", title="before")
+    s = Store(tmp_path)
+    s.poll()
+    with open(tmp_path / desk.INBOX, "a", encoding="utf-8") as f:  # 手写 / 别的工具写的记录：类型不对
+        f.write(json.dumps({"id": "bad-1", "kind": "decision", "title": "x", "options": 5}) + "\n")
+        f.write(json.dumps({"id": "bad-2", "kind": "info", "title": "y", "options": "A::x"}) + "\n")
+    later = post(tmp_path, kind="decision", title="posted right after", options=["A"])
+    s.poll()
+    assert later in s.msgs and s.msgs["bad-1"]["options"] == [] and s.msgs["bad-2"]["options"] == []
+    cold = Store(tmp_path)  # 冷启动同样不丢
+    cold.poll()
+    assert {first, later, "bad-1", "bad-2"} <= set(cold.msgs)
+    assert s.delete([first]) == 1  # 压缩也不会被这种记录卡住；它们原样保留
+    raw = (tmp_path / desk.INBOX).read_text(encoding="utf-8")
+    assert first not in raw and "bad-1" in raw and later in raw
+
+
+def test_poll_skips_record_that_fails_to_normalize(tmp_path, monkeypatch):
+    from claudedesk import store as store_mod
+
+    a = post(tmp_path, kind="info", title="a")
+    b = post(tmp_path, kind="info", title="b")
+    real = store_mod.normalize
+
+    def flaky(r):
+        if r.get("id") == a:
+            raise TypeError("boom")
+        return real(r)
+
+    monkeypatch.setattr(store_mod, "normalize", flaky)
+    s = Store(tmp_path)
+    s.poll()
+    assert b in s.msgs and a not in s.msgs
+
+
+def test_poll_and_submit_tolerate_permission_error(tmp_path, monkeypatch):
+    """compact() 换文件的一瞬间，别的读者 open 会 PermissionError：这一轮当没有新内容，下一轮照常读到。"""
+    a = post(tmp_path, kind="decision", options=["A", "B"])
+    c = post(tmp_path, kind="decision", options=["A", "B"])
+    s = Store(tmp_path)
+    s.poll()
+
+    def boom():
+        raise PermissionError(13, "x")
+
+    with monkeypatch.context() as mp:  # submit 后面那次 poll 出错：回复已经写好，不算失败
+        mp.setattr(s, "poll", boom)
+        assert s.submit(c, "A", "")["choice"] == "A"
+    b = post(tmp_path, kind="info")
+    real = desk.read_jsonl
+
+    def busy(path, *args, **kw):
+        if str(path).endswith(desk.INBOX):
+            raise PermissionError(13, "being replaced")
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(desk, "read_jsonl", busy)
+    s.poll()  # 不抛
+    assert b not in s.msgs
+    rec = s.submit(a, "B", "")  # 回复已经写好：后面的 poll 读不到 inbox 也不算提交失败
+    assert rec["choice"] == "B" and [r["id"] for r in desk.read_all(tmp_path / desk.RESPONSES)] == [c, a]
+    monkeypatch.setattr(desk, "read_jsonl", real)
+    s.poll()
+    assert b in s.msgs and a in s.responses
+
+
+def test_failed_compaction_is_retried_with_backoff(tmp_path, monkeypatch):
+    import os
+    import time
+
+    keep = post(tmp_path, kind="answer", title="keep")
+    gone = post(tmp_path, kind="answer", title="delete me")
+    s = Store(tmp_path)
+    s.poll()
+    real = os.replace
+
+    def held(src, dst):  # 例如别的程序开着 inbox.jsonl（没给 FILE_SHARE_DELETE）
+        if str(dst).endswith(desk.INBOX):
+            raise PermissionError(13, "held open")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", held)
+    t0 = time.monotonic()
+    assert s.delete([gone]) == 1
+    assert time.monotonic() - t0 < 1.5  # 失败也不长时间占着 data/.lock
+    assert gone in (tmp_path / desk.INBOX).read_text(encoding="utf-8")
+    assert [m["id"] for m in s.visible()] == [keep]  # 照样不显示
+    assert s.compact_if_due() is None  # 还没到重试时间
+    s._compact_at = 0
+    assert s.compact_if_due() is False
+    assert 8 < s._compact_at - time.monotonic() <= 10  # 第二次失败：间隔翻倍
+    s.save_state()
+
+    monkeypatch.setattr(os, "replace", real)
+    s2 = Store(tmp_path)  # 重启后（启动时第一轮）也会补上
+    s2.poll()
+    assert s2.compact_if_due() is True
+    assert gone not in (tmp_path / desk.INBOX).read_text(encoding="utf-8")
+    assert s2.compact_if_due() is None and [m["id"] for m in s2.visible()] == [keep]
+    s._compact_at = 0  # 旧实例：文件里已经没有了，内存里也清掉，之后不再反复尝试
+    assert s.compact_if_due() is True and s.compact_if_due() is None
+
+
+def test_submit_choice_index(tmp_path):
+    a = post(tmp_path, kind="decision", options=["继续::按方案 A", "继续::按方案 B", "停"])
+    b, c, d = (post(tmp_path, kind="decision", options=["X", "Y"]) for _ in range(3))
+    s = Store(tmp_path)
+    s.poll()
+    with pytest.raises(ValueError, match="对不上"):
+        s.submit(a, "停", "", choice_index=2)
+    for bad in (0, 4, "x", True, 1.5, -1):
+        with pytest.raises(ValueError):
+            s.submit(a, "继续", "", choice_index=bad)
+    assert a not in s.responses
+    rec = s.submit(a, "继续", "", choice_index=2)  # 两个选项同名：按点的那个记
+    assert rec["choice"] == "继续" and rec["choice_index"] == 2
+    assert s.submit(b, "Y", "")["choice_index"] == 2  # 旧界面只发名字
+    assert s.submit(c, None, "", choice_index="1")["choice"] == "X"  # 只给序号：补上名字
+    with pytest.raises(ValueError):
+        s.submit(d, "Z", "")
+    got = {r["id"]: r.get("choice_index") for r in desk.read_all(tmp_path / desk.RESPONSES)}
+    assert got == {a: 2, b: 2, c: 1}
+
+
+def test_concurrent_save_state_keeps_newest(tmp_path):
+    import threading
+
+    ids = [post(tmp_path, kind="answer", title=f"t{i}") for i in range(50)]
+    s = Store(tmp_path)
+    s.poll()
+    for _ in range(20):
+        with s.lock:
+            s.read = set(ids[:5])
+        t = threading.Thread(target=s.save_state)
+        t.start()
+        with s.lock:
+            s.read = set(ids)
+        s.save_state()
+        t.join()
+        st = json.loads((tmp_path / desk.STATE).read_text(encoding="utf-8"))
+        assert len(st["read"]) == len(ids)

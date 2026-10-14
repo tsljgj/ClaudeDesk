@@ -15,7 +15,7 @@ PY=python                              # 任意 Python 3.10+ 的完整路径
 DESK=C:/path/to/ClaudeDesk/desk.py
 ```
 
-`post` 发现程序没开会自动启动它，不用自己检查。
+`post` 发现程序没开会自动启动它，不用自己检查。如果 `post` 在 stderr 打出"注意：没有 ClaudeDesk 在看这个数据目录…"，说明这条消息用户看不到（`wait` 也等不到回复）：多半是 `DESK` 指向了别处的 desk.py 副本，要改成 ClaudeDesk 安装目录里的那个，再重发。
 
 ## 规则
 
@@ -51,8 +51,10 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 3. **用后台命令跑 `wait`**（Bash 的 `run_in_background: true`），不设超时：
 
 ```bash
-"$PY" "$DESK" wait --source my-project --id <id>
+"$PY" "$DESK" wait --id <id>
 ```
+
+   带 `--id` 时只按 id 认回复（`--source` 不用加，加了也不影响）。
 
 4. 在对话里只说一句"已发到 ClaudeDesk，等你决定：<标题>"，然后继续做不依赖这个决定的事；没有别的可做就结束这一轮。
 5. 用户一提交，`wait` 退出（退出码 0），会话被唤醒。输出是一行 JSON：
@@ -61,13 +63,14 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 {"id": "…", "ts": "…", "choice": "先复核", "text": "复核只看第 4 项", "source": "my-project", "title": "…", "choice_index": 1}
 ```
 
-   - 按 `choice` 执行，`text` 里的补充条件同样要遵守。
+   - 按 `choice` 执行，`text` 里的补充条件同样要遵守。`choice_index` 是用户点的第几个选项（从 1 开始）；选项名字有重复时以它为准。
    - `text` 和 `choice` 冲突、或者只写了文字时，以文字为准；看不懂就再发一条 decision 问清楚，不要猜。
    - 回复里带 `"resolved": true`（`choice` 为 `null`）表示用户在 ClaudeDesk 里把这条**标为已解决**：事情已经处理好了（可能是用户自己做了，或者不再需要）。不要按任何选项执行；在对话里说一句"这条决定用户标为已解决了"，继续做不依赖它的事。
    - 回复里带 `"dismissed": true`（`choice` 为 `null`）表示用户在 ClaudeDesk 里把这条归档 / 删除了、没有作出选择：不要按任何选项执行，在对话里说一句"这条决定被跳过了"，继续做不依赖它的事，或者结束这一轮等用户在对话里说。
    - 执行前在对话里用一句话复述"用户选了 X（补充：…），现在开始做"。
 6. 特殊情况：
-   - **用户直接在对话里答了**：按对话里的答复执行，停掉后台 `wait`，再 `"$PY" "$DESK" close --id <id> --text "用户在对话里选了 …"`，让 ClaudeDesk 里那条不再显示"待决定"。
+   - **用户直接在对话里答了**：停掉后台 `wait`，先 `"$PY" "$DESK" close --id <id> --text "用户在对话里选了 …"`，让 ClaudeDesk 里那条不再显示"待决定"，再按对话里的答复执行。
+     `close` 退出码 3 表示**用户已经在 ClaudeDesk 里回复过了**：stdout 那行 JSON 就是那条回复（也可以 `responses --id <id>` 查）。和对话里的答复一致就照做；不一致（或者是 resolved / dismissed）就在对话里说明两边的差别，问清楚以哪个为准，不要默默只按其中一个做。
    - **`wait` 被中断或会话重启了**：`"$PY" "$DESK" responses --id <id>` 查有没有回复，没有就重新挂 `wait`。
    - **检查还有哪些没回复**：`"$PY" "$DESK" list --open --source <名>`。
 
@@ -96,5 +99,5 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
 - 正文一律用文件或 stdin 传，不要把多行 Markdown 塞进命令行参数。命令行只放标题、选项这类短文本，用单引号包起来。
 - 不要往消息里写凭据、token。
-- 数据在 `<ClaudeDesk 目录>\data\`（`inbox.jsonl` / `responses.jsonl`，都只追加）。不要手改；要标"已处理"用 `close`。
+- 数据在 `<ClaudeDesk 目录>\data\`：`responses.jsonl` 只追加；`inbox.jsonl` 平时只追加，用户在 ClaudeDesk 里删除消息时会整份重写（去掉删掉的）。都不要手改；要标"已处理"用 `close`。
 - 程序没响应时先看托盘里有没有图标；日志在 `<ClaudeDesk 目录>\data\claudedesk.log`。

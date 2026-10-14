@@ -7,10 +7,11 @@
 用法（Python 3.10）：
     python desk.py post --kind decision --source <名> --title <标题> --body-file a.md \
         --option "方案A::说明" --option "方案B::说明" --recommended 1 --allow-text
-    python desk.py wait --source <名> --id <id> [--timeout 秒]     # 收到回复退出 0，超时退出 2
+    python desk.py wait --id <id> [--timeout 秒]                  # 收到回复退出 0，超时退出 2
     python desk.py responses [--source <名>] [--since <ts>]
     python desk.py list [--open] [--source <名>] [--json]
-    python desk.py close --id <id> [--text 说明]                  # 用户已在对话里答了，把 decision 标成已处理
+    python desk.py close --id <id> [--text 说明]                  # 用户已在对话里答了，把 decision 标成已处理；
+                                                                  # 用户已在 ClaudeDesk 里答了则打印那条回复、退出 3
 
 数据目录默认是本文件旁边的 data/，可用环境变量 CLAUDEDESK_DATA 改。
 """
@@ -138,15 +139,23 @@ def append_jsonl(path: Path, obj: dict, *, locked: bool = False) -> None:
             os.close(fd)
 
 
-def read_jsonl(path: Path, offset: int = 0) -> tuple[list[dict], int]:
-    """从 offset 读到最后一个完整行；末尾的半行留到下次。坏行跳过。返回 (记录, 新 offset)。"""
+def read_jsonl(path: Path, offset: int = 0, retry: float = 1.0) -> tuple[list[dict], int]:
+    """从 offset 读到最后一个完整行；末尾的半行留到下次。坏行跳过。返回 (记录, 新 offset)。
+    程序删除消息时会整份换掉 inbox.jsonl，换的那一瞬间 Windows 上 open 会 PermissionError：最多重试 retry 秒。"""
     path = Path(path)
-    try:
-        with open(path, "rb") as f:
-            f.seek(offset)
-            data = f.read()
-    except FileNotFoundError:
-        return [], 0
+    deadline = time.monotonic() + retry
+    while True:
+        try:
+            with open(path, "rb") as f:
+                f.seek(offset)
+                data = f.read()
+            break
+        except FileNotFoundError:
+            return [], 0
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
     end = data.rfind(b"\n")
     if end < 0:
         return [], offset
@@ -172,7 +181,9 @@ def read_all(path: Path) -> list[dict]:
 
 def normalize_options(raw) -> list[dict]:
     out = []
-    for o in raw or []:
+    if not isinstance(raw, (list, tuple)):  # 手写 / 别的工具写的记录里可能是数字、字符串
+        return out
+    for o in raw:
         if isinstance(o, str):
             label, _, desc = o.partition("::")
             out.append({"label": label.strip(), "description": desc.strip()})
@@ -189,11 +200,11 @@ def detect_repo(cwd: str | os.PathLike | None = None, folder_fallback: bool = Fa
 
     def git(*args: str) -> str | None:
         try:
-            r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5,
+            r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, timeout=5,
                                stdin=subprocess.DEVNULL, **flags)
         except (OSError, subprocess.SubprocessError):
             return None
-        out = (r.stdout or "").strip()
+        out = (r.stdout or b"").decode("utf-8", "replace").strip()  # git 输出的路径是 UTF-8，不是系统的 ANSI 代码页
         return out if r.returncode == 0 and out else None
 
     if git("rev-parse", "--is-inside-work-tree") != "true":
@@ -289,14 +300,13 @@ def write_response(msg_id: str, choice: str | None, text: str, source: str,
 # ---------------------------------------------------------------- 桌面程序
 
 def pipe_name(ddir: Path | None = None) -> str:
-    """单实例 / 控制通道的命名管道名。默认数据目录用固定名，其他数据目录加哈希（便于隔离测试）。"""
+    """标记管道（"程序在运行"）的名字，带数据目录的哈希：只有看着这个数据目录的程序才算在运行
+    （别的目录里的 desk.py 副本不会误以为有人在看它的 data/）。app.py 开管道时也用这个函数。"""
     import hashlib
 
-    base = "ClaudeDesk-" + (os.environ.get("USERNAME") or "user")
+    base = "ClaudeDesk-" + (os.environ.get("USERNAME") or os.environ.get("USER") or "user")
     d = Path(ddir).resolve() if ddir else data_dir().resolve()
-    if d == (ROOT / "data").resolve():
-        return base
-    return base + "-" + hashlib.sha1(str(d).lower().encode("utf-8")).hexdigest()[:8]
+    return base + "-data-" + hashlib.sha1(str(d).lower().encode("utf-8")).hexdigest()[:8]
 
 
 def app_running(ddir: Path | None = None) -> bool:
@@ -364,11 +374,14 @@ def cmd_post(a) -> int:
         return 1
     post_message(msg, a.data)
     print(msg["id"])
-    if not a.no_launch and not app_running(a.data):
-        if not a.data and launch_app():
+    if not app_running(a.data):
+        if not a.no_launch and not a.data and launch_app():
             print("（ClaudeDesk 没在运行，已启动）", file=sys.stderr)
         else:
-            print("（注意：ClaudeDesk 没在运行）", file=sys.stderr)
+            print(f"注意：没有 ClaudeDesk 在看这个数据目录（{data_dir(a.data)}），用户看不到这条消息"
+                  + ("，wait 也等不到回复" if a.kind == "decision" else "") + "。"
+                  "请用 ClaudeDesk 安装目录里的 desk.py（或用 --data / CLAUDEDESK_DATA 指向程序的数据目录），"
+                  "并确认程序在运行。", file=sys.stderr)
     return 0
 
 
@@ -388,12 +401,15 @@ def cmd_wait(a) -> int:
         offset = offset2
         hits = []
         for r in recs:
-            if a.source and r.get("source") != a.source:
-                continue
-            if a.id:
+            if a.id:  # id 是唯一的：只按 id 认，--source 写得不一样也不能一直等下去
                 if r.get("id") != a.id:
                     continue
+                if a.source and r.get("source") != a.source:
+                    print(f"（注意：这条回复的来源是 {r.get('source')!r}，不是 --source {a.source!r}；按 --id 认）",
+                          file=sys.stderr)
             else:
+                if a.source and r.get("source") != a.source:
+                    continue
                 t = parse_ts(r.get("ts"))
                 if t is None or t < since:
                     continue
@@ -423,8 +439,11 @@ def cmd_close(a) -> int:
     try:
         rec = write_response(a.id, None, a.text or "（已在对话中处理）", m.get("source", ""), d,
                              extra={"title": m.get("title", ""), "closed_by": "claude"})
-    except FileExistsError:
-        print("这条已经有回复了", file=sys.stderr)
+    except FileExistsError:  # 用户已经在 ClaudeDesk 里答了：把那条回复打出来，会话要按它执行或和对话里的答复核对
+        old = next((r for r in read_all(d / RESPONSES) if r.get("id") == a.id), None)
+        if old is not None:
+            print(_dump(dict(old, title=old.get("title") or m.get("title", ""))))
+        print("这条已经有回复了（用户已在 ClaudeDesk 里答复，见 stdout 那行 JSON）", file=sys.stderr)
         return 3
     print(_dump(rec))
     return 0
@@ -470,7 +489,8 @@ def cmd_list(a) -> int:
     for m, is_open in rows:
         status = "待决定" if is_open else ("已回复" if m.get("id") in answered else "")
         ts = str(m.get("ts", ""))[:19].replace("T", " ")
-        print(f"{m.get('id','?'):24} {ts:19} {m.get('kind','?'):8} {status:4} [{m.get('source','')}] {m.get('title','')}")
+        mid, kind = str(m.get("id", "?")), str(m.get("kind", "?"))  # 手写的记录里可能不是字符串
+        print(f"{mid:24} {ts:19} {kind:8} {status:4} [{m.get('source', '')}] {m.get('title', '')}")
     print(f"共 {len(rows)} 条", file=sys.stderr)
     return 0
 
@@ -502,14 +522,15 @@ def main(argv=None) -> int:
     sp.set_defaults(func=cmd_post)
 
     sp = sub.add_parser("wait", help="阻塞到出现对应回复；超时退出码 2")
-    sp.add_argument("--source", help="只等这个来源的回复")
+    sp.add_argument("--source", help="不带 --id 时：只等这个来源的回复（带 --id 时只按 id 认）")
     sp.add_argument("--id", help="只等这条消息的回复（已有回复则立即返回）")
     sp.add_argument("--since", help="不带 --id 时：只认这个时间之后的回复（默认=开始等待的时刻）")
     sp.add_argument("--timeout", type=float, default=0, help="秒；0 = 一直等")
     sp.add_argument("--interval", type=float, default=1.0, help="轮询间隔秒")
     sp.set_defaults(func=cmd_wait)
 
-    sp = sub.add_parser("close", help="用户已在对话里答复：把 decision 标成已处理（写一条 closed_by=claude 的回复）")
+    sp = sub.add_parser("close", help="用户已在对话里答复：把 decision 标成已处理（写一条 closed_by=claude 的回复）；"
+                                      "用户已在 ClaudeDesk 里回复过则打印那条回复，退出码 3")
     sp.add_argument("--id", required=True)
     sp.add_argument("--text", help="说明，例如：用户在对话里选了 B")
     sp.set_defaults(func=cmd_close)
