@@ -226,6 +226,30 @@ def test_hover_actions_and_checkbox_bulk(env):
     assert errors == []
 
 
+def test_item_state_marks(env):
+    """列表圆点：没读过 / 待决定 / 看过的待决定 / 紧急 / 读过各不一样；第二行不留多余的 " · "。"""
+    d, store, server, page, errors = env
+    new = post(d, kind="answer", title="新回答", body="x")
+    dec = post(d, kind="decision", title="新决定", options=["A"])
+    seen = post(d, kind="decision", title="看过的决定", options=["A"])
+    hot = post(d, kind="info", title="紧急通知", body="y", priority="high")
+    old = post(d, kind="answer", title="读过的回答", body="z")
+    done = post(d, kind="decision", title="空正文的决定", body="", options=["升", "不升"])
+    store.poll()
+    store.mark_read([seen, old, done])
+    store.submit(done, "升", "")
+    page.goto(server.url)
+    page.wait_for_selector(f'.item[data-id="{done}"] .st.done')
+    dot = lambda i: page.evaluate(  # noqa: E731
+        f"() => {{ const e = document.querySelector('.item[data-id=\"{i}\"] .dot'); return e ? e.className : ''; }}")
+    assert (dot(new), dot(dec), dot(seen), dot(hot), dot(old), dot(done)) == (
+        "dot new", "dot hot", "dot hot seen", "dot hot urgent", "", "")
+    assert page.locator(f'.item[data-id="{done}"] .row2').inner_text().strip() == "✓ 升"
+    color = lambda i: page.locator(f'.item[data-id="{i}"] .t').evaluate("e => getComputedStyle(e).color")  # noqa: E731
+    assert color(old) != color(new)  # 读过的标题安静一些
+    assert errors == []
+
+
 def test_projects_are_separated(env):
     d, store, server, page, errors = env
     mk = lambda kind, source, title, repo=None, **kw: desk.post_message(  # noqa: E731

@@ -359,16 +359,20 @@
     var checked = S.multi.has(m.id);
     var cls = "item" + (m.unread ? " unread" : "") + (m.open ? " open" : "") +
       (m.id === S.current ? " selected" : "") + (checked ? " multi" : "");
-    var hot = m.open || (m.priority === "high" && m.unread);
+    // 状态圆点：实心 = 没读过；强调色 = 等你处理；空心环 = 看过、还没决定；外加一圈 = 紧急（处理完才消失）
+    var urgent = m.priority === "high" && (m.open || m.unread);
+    var dot = urgent ? "hot urgent" : m.open ? (m.unread ? "hot" : "hot seen") : m.unread ? "new" : "";
     var p = projectOf(m), sl = m.source.toLowerCase(), pl = p.toLowerCase();
     var src = sl === pl ? "" : sl.indexOf(pl + "/") === 0 ? m.source.slice(p.length + 1) : m.source;
-    var st = "";
-    if (m.open) st = '<span class="st open">' + (m.priority === "high" ? "紧急 · " : "") + "待决定</span> · ";
-    else if (m.kind === "decision" && m.resolved) st = '<span class="st done">✓ 已解决</span> · ';
-    else if (m.kind === "decision" && m.dismissed) st = '<span class="st skip">已跳过</span> · ';
-    else if (m.kind === "decision" && m.answered) st = '<span class="st done">✓ ' + esc(m.choice || "已回复") + "</span> · ";
-    else if (m.priority === "high" && m.unread) st = '<span class="st open">紧急</span> · ';
-    if (!m.open && (S.view === "all" || S.view === "archive" || S.query) && m.kind !== "decision") st = '<span class="st kind">' + KIND[m.kind] + "</span> · " + st;
+    var bits = []; // 第二行：类型 · 状态 · 来源 · 摘要，缺哪段就跳过，不留多余的 " · "
+    if (!m.open && (S.view === "all" || S.view === "archive" || S.query) && m.kind !== "decision") bits.push('<span class="st kind">' + KIND[m.kind] + "</span>");
+    if (m.open) bits.push('<span class="st open">' + (m.priority === "high" ? "紧急 · " : "") + "待决定</span>");
+    else if (m.kind === "decision" && m.resolved) bits.push('<span class="st done">✓ 已解决</span>');
+    else if (m.kind === "decision" && m.dismissed) bits.push('<span class="st skip">已跳过</span>');
+    else if (m.kind === "decision" && m.answered) bits.push('<span class="st done">✓ ' + esc(m.choice || "已回复") + "</span>");
+    else if (m.priority === "high" && m.unread) bits.push('<span class="st open">紧急</span>');
+    if (src) bits.push('<span class="src">' + esc(src) + "</span>");
+    if (m.snippet) bits.push(esc(m.snippet));
     var acts = '<span class="acts">' +
       '<button class="act" data-act="read" title="' + (m.unread ? "标为已读" : "标为未读") + '（U）">' + icon(m.unread ? "mailOpen" : "mail") + "</button>" +
       (m.open ? '<button class="act" data-act="resolve" title="标为已解决（R）">' + icon("check") + "</button>" : "") +
@@ -376,9 +380,9 @@
       '<button class="act danger" data-act="delete" title="删除（Delete）">' + icon("trash") + "</button></span>";
     return '<div class="' + cls + '" data-id="' + esc(m.id) + '" role="option" aria-selected="' + (m.id === S.current) + '">' +
       '<button class="cb' + (checked ? " on" : "") + '" data-act="check" title="选择（X）" aria-label="选择"></button>' +
-      (m.unread || m.open ? '<span class="dot' + (hot ? " hot" : "") + '"></span>' : "") +
+      (dot ? '<span class="dot ' + dot + '"></span>' : "") +
       '<div class="row1"><span class="t">' + esc(m.title) + '</span><span class="time">' + fmtTime(m.ts) + "</span>" + acts + "</div>" +
-      '<div class="row2">' + st + (src ? '<span class="src">' + esc(src) + "</span>" + (m.snippet ? " · " : "") : "") + esc(m.snippet || "") + "</div></div>";
+      '<div class="row2">' + (bits.join(" · ") || "&nbsp;") + "</div></div>";
   }
 
   function renderBulk() {

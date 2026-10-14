@@ -45,12 +45,18 @@
   /* 强调色：ember（默认，鲜亮的珊瑚橙） */
   --accent: #F2541B;
   --accent-hover: #DE4510;
-  --accent-ink: #D2410C;
+  --accent-ink: #BE3A09;
   --accent-soft: #FFF0E9;
   --accent-line: #FFC9B3;
   --on-accent: #FFFFFF;
   --mark-a: #FF8A3D;
   --mark-b: #EE3B16;
+
+  /* 列表状态：--unread 没读过的圆点，--hot 等你处理（待决定 / 紧急）的圆点，--ink-calm 读过的标题和计数。
+     圆点用鲜亮的强调色，对白底 ≥ 3:1；--ink-calm 和 --accent-ink 当小字用都 ≥ 4.5:1 */
+  --unread: var(--ink);
+  --hot: var(--accent);
+  --ink-calm: #6B6B76;
   color-scheme: light;
 }
 
@@ -85,6 +91,7 @@
     --danger: #F87171; --danger-soft: rgba(248, 113, 113, .12);
     --accent: #FF6A33; --accent-hover: #FF7F4F; --accent-ink: #FF8A5C; --accent-soft: rgba(255, 106, 51, .13);
     --accent-line: rgba(255, 106, 51, .42); --on-accent: #FFFFFF;
+    --hot: var(--accent); --ink-calm: #9494A0;
     color-scheme: dark;
   }
   :root:not([data-theme="light"])[data-accent="indigo"] { --accent: #7C73FF; --accent-hover: #918AFF; --accent-ink: #A5A0FF; --accent-soft: rgba(124, 115, 255, .15); --accent-line: rgba(124, 115, 255, .45); }
@@ -102,6 +109,7 @@
   --danger: #F87171; --danger-soft: rgba(248, 113, 113, .12);
   --accent: #FF6A33; --accent-hover: #FF7F4F; --accent-ink: #FF8A5C; --accent-soft: rgba(255, 106, 51, .13);
   --accent-line: rgba(255, 106, 51, .42); --on-accent: #FFFFFF;
+  --hot: var(--accent); --ink-calm: #9494A0;
   color-scheme: dark;
 }
 :root[data-theme="dark"][data-accent="indigo"] { --accent: #7C73FF; --accent-hover: #918AFF; --accent-ink: #A5A0FF; --accent-soft: rgba(124, 115, 255, .15); --accent-line: rgba(124, 115, 255, .45); }
@@ -168,8 +176,8 @@ i[data-icon] svg { width: 100%; height: 100%; }
 }
 .ptab-clear:hover { color: var(--ink); background: color-mix(in srgb, var(--bg) 55%, transparent); }
 .ptab-clear i[data-icon] { width: 14px; height: 14px; }
-.ptab .n { display: inline-block; min-width: 1.3em; font-size: 11px; font-weight: 650; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.ptab .n.hot { color: var(--accent); }
+.ptab .n { display: inline-block; min-width: 1.3em; font-size: 11px; font-weight: 650; color: var(--ink-calm); font-variant-numeric: tabular-nums; }
+.ptab .n.hot { color: var(--accent-ink); }
 
 /* ------------------------------------------------------------------ 列表 */
 .listpane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
@@ -183,8 +191,8 @@ i[data-icon] svg { width: 100%; height: 100%; }
 }
 .tab:hover { color: var(--ink); }
 .tab.active { color: var(--ink); background: var(--sunken); }
-.tab .n { display: inline-block; min-width: 1.3em; font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ink-3); }
-.tab .n.hot { color: var(--accent); }
+.tab .n { display: inline-block; min-width: 1.3em; font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ink-calm); }
+.tab .n.hot { color: var(--accent-ink); }
 .pdot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
 /* 看多个项目时，列表按项目分组 */
 .group-label {
@@ -227,6 +235,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
   position: relative; display: block; width: 100%; text-align: left; cursor: default;
   padding: var(--item-pad) 12px var(--item-pad) 32px; margin: 1px 0; border-radius: 9px; font-size: var(--list-size);
   user-select: none;
+  --mid: calc(var(--item-pad) + var(--list-size) * .75); /* 标题第一行的垂直中线（行高 1.5）：圆点和勾选框都对着它 */
 }
 .item:hover { background: var(--hover); }
 /* 当前打开的这条：强调色竖条 + 淡强调底色，一眼能看出右边显示的是谁 */
@@ -237,8 +246,11 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .item.selected .t { color: var(--ink); }
 .item.multi { background: var(--sunken); }
 .item.multi.selected { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
-.item .dot { pointer-events: none; position: absolute; left: 13px; top: calc(var(--item-pad) + 8px); width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); }
-.item .dot.hot { background: var(--accent); width: 7px; height: 7px; left: 12.5px; }
+.item .dot { pointer-events: none; position: absolute; left: 12px; top: calc(var(--mid) - 4px); width: 8px; height: 8px; border-radius: 50%; background: var(--unread); }
+/* 状态圆点：实心 = 没读过；强调色 = 等你处理；空心环 = 看过、还没决定；外加一圈 = 紧急。读过 / 处理完不画 */
+.item .dot.hot { background: var(--hot); }
+.item .dot.seen { background: none; border: 2px solid var(--hot); }
+.item .dot.urgent { outline: 1.5px solid var(--hot); outline-offset: 2px; }
 /* 勾选框：平时藏着（位置给状态圆点），鼠标移上来或已经在多选时才出现 */
 .cb {
   flex: none; width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid var(--ink-4); background: var(--bg);
@@ -251,7 +263,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center/contain no-repeat;
 }
 .cb.some::after { content: ""; width: 8px; height: 2px; border-radius: 1px; background: #fff; }
-.item .cb { position: absolute; z-index: 1; left: 8px; top: calc(var(--item-pad) + 3px); opacity: 0; }
+.item .cb { position: absolute; z-index: 1; left: 8px; top: calc(var(--mid) - 8px); opacity: 0; }
 .item:hover .cb, .list.multi-mode .item .cb { opacity: 1; }
 .item:hover .dot, .list.multi-mode .item .dot { opacity: 0; }
 /* 悬停操作：鼠标移上来才出现，盖在时间上 */
@@ -267,14 +279,14 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .act.danger:hover { color: var(--danger); background: var(--danger-soft); }
 .act i[data-icon] { width: 15px; height: 15px; }
 .item .row1 { display: flex; align-items: baseline; gap: 10px; }
-.item .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
-.item .t { font-weight: 600; }
+.item .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-calm); }
+.item .t { font-weight: 600; } /* 读没读字重都一样（点开时字不挪），只换颜色：读过的安静一些 */
 .item.unread .t, .item.open .t { color: var(--ink); }
 .item .time { flex: none; color: var(--ink-4); font-size: 12px; font-variant-numeric: tabular-nums; }
 .item .row2 { margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-3); font-size: calc(var(--list-size) - .5px); }
 .item .src { color: var(--ink-3); font-weight: 550; }
 .item .st { font-weight: 600; }
-.item .st.open { color: var(--accent); }
+.item .st.open { color: var(--accent-ink); }
 .item .st.done { color: var(--ok); }
 .item .st.skip, .item .st.kind { color: var(--ink-4); }
 .list-empty { padding: 64px 24px; text-align: center; color: var(--ink-4); font-size: 13px; }
