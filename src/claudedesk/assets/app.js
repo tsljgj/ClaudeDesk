@@ -652,6 +652,8 @@
     else if (m.kind === "decision" && m.dismissed) bits.push('<span class="st skip">已跳过</span>');
     else if (m.kind === "decision" && m.answered) bits.push('<span class="st done">✓ ' + esc(m.choice || "已回复") + "</span>");
     else if (m.priority === "high" && m.unread) bits.push('<span class="st open">紧急</span>');
+    if (m.followup_pending) bits.push('<span class="st fu">已追问 · 等回答</span>'); // 你追问了，会话还没回应（等的是 Claude，不用强调色）
+    else if (m.reply_to) bits.push('<span class="st kind">回应追问</span>');
     if (src) bits.push('<span class="src">' + esc(src) + "</span>");
     if (m.snippet) bits.push(esc(m.snippet));
     // 悬停按钮和勾选框不进 Tab 顺序（平时看不见；键盘有 U / R / E / Delete / X）
@@ -711,7 +713,7 @@
     $("empty").hidden = true;
     $("detail").hidden = false;
     var key = m.id + "|" + m.answered;
-    if (S.shownKey === key) { renderEyebrow(m); return; }
+    if (S.shownKey === key) { renderEyebrow(m); syncFollowup(m); return; }
     var cached = S.details[key];
     if (cached) return showDetail(keepDetail(key, cached), key);
     api("/api/message?id=" + encodeURIComponent(m.id)).then(function (d) {
@@ -767,6 +769,9 @@
     $("questionText").textContent = d.question || "";
     renderBody(d);
     renderDecision(d, newMsg);
+    renderFollowup(d, newMsg);
+    renderThreadRef(d);
+    syncFollowup(S.byId[d.id] || d); // 缓存里的详情可能比列表旧（期间又追问 / 送达 / 有了回应）
     if (newMsg) {
       $("scroller").scrollTop = 0;
       $("toolbar").classList.remove("scrolled");
@@ -904,6 +909,107 @@
         if (cd && cd.id === d.id) submit(); else window.deskOpen(d.id); // 已经换到别的消息：先带回这条，不替别的消息提交
       } });
     });
+  }
+
+  // ---------------------------------------------------------------- 追问（每条消息底部；还没回复的决定只有自己的回复框，回复了才出现）
+  // 会话挂着 wait --followups 时（listening）发出去它就接着答；它领走一条就退出、答完再挂上，这段时间说"正在回答"
+  // （delivered 是领走的时间；一小时还没回应，多半是会话没了，不再这么说）
+  function canFollow(d) { return !!d && !(d.kind === "decision" && !d.response); }
+  var fuSending = {}; // 正在发追问的消息 id（和决定的 S.submitting 分开：决定刚提交完、卡片刚出现时不能是锁着的）
+  function fuAnswering(f) { return !!f.delivered && !f.reply && Date.now() - new Date(f.delivered) < 3600e3; }
+  function fuState(d) {
+    var m = S.byId[d.id] || d;
+    if (m.listening) return ["on", "会话在线，发出后它会接着回答。"];
+    if ((d.followups || []).some(fuAnswering)) return ["on", "会话收到了你的追问，正在回答。"];
+    return ["off", "这个会话现在没在听（可能已经结束了）。追问会存在这里；也可以复制下来，直接粘到 Claude 对话里。"];
+  }
+  function fuStored(d) { return (d.followups || []).filter(function (f) { return !f.reply && !fuAnswering(f); }); } // 可以复制到对话里的
+  function renderFollowup(d, reset) {
+    var box = $("followup");
+    if (!canFollow(d)) { box.hidden = true; return; }
+    box.hidden = false;
+    var busy = !!fuSending[d.id], link = function (r) { return '<button class="fu-a" data-open="' + esc(r.id) + '">Claude 的回答：' + esc(r.title) + " →</button>"; };
+    // 你的追问按时间排，每条下面是回应它的那条回答（点了打开），还没有就"等待回答…"
+    var html = (d.followups || []).map(function (f) {
+      return '<div class="fu-item"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
+        '<div class="fu-q">' + esc(f.text) + "</div>" + (f.reply ? link(f.reply) :
+        '<div class="fu-wait">等待回答…' + (f.delivered ? " · 已送到会话" : "") + "</div>") + "</div>";
+    }).join("") + (d.replies || []).filter(function (r) { return !r.paired; }).map(link).join(""); // 配不上追问的回应也列出来
+    $("fuList").innerHTML = html;
+    $("fuList").hidden = !html;
+    var ta = $("fuText"), dr = S.drafts[d.id];
+    if (reset || ta.dataset.id !== d.id) ta.value = dr ? dr.text : ""; // 每条各记各的草稿；决定刚回复、卡片刚出现时也换成它自己的
+    ta.dataset.id = d.id;
+    ta.readOnly = busy;
+    box.setAttribute("aria-busy", busy ? "true" : "false");
+    $("fuSend").textContent = busy ? "发送中…" : "发送";
+    renderFuState(d);
+  }
+  function renderFuState(d) { // 会话上线 / 下线、打字：只重画状态行和按钮
+    var st = fuState(d), busy = !!fuSending[d.id], text = $("fuText").value.trim();
+    $("fuState").className = "fu-state " + st[0];
+    $("fuState").textContent = st[1];
+    $("fuCopy").hidden = st[0] === "on" || !fuStored(d).length;
+    $("fuSend").disabled = busy || !text;
+    $("fuHint").textContent = busy ? "正在发送…" : text ? "Ctrl+Enter 发送" : "";
+  }
+  // 长轮询来了：追问 / 送达 / 回应变了（列表里的 fstate 和详情的对不上）就重新拿这条的详情，只重画追问卡片；否则只更新在线状态
+  var fuFetching = {};
+  function syncFollowup(m) {
+    var d = S.details[S.shownKey];
+    if (!m || !d || d.id !== m.id) return;
+    if ((d.fstate || "") === (m.fstate || "")) { if (canFollow(d)) renderFuState(d); return; }
+    if (fuFetching[m.id]) return;
+    fuFetching[m.id] = 1;
+    api("/api/message?id=" + encodeURIComponent(m.id)).then(function (nd) {
+      delete fuFetching[m.id];
+      var cm = S.byId[m.id];
+      if (!nd || nd.error || !cm || nd.answered !== cm.answered) return;
+      var key = cm.id + "|" + cm.answered;
+      keepDetail(key, nd);
+      if (S.shownKey === key) { renderFollowup(nd, false); renderThreadRef(nd); }
+    }).catch(function () { delete fuFetching[m.id]; });
+  }
+  function sendFollowup() {
+    var d = currentDetail();
+    if (!canFollow(d) || fuSending[d.id]) return;
+    var text = $("fuText").value.trim();
+    if (!text) { $("fuText").focus(); return; } // 还没写：Ctrl+Enter 先把光标放进追问框
+    fuSending[d.id] = 1; // 发送中：按钮写"发送中…"，输入框锁住；失败原样恢复，可以重试
+    renderFollowup(d, false);
+    act({ action: "followup", id: d.id, text: text }).then(function () {
+      delete fuSending[d.id];
+      delete S.drafts[d.id];
+      var cd = currentDetail();
+      if (cd && cd.id === d.id) { $("fuText").value = ""; renderFollowup(cd, false); }
+      else toast("已追问「" + d.title + "」");
+      return refreshNow(true);
+    }).catch(function (e) {
+      delete fuSending[d.id];
+      var cd = currentDetail();
+      if (cd && cd.id === d.id) renderFollowup(cd, false);
+      toast("追问没发出去：" + e.message, { bad: true });
+    });
+  }
+  function copyFollowup() { // 会话没在听：带上原消息的标题（原问题、我当时的选择）复制，粘到对话里会话也知道问的是哪条
+    var d = currentDetail(), fs = d ? fuStored(d) : [];
+    if (!fs.length) return;
+    var cut = function (s) { s = (s || "").replace(/\s+/g, " ").trim(); return s.length > 100 ? s.slice(0, 100) + "…" : s; };
+    var q = cut(d.question), r = d.response, mine = r && (r.resolved ? "标为已处理" : r.dismissed ? "跳过了" : cut(r.choice || r.text));
+    var text = "关于你在 ClaudeDesk 里发的" + KIND[d.kind] + "「" + d.title + "」" + (q ? "（原问题：" + q + "）" : "") +
+      (mine ? "（我当时的回复：" + mine + "）" : "") + "，我追问：\n\n" + fs.map(function (f) { return f.text; }).join("\n\n") +
+      "\n\n（ClaudeDesk 追问 · 原消息 id：" + d.id + "）\n";
+    writeClipboard(text).then(function () { toast("已复制追问，粘到 Claude 对话里就行"); })
+      .catch(function (e) { toast("复制失败：" + e.message, { bad: true }); });
+  }
+  function renderThreadRef(d) { // 回应追问的那条：顶上写它回应的是哪句追问，点了回到被追问的那条
+    var r = d.reply_ref, el = $("threadRef");
+    el.hidden = !r;
+    if (!r) return;
+    var q = (r.text || "").replace(/\s+/g, " ").trim(), k = KIND[r.kind] || "消息";
+    if (q === (d.question || "").replace(/\s+/g, " ").trim()) q = ""; // 追问原文就在下面的引用块里，不重复
+    el.innerHTML = '<span class="tr-q">↩ 回应你的追问' + (q ? "：「" + esc(q.length > 60 ? q.slice(0, 60) + "…" : q) + "」" : "") + "</span>" +
+      (r.exists ? '<button class="tr-link" data-open="' + esc(r.id) + '" title="回到被追问的那条">原' + k + "：" + esc(r.title) + "</button>" : "<span>（原消息已删除）</span>");
   }
 
   // ---------------------------------------------------------------- 选择 / 导航
@@ -1474,7 +1580,7 @@
   function showShortcuts() { // 分四组、宽时两栏；只列键盘（鼠标操作看悬停提示）
     var groups = [["浏览", [["↑ ↓ / J K", "上一条 / 下一条"], ["N / Shift + N", "下一条 / 上一条待决定"], ["Shift + ↑ ↓", "连续勾选"],
         ["/", "搜索"], ["[ ]", "切换项目"], ["F", "只看未处理（开 / 关）"], ["Esc", "退一层"]]],
-      ["决定", [["1 – 9", "选第 N 项"], ["Ctrl + Enter", "提交"], ["Enter", "打开 / 写补充说明"], ["R", "标为已处理"]]],
+      ["决定", [["1 – 9", "选第 N 项"], ["Ctrl + Enter", "提交 / 发追问"], ["Enter", "打开 / 写补充说明或追问"], ["R", "标为已处理"]]],
       ["整理", [["E", "归档"], ["U", "已读 / 未读"], ["X", "勾选"], ["Ctrl + A", "全选"], ["Delete", "删除"], ["Z", "撤销"]]],
       ["其他", [["C", "复制 Markdown"], ["Ctrl + P", "导出 PDF"], ["Ctrl + ,", "设置"], ["?", "快捷键"]]]];
     $("modalTitle").textContent = "快捷键";
@@ -1658,6 +1764,17 @@
     });
     $("replyText").addEventListener("input", function () { var id = shownId(); if (id) saveDraft(id); updateSubmit(); });
     $("submitBtn").addEventListener("click", submit);
+    $("fuText").addEventListener("input", function () {
+      var d = currentDetail(), t = $("fuText").value;
+      if (!canFollow(d) || shownId() !== d.id) return;
+      if (t.trim()) S.drafts[d.id] = { idx: null, text: t }; else delete S.drafts[d.id]; // 和决定的草稿放在一起，按消息 id 记
+      renderFuState(d);
+    });
+    $("fuSend").addEventListener("click", sendFollowup);
+    $("fuCopy").addEventListener("click", copyFollowup);
+    [$("followup"), $("threadRef")].forEach(function (box) { // "Claude 的回答 →" / "原回答（原决定…）"：打开那一条
+      box.addEventListener("click", function (e) { var b = e.target.closest("[data-open]"); if (b) window.deskOpen(b.dataset.open); });
+    });
     $("resolveBtn").addEventListener("click", function () { var d = currentDetail(); if (d) doResolve([d.id]); });
     $("copyBtn").addEventListener("click", function () { copy("md"); });
     $("copyMenuBtn").addEventListener("click", function () {
@@ -1742,9 +1859,10 @@
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "p") { e.preventDefault(); pdf(); return; }
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "f") { e.preventDefault(); findBox(); $("search").select(); return; }
     if ((e.ctrlKey || e.metaKey) && k === ",") { e.preventDefault(); openSettings(); return; }
-    if ((e.ctrlKey || e.metaKey) && k === "Enter") { // 决定还没回复：焦点在哪都能提交
+    if ((e.ctrlKey || e.metaKey) && k === "Enter") { // 决定还没回复：焦点在哪都能提交；别的（含回复过的决定）：发追问
       var dd = currentDetail();
       if (dd && dd.kind === "decision" && !dd.response) { e.preventDefault(); submit(); }
+      else if (canFollow(dd)) { e.preventDefault(); sendFollowup(); }
       return;
     }
     if (typing) return;
@@ -1788,6 +1906,7 @@
       if (narrow() && !S.current && S.cursor && S.visible.indexOf(S.cursor) >= 0) { e.preventDefault(); select(S.cursor, { scroll: true }); return; } // 窄窗口列表页：打开光标那条
       var d = currentDetail();
       if (d && d.kind === "decision" && !d.response) { e.preventDefault(); $("replyText").focus(); }
+      else if (canFollow(d)) { e.preventDefault(); $("fuText").focus(); } // 别的：写追问
     }
   }
 

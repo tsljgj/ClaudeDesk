@@ -409,7 +409,7 @@ def test_print_options_copy_text_reply_and_legacy_colour(env):
     pr = page.evaluate("document.getElementById('printRoot').textContent")
     assert "先修 CI（推荐）：再发版" in pr and "直接发版" in pr
     page.evaluate("window.dispatchEvent(new Event('afterprint'))")
-    # 复制 Markdown：只写了文字的回复也带上；跳过 / 已解决的系统文字不算"我的回复"
+    # 复制 Markdown：只写了文字的回复也带上；跳过 / 已处理的系统文字不算"我的回复"
     md = page.evaluate("deskTest.markdownOf({ title: 't', body: 'b', response: { choice: null, text: '先把 CI 修好' } })")
     assert md.endswith("**我的回复：** 先把 CI 修好\n")
     md = page.evaluate("deskTest.markdownOf({ title: 't', body: 'b', response: { choice: null, text: '跳过', dismissed: true } })")

@@ -1,6 +1,6 @@
 ---
 name: claude-desk
-description: 通过桌面程序 ClaudeDesk 和用户沟通。需要用户决定时使用（一律发 decision 并后台 wait，不用 AskUserQuestion）；回答用户问题时使用（对话里回答之外，再把原问题和完整回答发成 answer，免得被工具输出淹没）；少量进展通知用 info。
+description: 通过桌面程序 ClaudeDesk 和用户沟通。需要用户决定时使用（一律发 decision 并后台 wait，不用 AskUserQuestion）；回答用户问题时使用（对话里回答之外，再把原问题和完整回答发成 answer，免得被工具输出淹没）；少量进展通知用 info。发过消息就后台挂一个 wait --followups 接用户的追问。
 ---
 
 # ClaudeDesk：给用户发"待决定 / 回答 / 通知"
@@ -20,10 +20,10 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 ## 规则
 
 1. **需要用户决定的事：一律 `post --kind decision`，然后后台 `wait`。不要用 AskUserQuestion。**
-2. **回答用户的问题：对话里照常回答，同时 `post --kind answer`**，`--question` 放用户原问题（原文），正文放完整回答。用户下达的是任务而不是提问时不用发；"好的 / 收到"这类也不用发。
+2. **回答用户的问题：对话里照常回答，同时 `post --kind answer`**，`--question` 放用户原问题（原文），正文放完整回答。用户下达的是任务而不是提问时不用发；"好的 / 收到"这类也不用发。发完确认挂着追问监听（见"追问"）。
 3. **进展通知 `--kind info`：少用。** 只用于用户明确在等的事：长任务完成、跑挂了需要人管、机器或环境出了问题。
 4. **`--source` 用项目名**（仓库名，例如 `my-project`）；同一项目里有多条并行会话时加后缀（`my-project/data`）。同一会话里保持不变。ClaudeDesk 按**仓库**分标签：`post` 会自动记下当前目录所在 git 仓库的名字（origin 地址里的仓库名），所以要在项目目录里运行 `desk.py`（Bash 默认就在）。不在 git 仓库里时用当前目录名；要指定就加 `--repo <仓库名>`。
-5. **子 agent 不要发 decision 等回复。** 子 agent 等不起（它的 prompt cache 很快过期）；把要决定的事交回主会话，由主会话发。
+5. **子 agent 不要发 decision 等回复，也不挂追问监听。** 子 agent 等不起（它的 prompt cache 很快过期）；把要决定的事交回主会话，由主会话发。
 
 ## 发决定（decision）
 
@@ -65,9 +65,10 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
    - 按 `choice` 执行，`text` 里的补充条件同样要遵守。`choice_index` 是用户点的第几个选项（从 1 开始）；选项名字有重复时以它为准。
    - `text` 和 `choice` 冲突、或者只写了文字时，以文字为准；看不懂就再发一条 decision 问清楚，不要猜。
-   - 回复里带 `"resolved": true`（`choice` 为 `null`）表示用户在 ClaudeDesk 里把这条**标为已解决**：事情已经处理好了（可能是用户自己做了，或者不再需要）。不要按任何选项执行；在对话里说一句"这条决定用户标为已解决了"，继续做不依赖它的事。
+   - 回复里带 `"resolved": true`（`choice` 为 `null`）表示用户在 ClaudeDesk 里把这条**标为已处理**：事情已经处理好了（可能是用户自己做了，或者不再需要）。不要按任何选项执行；在对话里说一句"这条决定用户标为已处理了"，继续做不依赖它的事。
    - 回复里带 `"dismissed": true`（`choice` 为 `null`）表示用户在 ClaudeDesk 里把这条归档 / 删除了、没有作出选择：不要按任何选项执行，在对话里说一句"这条决定被跳过了"，继续做不依赖它的事，或者结束这一轮等用户在对话里说。
    - 执行前在对话里用一句话复述"用户选了 X（补充：…），现在开始做"。
+   - 然后确认挂着追问监听（见"追问"）：用户可能对处理过的决定再追问。
 6. 特殊情况：
    - **用户直接在对话里答了**：停掉后台 `wait`，先 `"$PY" "$DESK" close --id <id> --text "用户在对话里选了 …"`，让 ClaudeDesk 里那条不再显示"待决定"，再按对话里的答复执行。
      `close` 退出码 3 表示**用户已经在 ClaudeDesk 里回复过了**：stdout 那行 JSON 就是那条回复（也可以 `responses --id <id>` 查）。和对话里的答复一致就照做；不一致（或者是 resolved / dismissed）就在对话里说明两边的差别，问清楚以哪个为准，不要默默只按其中一个做。
@@ -87,6 +88,38 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 - 正文就是完整回答，和对话里的回答一致或更完整。先给结论，再给依据，数字和路径写全。
 - 一轮里用户问了几个问题，合成一条发，标题概括。
 
+## 追问（follow-up）
+
+用户可以在 ClaudeDesk 里对你发的任何一条消息追问：answer、info、已经回复过的 decision（选了选项、写了回复、标为已处理、跳过、`close` 掉的都算；还在等回复的 decision 不能追问）。会话挂着监听才收得到；挂着时 ClaudeDesk 告诉用户"会话在线"，没挂时提示用户把追问复制到对话里。一个监听管你这个来源的所有消息。
+
+1. **发完 answer / info、或者 decision 收到回复之后，确认你这个来源有一个、且只有一个后台监听**（Bash 的 `run_in_background: true`，不设超时）。你的上一个还在跑就不要再开：
+
+```bash
+"$PY" "$DESK" wait --followups --source my-project
+```
+
+2. 用户一发追问，`wait` 退出（退出码 0），输出一行 JSON：`msg` 是被追问的消息 id，`kind` 是它的类型，`question` 是它的原问题，`text` 是追问原文。追问的是 decision 时另有用户当时的回复：`choice`、`reply_text`，标为已处理 / 跳过 / 在对话里处理的还带 `resolved` / `dismissed` / `closed_by`：
+
+```json
+{"id": "<追问 id>", "ts": "…", "msg": "<原消息 id>", "kind": "decision", "source": "my-project", "title": "原消息的标题", "question": "", "choice": "先复核", "reply_text": "复核只看第 4 项", "text": "复核要多久？"}
+```
+
+3. 醒来后：
+   1. 在对话里回答这条追问；
+   2. 把回答发回 ClaudeDesk，`--reply-to` 填那行 JSON 里的 `id`（自动记下原消息，`--question` 自动填追问原文，命令行里不用再引用用户的话）：
+
+```bash
+"$PY" "$DESK" post --kind answer --source my-project --reply-to <追问 id> \
+  --title "B 也行，但要先改配置" --body-file "<scratchpad>/followup.md"
+```
+
+   3. 重新挂上监听（第 1 步）。你回答期间用户又发的追问不会丢：重新挂上时立刻拿到。
+
+- 一次只交出一条；同一条只会交给一个监听。
+- 用户把带「ClaudeDesk 追问 · 原消息 id：…」的文字贴进对话：照样在对话里答，再用 `--reply-to <那个 id> --question '<追问原文>'` 发回去。
+- 查追问和状态（已回答 / 已送达 / 未送达）：`"$PY" "$DESK" followups --source my-project`。
+- 退出码：2 = 超时（只在加了 `--timeout` 时）；4 = 启动它的 shell 已经没了，不用处理。
+
 ## 发通知（info）
 
 ```bash
@@ -99,5 +132,5 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
 - 正文一律用文件或 stdin 传，不要把多行 Markdown 塞进命令行参数。命令行只放标题、选项这类短文本，用单引号包起来。
 - 不要往消息里写凭据、token。
-- 数据在 `<ClaudeDesk 目录>\data\`：`responses.jsonl` 只追加；`inbox.jsonl` 平时只追加，用户在 ClaudeDesk 里删除消息时会整份重写（去掉删掉的）。都不要手改；要标"已处理"用 `close`。
+- 数据在 `<ClaudeDesk 目录>\data\`：`responses.jsonl`、`followups.jsonl` 只追加；`inbox.jsonl` 平时只追加，用户在 ClaudeDesk 里删除消息时会整份重写（去掉删掉的）。都不要手改；要标"已处理"用 `close`。
 - 程序没响应时先看托盘里有没有图标；日志在 `<ClaudeDesk 目录>\data\claudedesk.log`。

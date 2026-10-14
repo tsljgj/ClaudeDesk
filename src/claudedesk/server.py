@@ -141,6 +141,11 @@ class DeskServer:
                                  body.get("choice_index"))
             except (KeyError, ValueError, FileExistsError) as e:
                 raise ActionError(str(e).strip("'\"")) from None
+        if name == "followup":  # 追问（还没回复的决定不行）
+            try:
+                return st.add_followup(str(body.get("id") or ""), str(body.get("text") or ""))
+            except (KeyError, ValueError) as e:
+                raise ActionError(str(e).strip("'\"")) from None
         if name == "settings":
             for k, v in (body.get("values") or {}).items():
                 if k in SETTINGS and v in SETTINGS[k]:
