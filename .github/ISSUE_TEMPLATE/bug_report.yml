@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: Version and build
-      description: From the bottom-left corner of the window, e.g. "v2.1.0 · build 42", or "源码" when running from source.
+      description: From the bottom-left corner of the window, e.g. "v2.2.0 · build 42", or "源码" when running from source.
     validations:
       required: true
   - type: input

@@ -8,7 +8,7 @@ Only the latest release (the newest `build-<N>` on the [Releases page](https://g
 
 Please report vulnerabilities privately through GitHub: open the repository's **Security** tab and choose **Report a vulnerability** ([direct link](https://github.com/tsljgj/ClaudeDesk/security/advisories/new)). Don't open a public issue.
 
-Include what you found, how to reproduce it, the version and build from the window footer (`v2.1.0 · build N`) and your Windows version. Leave real inbox content out of the report. You should get a first reply within a week; once a fix is released, the advisory is published with credit to you unless you prefer otherwise.
+Include what you found, how to reproduce it, the version and build from the window footer (`v2.2.0 · build N`) and your Windows version. Leave real inbox content out of the report. You should get a first reply within a week; once a fix is released, the advisory is published with credit to you unless you prefer otherwise.
 
 ## How ClaudeDesk is put together
 

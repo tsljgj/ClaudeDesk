@@ -35,10 +35,10 @@ ClaudeDesk is a small Windows tray app that gives Claude Code sessions a place t
 ## Features
 
 - **Decisions with a reply box.** Options with descriptions and a recommended pick, plus a free-text note on every decision. The waiting session gets your choice as one line of JSON.
-- **Answers and follow-ups.** Answers keep your original question. Ask a follow-up on any answer, notice or handled decision; a session that is listening answers it and the reply is linked back.
+- **Answers and follow-ups.** Answers keep your original question. Ask a follow-up on any answer, notice or handled decision from the box at the top of the page; a session that is listening answers it and the reply is linked back, newest first.
 - **Knows where each session is.** Every message remembers the Claude Code session that posted it. Cards say whether that session is waiting, still open but not listening, or ended, and when your reply reached it. One background listener per session brings replies and follow-ups back in a single batch.
 - **One tab per repo.** Messages are grouped by the git repo the session runs in. Tabs can be closed and reopened; a closed tab comes back by itself when that repo posts again.
-- **Built for triage.** A waiting-decisions strip with `N` to jump to the next one, an "unhandled only" filter (`F`), mark handled (`R`) for any selection, one-click archive of everything handled, undo (`Z`), keyboard multi-select.
+- **Built for triage.** A waiting-decisions strip with `N` to jump to the next one, an "unhandled only" filter (`F`), mark handled (`R`) for any selection without waking the session, archive what you handled more than an hour, a day or a week ago, undo (`Z`), keyboard multi-select.
 - **Full Markdown.** Tables, highlighted code and LaTeX math (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`), rendered offline with bundled fonts. Copy any message as Markdown, rich text or plain text, or export it to PDF.
 - **Hard to miss, easy to ignore.** Windows notifications, a tray badge and a taskbar badge with the unread count; urgent decisions keep flashing until you look.
 - **Light, dark or system theme**, four accent colors, sans or serif reading font, three text sizes, three reading widths, two list densities.
@@ -103,27 +103,29 @@ New messages also raise a Windows notification; clicking it opens that message.
 
 ### Repo tabs
 
-- The tabs across the top are **全部项目** (all repos) followed by one tab per repo, sorted by name. The repo comes from `desk.py post`, which records the git repo of the directory it runs in (the origin URL's name; worktrees resolve to their repo; outside git, the folder name; `--repo` overrides).
-- Click a tab to see only that repo; `Ctrl`/`Shift`-click to pick several; `[` / `]` step through them; `Esc` or 全部项目 goes back to all. With several repos in view the list is grouped by repo. View counts, "mark all read" and "archive handled" follow the selection.
-- **Close a tab** with its × or a middle click: its messages are hidden and stop counting (it asks first if decisions are still waiting there, and `Z` undoes it). The tab comes back by itself when that repo posts a new message. **已关闭 N** at the right end of the tab bar, and Settings, list the closed tabs to reopen.
+- The tabs across the top are one per repo, sorted by name. There is no mixed all-repos view: you always look at one repo, or at the few you pick. The repo comes from `desk.py post`, which records the git repo of the directory it runs in (the origin URL's name; worktrees resolve to their repo; outside git, the folder name; `--repo` overrides).
+- Click a tab to see that repo; `Ctrl`/`Shift`-click to pick several (the last one can't be deselected); `[` / `]` step through the open tabs. With several repos in view the list is grouped by repo. View counts, "mark all read" and "archive handled" follow the selection.
+- On start the window shows the repos you had selected last time; failing that, the repo with the longest-waiting decision; failing that, the repo with the newest message. Opening a message from the tray, a notification or a notice switches to its repo.
+- **Close a tab** with its × or a middle click: its messages are hidden and stop counting (it asks first if decisions are still waiting there, and `Z` undoes it). Closing the selected tab moves to its neighbour. The tab comes back by itself when that repo posts a new message. **已关闭 N** at the right end of the tab bar, and Settings, list the closed tabs to reopen; with every tab closed, the list offers **找回标签…**.
 - Messages from before repo tracking are matched to repos found in Claude Code's own session history (`~/.claude/projects`, plus `CLAUDE_CONFIG_DIR`). Anything left over goes under **未归类** (unsorted), which only shows up when it has messages. "归到…" on a group header, or right-clicking a tab, files a source under a repo; Settings can undo it.
 - When the tabs don't fit, the mouse wheel scrolls them sideways and a small orange dot points at hidden tabs with waiting decisions.
 
 ### The list
 
 - Four views: **全部** (everything; the window always opens here), **决定** (decisions), **回答** (answers) and **归档** (archive). An orange pill counts waiting decisions; a grey number counts unread messages.
-- **Waiting-decisions strip:** while decisions are waiting, a strip under the search box reads "N 条待决定 · M 条紧急 · 最久已等 X". Click it or press `N` for the next waiting decision in the selected repos (urgent first, then the longest-waiting; `Shift+N` goes back). Waiting rows show how long the session has been waiting instead of a clock time. When a new decision or urgent message arrives somewhere you can't see, a toast says so and `N` opens it.
+- **Waiting-decisions strip:** while decisions are waiting, a strip under the search box reads "N 条待决定 · M 条紧急 · 最久已等 X". Click it or press `N` for the next waiting decision in the selected repos (urgent first, then the longest-waiting; `Shift+N` goes back); when none are left there, `N` switches to the repo with the longest-waiting decision and opens it. Waiting rows show how long the session has been waiting instead of a clock time. When a new decision or urgent message arrives somewhere you can't see, a notice at the bottom of the list says so and `N` opens it.
 - **只看未处理** (unhandled only, `F`) next to the search box hides everything except waiting decisions and unread messages. The message you are reading stays until you move on. The setting is remembered.
-- **Archive handled** (the box icon next to it) archives everything in the selected repos that is read and no longer needs a decision, in one click, without asking; `Z` undoes it. The "⋯" menu has the same plus "mark all read".
+- **Archive handled** (the box icon next to it) archives what in the selected repos is read and no longer needs a decision, like clearing browser history: pick **早于 1 小时 / 早于 24 小时 / 早于 7 天 / 全部** (older than 1 hour / 24 hours / 7 days / all), each with its count. Age counts from the message's last activity: when it arrived, when you replied, or when you last opened it. The message you are reading is never archived, the last choice is remembered, and `Z` undoes exactly that batch. The "⋯" menu has the same plus "mark all read".
 - Marks: a solid dot is unread; an orange dot is a decision you haven't opened; an orange ring is a decision you've seen but not answered; an extra outer ring marks an urgent decision. The second line shows the status (待决定, ✓ your choice, ✓ 已处理, 已跳过, 已追问 · 等回答). Moving through the list with `↑`/`↓` marks a message read only after it stays open for 0.8 s.
 - Hover a row for its own actions (read/unread, mark handled, archive, delete) and a checkbox. Right-click works too.
 - **Select several:** tick checkboxes (`Shift` for a range), `Ctrl`-click, `X` for the current message, `Shift+↑↓`, `Ctrl+A`. The batch bar offers select all, mark handled, read, archive and delete.
-- Search with `/` or `Ctrl+F` across titles, bodies, sources, questions and options. Matches hidden by the current view, repo or a closed tab are counted at the end of the list, one click away.
+- Search with `/` or `Ctrl+F` across titles, bodies, sources, questions and options, in the selected repos. Matches in other repos show at the end of the list as one button per repo ("其他项目：webapp 3 · …"), which switches to that repo and keeps the query; matches hidden by the current view or a closed tab are counted there too, one click away.
+- Confirmations, errors and their undo or retry buttons appear at the bottom of the list, never over the message you are reading.
 
 ### Decisions
 
 - Press `1`–`9` or click an option, optionally type a note in the reply box (every decision has one), then `Ctrl+Enter` (from anywhere) or 提交. A decision without options takes a text reply. A half-picked, half-written reply survives switching to another message and back.
-- The recommended option is labelled 推荐. Each decision can be answered once; afterwards "下一条待决定 →" (or `N`) moves on.
+- The decision card sits right under the title, above the message body. The recommended option is labelled 推荐. Each decision can be answered once; afterwards "下一条待决定 →" (or `N`) moves on.
 - The line at the top of the card says where the session that posted it is:
 
   | Line | Meaning |
@@ -133,20 +135,21 @@ New messages also raise a Windows notification; clicking it opens that message.
   | 这个会话已经结束：回复会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回。 | The session's process is gone; the reply is kept for a new session in the same repo. 标为已处理 is highlighted, since it is usually the right step |
   | 会话已等 N 分钟 · 提交后立即继续 | An older message that doesn't record its session (posted by an older `desk.py`) |
 
-- After you reply, "你的回复" says whether the session has it: **已送达会话 · HH:MM**, or **还没送达** with the reason (会话在等，马上就到 / 会话下次查看时收到 / 会话已经结束). A handled or skipped decision of an ended session just says that the session no longer needs telling.
-- In the list, a waiting decision whose session has ended carries a grey **会话已结束** tag. If you don't need it any more, select it (or several) and press **标为已处理** (`R`): nobody is waiting on it, so it doesn't ask first.
-- **标为已处理** (mark handled, `R`) works on any selection: a waiting decision tells its session that the matter is handled, without picking an option (`"resolved": true` in the reply); everything else is marked read. `R` asks first when decisions with a live session are involved, because the session is told right away; otherwise it can be undone.
-- Archiving (`E`) or deleting (`Delete`) a decision that is still waiting tells its session you skipped it (`"dismissed": true`), so it never hangs. Delete really removes the message from the inbox file; a reply or follow-up already written still reaches its session.
+- After you reply, "你的回复" says whether the session has it: **已送达会话 · HH:MM**, or **还没送达** with the reason (会话在等，马上就到 / 会话下次查看时收到 / 会话已经结束). A decision you marked handled or skipped says **没有通知会话** (the session was not told).
+- In the list, a waiting decision whose session has ended carries a grey **会话已结束** tag. If you don't need it any more, select it (or several) and press **标为已处理** (`R`).
+- **标为已处理** (mark handled, `R`) works on any selection and never messages the session: use it when you have already settled the matter in the chat, or it no longer matters. A waiting decision is closed without picking an option (`"resolved": true, "silent": true` in the reply), everything else is marked read. It doesn't ask first, and `Z` undoes it: the decisions reopen as they were.
+- Archiving (`E`) or deleting (`Delete`) a decision that is still waiting closes it as skipped (`"dismissed": true, "silent": true`), again without messaging the session; archiving can be undone, deleting asks first. Delete really removes the message from the inbox file; a reply or follow-up already written still reaches its session.
 
 ### Follow-up questions
 
-- Answers, notices and decisions that already have a reply (picked, handled, skipped or closed in chat) have a **追问** (follow-up) box at the bottom. `Enter` jumps into it and `Ctrl+Enter` sends.
-- The line at the top of the follow-up card says where the session that posted the message is, as on decisions:
+- Answers, notices and decisions that already have a reply (picked, handled, skipped or closed in chat) have a **追问** (follow-up) box right under the title. It is one line until you click into it. `Enter` jumps into it and `Ctrl+Enter` sends.
+- Every page reads newest first: the box (or an open decision's card) at the top, then your follow-ups with their answers, newest first, then your reply to the decision, and the original question and body at the bottom.
+- The line under the follow-up box says where the session that posted the message is, as on decisions:
   - **会话在等，发出后马上收到。** Its `listen` is running; the follow-up is delivered at once.
   - **会话还开着，但现在没在听：追问会存着，它下次查看时收到。** It gets the follow-up the next time it starts `listen`.
   - **会话收到了你的追问，正在回答。** It has just taken your follow-up and is writing the answer.
   - **这个会话已经结束：追问会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回，也可以复制下来粘到对话里。**
-- Each follow-up waiting for an answer shows **等待回答… · 已送达会话 · HH:MM**, or **等待回答… · 还没送达** with the reason. The session's answer appears under your question and in the list as "回应追问", with a link back to the original.
+- Each follow-up waiting for an answer shows **等待回答… · 已送达会话 · HH:MM**, or **等待回答… · 还没送达** with the reason. The session's answer is linked under your question and shows in the list as "回应追问", with a link back to the original.
 - While the session isn't listening, **复制追问** copies the waiting follow-ups, with the original title and message id, for pasting into the Claude chat. The row shows "已追问 · 等回答" until an answer arrives.
 - Older messages that don't record their session keep the old wording: the box says the session is online while a `desk.py wait --followups` for that source is running.
 
@@ -177,7 +180,7 @@ Press `?` in the app for the same sheet.
 | `X` | tick the current message | `Ctrl+,` | settings |
 | `Ctrl+A` | select all | `?` | shortcuts |
 | `Delete` | delete | | |
-| `Z`, `Ctrl+Z` | undo (while its toast is showing) | | |
+| `Z`, `Ctrl+Z` | undo (while its notice is showing) | | |
 
 ## CLI reference (`desk.py`)
 

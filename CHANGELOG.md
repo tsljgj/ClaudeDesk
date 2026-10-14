@@ -2,7 +2,24 @@
 
 All notable changes to ClaudeDesk are listed here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-The version is the one shown in the window footer (`v2.1.0 · build N`). Every green build on `main` is also published as a release tagged `build-<N>`; installed copies update to the newest build, so one version usually spans several builds.
+The version is the one shown in the window footer (`v2.2.0 · build N`). Every green build on `main` is also published as a release tagged `build-<N>`; installed copies update to the newest build, so one version usually spans several builds.
+
+## [2.2.0] - 2026-10-14
+
+### Added
+
+- **Archive handled by age.** The archive-handled button (and its entry in the "⋯" menu) opens a menu like clearing browser history: 早于 1 小时 / 早于 24 小时 / 早于 7 天 / 全部, each with its count. Age counts from a message's last activity: when it arrived, when you replied, or when you last opened it (`read_at` in `state.json`). The message you are reading is never archived, the last choice is remembered, and `Z` puts back exactly that batch.
+- Searching shows matches in other repos as one button per repo at the end of the list ("其他项目：webapp 3 · …"); a click switches to that repo and keeps the query.
+- `N` continues into other repos: when the selected repos have no waiting decision left, it switches to the repo with the longest-waiting one and opens it.
+
+### Changed
+
+- **Marking handled, archiving and deleting no longer message the session.** You mark a decision handled when you have already settled it in the chat or it no longer matters, so the session isn't woken for it. These replies carry `"silent": true`; `listen`, `inbox`, `status`, `close --mine` and `wait --id` ignore them, and `close --id` still exits 3 without recording a delivery. Records written by earlier builds behave as before.
+- **标为已处理** (`R`) and archiving a waiting decision no longer ask first; both can be undone with `Z`, which reopens the decisions (new app action `unresolve`). Deleting still asks. The card says **已标为已处理 · 没有通知会话** or **已跳过 · 没有通知会话**.
+- **No more 全部项目 tab.** You always look at one repo, or at the few you `Ctrl`/`Shift`-click. On start the window shows the repos you had selected; failing that, the repo with the longest-waiting decision; failing that, the one with the newest message. Closing the selected tab moves to its neighbour; with every tab closed the list offers **找回标签…**. Opening a message from the tray, a notification or a notice switches to its repo. `Esc` no longer clears the repo filter, and `[` / `]` cycle through the open tabs.
+- **Newest first on every page.** The follow-up box, or an open decision's card, sits right under the title; below it come your follow-ups and their answers, newest first, then your reply to the decision, and the original question and body at the bottom. The follow-up box is one line until you click into it. The "去选择 ↓" button is gone.
+- **Notices moved to the bottom of the list.** Confirmations, errors and their undo or retry buttons no longer float over the message you are reading.
+- `desk.py wait` reads `responses.jsonl` from the start again when the file has been replaced or has shrunk.
 
 ## [2.1.0] - 2026-10-14
 
@@ -91,5 +108,6 @@ The version is the one shown in the window footer (`v2.1.0 · build N`). Every g
 - A cross-process byte lock around every append; each decision can be answered once.
 - The Claude Code skill, a PyInstaller build script (`build.cmd -Install` adds a Startup shortcut) and English and Chinese READMEs. MIT licensed.
 
-[2.1.0]: https://github.com/tsljgj/ClaudeDesk/compare/build-23...main
+[2.2.0]: https://github.com/tsljgj/ClaudeDesk/compare/build-29...main
+[2.1.0]: https://github.com/tsljgj/ClaudeDesk/compare/build-23...build-29
 [2.0.0]: https://github.com/tsljgj/ClaudeDesk/releases/tag/build-23
