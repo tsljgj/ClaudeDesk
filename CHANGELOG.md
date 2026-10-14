@@ -8,6 +8,13 @@ The version is the one shown in the window footer (`v2.1.0 · build N`). Every g
 
 ### Added
 
+- **Session protocol v2.** Every message remembers the Claude Code session that posted it (`session`, `session_pid`, `session_pid_start`, taken from `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID`), and your replies and follow-ups are routed back to that session. `--source` is now optional and only a display name. See [docs/PROTOCOL.md](docs/PROTOCOL.md).
+- `desk.py listen`: one background listener per session. It returns once with all of that session's pending replies and follow-ups, one JSON line each, and waits a moment so that replies arriving together wake the session only once. A second listener for the same session exits at once (exit 5); a listener whose session has ended exits silently (exit 4).
+- `desk.py post --body-from-chat` and `--question-from-chat` copy the answer and your question from the session's transcript, so a session writes each answer once, in the chat.
+- `desk.py close --mine` closes all of a session's waiting decisions; `desk.py status` prints one line (waiting decisions, undelivered events, whether `listen` runs); `desk.py inbox` lists what ended sessions left undelivered in the current repo, and `inbox --adopt` hands it to the new session.
+- **Session state on cards.** Decision and follow-up cards say whether the session is waiting (会话在等), open but not listening, or ended. After you reply or ask a follow-up, the card shows "已送达会话 · HH:MM" once the session has it, or "还没送达" and why.
+- **会话已结束** tag on waiting decisions whose session has ended; 标为已处理 clears them without asking, since nobody is waiting.
+- `data/deliveries.jsonl` records what was delivered to which session, so every reply and follow-up is delivered exactly once, whichever command picks it up.
 - **Follow-up questions (追问).** Answers, notices and decisions that already have a reply get a follow-up box. If the session that posted the message is listening, the follow-up is delivered at once and its answer appears under your question; otherwise it is kept and can be copied into the Claude chat. The list shows "已追问 · 等回答" until an answer arrives.
 - `desk.py wait --followups --source S` waits for the next follow-up on that source's messages (exit 4 when the shell that started it is gone), `desk.py post --reply-to <id>` answers one, and `desk.py followups` lists them with their status. Follow-ups are stored in `data/followups.jsonl`.
 - **Closable repo tabs.** Close a tab with its × or a middle click; its messages are hidden and stop counting, and the tab comes back by itself when that repo posts again. "已关闭 N" at the end of the tab bar and Settings list the closed tabs to reopen. Search results inside closed tabs are counted at the end of the list.
@@ -24,6 +31,18 @@ The version is the one shown in the window footer (`v2.1.0 · build N`). Every g
 - **未归类** (unsorted) only shows up as a tab while it has unarchived messages. The tab bar no longer shows the logo.
 - Release notes list the subject lines of the commits since the previous build and link to this changelog.
 - READMEs rewritten (English and Chinese in parity) with new screenshots.
+- The Claude Code skill (`skill/claude-desk/SKILL.md`) is rewritten for protocol v2 and much shorter. `desk.py wait --id` and `wait --followups` keep working, and messages posted without a session keep using them; deliveries made through them are recorded too, so `listen` never hands the same item over again.
+
+### Fixed
+
+- A follow-up you were writing on a decision that already had a reply was lost when the list refreshed or you switched messages; a note typed into a decision before it was answered elsewhere no longer turns into a follow-up draft.
+- **只看未处理** kept the message you had been reading in the list after you left it by closing its tab or switching repos.
+- Reopening a closed tab could flip back to closed, and drop the selection, when a refresh arrived before the request finished.
+- Following a thread link ("Claude 的回答：… →" or "原回答：…") left keyboard focus on a hidden button.
+- Sending a follow-up at the bottom of a long thread pushed the follow-up box off screen.
+- A follow-up card could stay out of date when it changed again while it was loading (for example, the session took the follow-up).
+- Clicking the **未归类** group header in the archive view did nothing.
+- `desk.py` crashed on a malformed line in `followups.jsonl`.
 
 ## [2.0.0] - 2026-10-09
 

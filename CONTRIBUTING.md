@@ -25,10 +25,12 @@ python -m claudedesk --serve --data ../.dev-data     # local server only; open t
 Post test messages from another terminal:
 
 ```bash
-python desk.py --data .dev-data post --kind decision --source demo --title "Pick one?" \
+python desk.py --data .dev-data post --kind decision --session demo --title "Pick one?" \
     --body "Some **Markdown**" --option "A::first" --option "B::second" --no-launch
-python desk.py --data .dev-data wait --source demo --timeout 60
+python desk.py --data .dev-data listen --session demo --timeout 60
 ```
+
+Outside a Claude Code session there is no `CLAUDE_CODE_SESSION_ID`, so pass `--session` yourself; the card then shows the session as open until `listen` runs. The session protocol is described in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 `build.cmd` builds a one-file `ClaudeDesk.exe` with PyInstaller (it reports build 0 and never updates itself).
 
@@ -38,8 +40,10 @@ python desk.py --data .dev-data wait --source demo --timeout 60
 python -m pytest -q
 ```
 
-- `tests/test_store.py`, `test_desk.py`, `test_followups.py`, `test_server.py` and `test_icon.py` are plain Python.
-- `tests/test_ui*.py` start a real `Store` and local server and drive the UI in Chromium through Playwright. They are skipped when Playwright isn't installed.
+- `tests/test_store.py`, `test_desk.py`, `test_followups.py`, `test_protocol.py`, `test_round4_backend.py`, `test_server.py` and `test_icon.py` are plain Python.
+- `tests/test_protocol.py` covers session protocol v2: it runs real `desk.py` subprocesses (`post`, `listen`, `close --mine`, `status`, `inbox --adopt`, legacy `wait`) and checks batching, exactly-once delivery and the app's session states. `--body-from-chat` / `--question-from-chat` are tested against synthetic transcripts, never your real ones.
+- `tests/conftest.py` removes `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID` and `CLAUDE_CONFIG_DIR` from the environment for every test, so the suite behaves the same when you run it from inside a Claude Code session (otherwise every test message would be recorded as that session's). Tests that need a session set these variables themselves.
+- `tests/test_ui*.py` and `test_round4_integration.py` start a real `Store` and local server and drive the UI in Chromium through Playwright. They are skipped when Playwright isn't installed.
 - On Windows you can skip the Chromium download and use Edge: `CHROMIUM_PATH="C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" python -m pytest -q`.
 - CI runs the whole suite on Ubuntu with Playwright's Chromium, then on Windows runs the store tests, builds the exe, self-tests it and runs an end-to-end check (post with `desk.py`, reply through the app, self-update).
 - UI tests must wait for state (`wait_for_function`, `wait_for_selector`) rather than sleep; CI machines are slower than yours.
@@ -69,7 +73,7 @@ python scripts/screenshots.py            # writes docs/screenshot-light.png and 
 - One topic per pull request. The subject line says what changed for the user, in the imperative ("Show wait times on waiting rows"); add a body if the reason isn't obvious.
 - Don't add AI attribution trailers (`Co-Authored-By: Claude …`, `Claude-Session: …`, "Generated with Claude Code"). The repo's `.claude/settings.json` turns them off for Claude Code.
 - For UI changes, attach before/after screenshots made with demo data.
-- If you change the CLI or the reply format, update `skill/claude-desk/SKILL.md` and both READMEs.
+- If you change the CLI, the reply format or the session protocol, update `skill/claude-desk/SKILL.md`, `docs/PROTOCOL.md` and both READMEs.
 - User-facing changes get a line in `CHANGELOG.md`.
 
 ## How releases work
