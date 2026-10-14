@@ -527,14 +527,21 @@ def proc_info(pid) -> tuple[bool, int | None]:
     pid = _as_int(pid)
     if not pid or pid <= 0:
         return False, None
-    if os.name != "nt":  # pragma: no cover - 非 Windows 兜底：不查创建时间
+    if os.name != "nt":  # 非 Windows：kill(0) 看在不在；Linux 再从 /proc 看状态和启动时间
         try:
             os.kill(pid, 0)
         except PermissionError:
-            return True, None
+            pass
         except OSError:
             return False, None
-        return True, None
+        try:  # 僵尸进程（已经退出、没被回收）kill(0) 也成功，要看状态；第 22 个字段是启动时间
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                rest = f.read().rsplit(b")", 1)[1].split()
+            if rest[0] in (b"Z", b"X"):
+                return False, None
+            return True, int(rest[19])
+        except (OSError, IndexError, ValueError):  # macOS 等没有 /proc：不查创建时间
+            return True, None
     import ctypes
     from ctypes import wintypes
 
