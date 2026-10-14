@@ -34,12 +34,17 @@ Upgrading from 1.x: quit the old app from the tray, drop the new `ClaudeDesk.exe
 
 ## Using it
 
-- Four views above the list: **全部** (everything; the default, every time it opens), **决定** (decisions; the orange number counts unanswered ones), **回答** (answers), **归档** (archive). Repo tabs are sorted by name and never reorder; nothing shifts when you click, read or tick things.
-- **Per repo (tabs across the top of the window):** the tabs are repo names. Click one to see only that repo, click it again (or ×, or `Esc`) to see all; `Ctrl`/`Shift`-click to pick several; `[` / `]` switch. The repo comes from `desk.py post`, which records the git repo of the directory it runs in (origin URL name; worktrees resolve to their repo; outside git, the folder name; `--repo` overrides). Messages from before this version are matched to repos found in Claude Code's own session history (`~/.claude/projects`, plus `CLAUDE_CONFIG_DIR`); anything left over goes under "未归类", where "归到…" files it under a repo.
-- Decisions: press `1`–`9` or click an option, optionally type a note, `Ctrl+Enter` to submit.
+- Four views above the list: **全部** (everything; the default, every time it opens), **决定** (decisions), **回答** (answers), **归档** (archive). An orange pill counts decisions waiting for you; a plain grey number counts unread messages (hover a tab for which is which). Repo tabs are sorted by name and never reorder; nothing shifts when you click, read or tick things.
+- **Per repo (tabs across the top of the window):** the first tab is "全部项目" (all repos), the rest are repo names. Click one to see only that repo; click 全部项目 or press `Esc` to see all; `Ctrl`/`Shift`-click to pick several; `[` / `]` switch. When the tabs don't fit, the mouse wheel scrolls them sideways, and a small orange dot points at hidden tabs with waiting decisions.
+- **Waiting decisions:** while any are pending, a strip under the search box reads "N 条待决定 · M 条紧急 · 最久已等 X". Click it or press `N` to jump to the next waiting decision in the selected repos (urgent first, then the longest-waiting; `Shift+N` goes back). Open rows show how long the session has been waiting instead of a clock time. When a new decision or urgent message arrives somewhere you can't see, a toast says so and `N` opens it.
+- **Taskbar:** while the window is open or minimized, its taskbar button carries a red badge with the unread count (a red dot when nothing is unread but a decision is still open). When a message arrives with the window closed to the tray, a minimized button appears with the badge and flashes; it stops once the message is handled. The repo comes from `desk.py post`, which records the git repo of the directory it runs in (origin URL name; worktrees resolve to their repo; outside git, the folder name; `--repo` overrides). Messages from before this version are matched to repos found in Claude Code's own session history (`~/.claude/projects`, plus `CLAUDE_CONFIG_DIR`); anything left over goes under "未归类", where "归到…" files it under a repo.
+- Decisions: press `1`–`9` or click an option, optionally type a note, `Ctrl+Enter` to submit (from anywhere). A half-picked, half-written reply survives switching to another message and back.
+- List marks: a solid dot is unread; an orange dot is a decision you haven't opened; an orange ring is a decision you've seen but not answered; an extra outer ring marks an urgent decision. Moving through the list with `↑`/`↓` marks a message read only after it stays open for 0.8 s.
 - Hover a message in the list to get its own actions (read/unread, mark resolved, archive, delete) and a checkbox; nothing shows until you hover. The open message has an orange bar on its left.
-- **Mark resolved** (`R`) tells a waiting session the matter is handled, without picking an option (`"resolved": true` in the reply). Archiving or deleting a still-open decision tells it you skipped it, so it never hangs.
-- Tick checkboxes (`Shift` for a range, `X`, `Ctrl+A`) for the batch bar: select all, read, resolved, archive, delete. Right-click works too.
+- **Mark resolved** (`R`, which asks first) tells a waiting session the matter is handled, without picking an option (`"resolved": true` in the reply). Archiving or deleting a still-open decision tells it you skipped it, so it never hangs.
+- Archive, unarchive and read/unread (single, batch or "all") can be undone with `Z` / `Ctrl+Z` while their toast is showing.
+- Tick checkboxes (`Shift` for a range, `X`, `Shift+↑↓`, `Ctrl+A`) for the batch bar: select all, read, resolved, archive, delete. Right-click works too.
+- `Esc` steps back one layer at a time: menu or dialog → narrow-window reader → search → ticks → repo filter. In a narrow window (≤ 720 px) `↑`/`↓` move a cursor in the list and `Enter` opens.
 - The reader toolbar has copy (Markdown; the arrow offers rich text / plain text) and PDF. Search with `/`. Press `?` for all shortcuts.
 - Settings: light / dark / system theme, four accent colors, sans (Inter + Noto Sans SC) or serif (Source Serif + Noto Serif SC) reading font, text size, list density, start with Windows, auto-update.
 
@@ -66,7 +71,7 @@ DESK=C:/path/to/ClaudeDesk/desk.py
     --recommended 2 --allow-text [--priority high]
 
 # Block until you reply (run in the background). Exit 0 with the reply JSON; exit 2 on --timeout.
-"$PY" "$DESK" wait --source my-project --id <id> [--timeout SECONDS]
+"$PY" "$DESK" wait --id <id> [--timeout SECONDS]
 
 # Post an answer: your original question plus the full answer.
 "$PY" "$DESK" post --kind answer --source my-project --title "Why is CI slower today?" \
@@ -77,9 +82,11 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 "$PY" "$DESK" responses [--source X] [--id ID] [--since ISO_TIMESTAMP]
 "$PY" "$DESK" list [--open] [--source X] [--json]
 "$PY" "$DESK" close --id <id> --text "User answered in chat: B"   # mark a decision handled
+                                       # exit 3 + the existing reply if you already answered it in ClaudeDesk
 ```
 
-- `post` starts ClaudeDesk (minimized) if it isn't running; `--no-launch` turns that off.
+- `post` starts ClaudeDesk (minimized) if it isn't running; `--no-launch` turns that off. If no running ClaudeDesk watches this `desk.py`'s data folder (for example a stray copy of `desk.py`), `post` warns on stderr: the user won't see the message and `wait` won't get a reply.
+- `wait --id` matches on the id alone; a different `--source` only prints a note.
 - `--recommended` is a 1-based option index. Options are `"label::description"`; the description is optional. A decision with no options accepts a free-text reply.
 - Data lives in `data/` next to `desk.py`. Override with `--data DIR` (before the subcommand) or the `CLAUDEDESK_DATA` environment variable; the app accepts the same.
 
