@@ -61,6 +61,7 @@
     view: "all", projects: loadSet("projects"), query: "", searchIds: null,
     current: null, multi: new Set(), anchor: null, choice: null,
     details: {}, shownKey: null, visible: [],
+    drafts: {}, choiceIdx: null, submitting: {}, fresh: {}, // 每条的草稿（选项序号 + 文字）/ 正在提交的 id / 新到的高亮到期时间
   };
 
   function loadSet(k) { try { var v = JSON.parse(load(k, "[]")); return new Set(Array.isArray(v) ? v : []); } catch (e) { return new Set(); } }
@@ -98,12 +99,13 @@
       setTimeout(poll, 2000);
     });
   }
-  function refreshNow() { // 自己做了操作：不等长轮询，立刻拿一次
-    return api("/api/state?since=-1").then(apply).catch(function () {});
+  function refreshNow(force) { // 自己做了操作：不等长轮询，立刻拿一次。force：版本没变也重画（长轮询可能已经先到了）
+    return api("/api/state?since=-1").then(function (st) { apply(st, force === true); }).catch(function () {});
   }
 
-  function apply(st) {
-    if (st.version === S.version && S.msgs.length) return;
+  function apply(st, force) {
+    if (!force && st.version === S.version && S.msgs.length) return;
+    var old = S.byId, first = S.version < 0;
     S.version = st.version;
     S.msgs = st.messages || [];
     S.byId = {};
@@ -114,7 +116,34 @@
     if (st.settings) applySettings(st.settings);
     S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
     if (S.current && !S.byId[S.current]) S.current = null;
+    // 缓存瘦身：删掉的消息不留详情；已经有回复的不留草稿
+    Object.keys(S.details).forEach(function (k) { if (!S.byId[k.split("|")[0]]) delete S.details[k]; });
+    Object.keys(S.drafts).forEach(function (id) { if (!S.byId[id] || S.byId[id].answered) delete S.drafts[id]; });
+    var hot = first ? [] : arrivals(old);
     if (S.query) runSearch(); else renderAll();
+    if (hot.length === 1) {
+      var h = hot[0];
+      toast(h.open ? projectOf(h) + " 需要你决定：" + h.title : "紧急：" + h.title, { action: "查看", run: function () { window.deskOpen(h.id); } });
+    } else if (hot.length) toast(hot.length + " 条新的待决定", { action: "查看", run: function () { window.deskOpen(hot[0].id); } });
+  }
+
+  // 新到的消息：看得见的那几行高亮 1.6 秒；看不见的（别的标签 / 视图、被搜索筛掉）里有待决定或紧急的，返回给 apply 弹一条提示
+  function arrivals(old) {
+    var hot = [], until = Date.now() + 1600, lit = [];
+    S.msgs.forEach(function (m) {
+      if (old[m.id]) return;
+      if (inView(m, S.view) && inScope(m) && (!S.searchIds || S.searchIds.has(m.id))) { S.fresh[m.id] = until; lit.push(m.id); }
+      else if (m.open || m.priority === "high") hot.push(m);
+    });
+    if (lit.length) setTimeout(function () {
+      lit.forEach(function (id) {
+        if (S.fresh[id] !== until) return;
+        delete S.fresh[id];
+        var el = rowEl(id);
+        if (el) el.classList.remove("fresh");
+      });
+    }, 1650);
+    return hot;
   }
 
   function applySettings(s) {
@@ -164,7 +193,9 @@
     return k === OTHER ? "" : k;
   }
   // 标签：仓库按"有待决定的在前，再按最近一条消息"排，"其他"永远在最后
+  var plMemo = null; // renderAll 期间只算一次（标签、分组顺序都要用）
   function projectList() {
+    if (plMemo) return plMemo;
     var map = {};
     S.msgs.forEach(function (m) {
       var k = tabKey(m);
@@ -318,10 +349,14 @@
 
   // ---------------------------------------------------------------- 渲染
   function renderAll() {
-    renderNav();
-    renderList();
-    renderReader();
-    renderFoot();
+    plMemo = null;
+    plMemo = projectList();
+    try {
+      renderNav();
+      renderList();
+      renderReader();
+      renderFoot();
+    } finally { plMemo = null; }
   }
 
   function renderNav() {
@@ -402,12 +437,12 @@
     var v = VIEWS.filter(function (x) { return x.id === S.view; })[0] || VIEWS[0];
     var items = viewItems();
     S.visible = items.map(function (m) { return m.id; });
-    var list = $("list"), more = searchMore();
+    var more = searchMore(); // 搜索命中但被视图 / 项目挡住的："另有 N 条…"一行，和列表一起写
     if (!items.length) {
-      list.innerHTML = '<div class="list-empty"><b>' +
+      setList('<div class="list-empty"><b>' +
         (S.query ? (more ? "「" + v.label + (scopeLabel() ? " · " + esc(scopeLabel()) : "") + "」里没有「" + esc(S.query) + "」" : "没有找到「" + esc(S.query) + "」")
           : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + v.empty) + "</b>" +
-        (S.query ? (more ? "" : "换个关键词试试") : v.emptySub) + "</div>";
+        (S.query ? (more ? "" : "换个关键词试试") : v.emptySub) + "</div>" + more);
     } else if (grouped()) {
       var html = "", last = null, opens = {}; // 分组标题只在组里有待决定时显示胶囊，别的数不显示
       items.forEach(function (m) { var p = projectOf(m); if (m.open) opens[p] = (opens[p] || 0) + 1; });
@@ -423,18 +458,30 @@
         }
         html += itemHtml(m);
       });
-      list.innerHTML = html;
+      setList(html + more);
     } else {
-      list.innerHTML = items.map(itemHtml).join("");
+      setList(items.map(itemHtml).join("") + more);
     }
-    if (more) list.insertAdjacentHTML("beforeend", more);
     renderBulk();
+  }
+  // 列表 HTML 和上次一样就不重建（长轮询每次醒来都会重画；上千条时重建要上百毫秒，还会丢悬停）
+  var lastListHtml = null;
+  function setList(html) {
+    if (html === lastListHtml) return;
+    $("list").innerHTML = html;
+    lastListHtml = html;
+  }
+  function rowEl(id) { return id ? $("list").querySelector('.item[data-id="' + cssEsc(id) + '"]') : null; }
+  function renderRow(id) { // 只重画一行（选中 / 已读变了）；DOM 和上次整份写的不一样了，下次整份重画不能跳过
+    var el = rowEl(id), m = S.byId[id];
+    lastListHtml = null;
+    if (el && m) el.outerHTML = itemHtml(m);
   }
 
   function itemHtml(m) {
     var checked = S.multi.has(m.id);
     var cls = "item" + (m.unread ? " unread" : "") + (m.open ? " open" : "") +
-      (m.id === S.current ? " selected" : "") + (checked ? " multi" : "");
+      (m.id === S.current ? " selected" : "") + (checked ? " multi" : "") + (S.fresh[m.id] > Date.now() ? " fresh" : "");
     // 状态圆点：实心 = 没读过；强调色 = 等你处理；空心环 = 看过、还没决定；外加一圈 = 紧急（处理完才消失）
     var urgent = m.priority === "high" && (m.open || m.unread);
     var dot = urgent ? "hot urgent" : m.open ? (m.unread ? "hot" : "hot seen") : m.unread ? "new" : "";
@@ -508,16 +555,25 @@
     var key = m.id + "|" + m.answered;
     if (S.shownKey === key) { renderEyebrow(m); return; }
     var cached = S.details[key];
-    if (cached) return showDetail(cached, key);
+    if (cached) return showDetail(keepDetail(key, cached), key);
     api("/api/message?id=" + encodeURIComponent(m.id)).then(function (d) {
       if (!d || d.error) return;
-      S.details[key] = d;
+      keepDetail(key, d);
       if (S.current === m.id) showDetail(d, key);
     });
   }
+  // 详情缓存：最近用过的排在最后，最多留 60 条；有了"已回复"版就丢掉旧的"未回复"版
+  function keepDetail(key, d) {
+    delete S.details[key];
+    S.details[key] = d;
+    if (/\|true$/.test(key)) delete S.details[key.replace(/\|true$/, "|false")];
+    var ks = Object.keys(S.details);
+    for (var i = 0; i < ks.length - 60; i++) delete S.details[ks[i]];
+    return d;
+  }
 
   function renderEyebrow(m) {
-    var bits = [KIND[m.kind], '<span class="src"><span class="pdot" style="background:' + pcolor(projectOf(m)) + '"></span>' + esc(m.source) + "</span>",
+    var bits = [KIND[m.kind], '<span class="src"><span class="pdot" style="background:' + pcolor(tabKey(m)) + '"></span>' + esc(m.source) + "</span>",
       '<span title="' + fmtTime(m.ts, true) + '">' + fmtRel(m.ts) + "</span>"];
     if (m.priority === "high") bits.push('<span class="hot">紧急</span>');
     if (m.archived) bits.push("已归档");
@@ -531,6 +587,14 @@
     $("title").textContent = d.title;
     $("question").hidden = !d.question;
     $("questionText").textContent = d.question || "";
+    renderBody(d);
+    renderDecision(d, newMsg);
+    if (newMsg) {
+      $("scroller").scrollTop = 0;
+      $("toolbar").classList.remove("scrolled");
+    }
+  }
+  function renderBody(d) { // 设置（字号 / 字体）变了只重画正文，选项和没写完的回复不动
     var body = $("body");
     if ((d.body || "").trim()) {
       body.innerHTML = MD.toHtml(d.body);
@@ -538,23 +602,24 @@
     } else {
       body.innerHTML = '<p class="no-body">（没有正文）</p>';
     }
-    renderDecision(d, newMsg);
-    if (newMsg) {
-      $("scroller").scrollTop = 0;
-      $("toolbar").classList.remove("scrolled");
-    }
   }
+  function shownId() { return S.shownKey ? S.shownKey.split("|")[0] : null; }
 
   function renderDecision(d, reset) {
     var box = $("decide");
-    if (d.kind !== "decision") { box.hidden = true; return; }
+    if (d.kind !== "decision") { box.hidden = true; S.choice = S.choiceIdx = null; return; }
     box.hidden = false;
-    var r = d.response;
-    if (reset || r) S.choice = null;
+    var r = d.response, dr = S.drafts[d.id];
+    if (r) { S.choice = S.choiceIdx = null; delete S.drafts[d.id]; } // 已有回复：草稿作废
+    else if (reset) { // 换了一条：恢复这条自己的草稿（选项按序号记，同名选项也分得开）
+      S.choiceIdx = dr && dr.idx != null && d.options && d.options[dr.idx] ? dr.idx : null;
+      S.choice = S.choiceIdx != null ? d.options[S.choiceIdx].label : null;
+    }
+    var busy = !r && !!S.submitting[d.id];
     var opts = $("options");
     opts.innerHTML = (d.options || []).map(function (o, i) {
-      var chosen = r && r.choice === o.label;
-      return '<button class="opt' + (chosen ? " chosen" : "") + (d.recommended === i + 1 ? " rec-opt" : "") + '" data-idx="' + i + '"' + (r ? " disabled" : "") + ">" +
+      var chosen = r && (r.choice_index ? r.choice_index === i + 1 : r.choice === o.label);
+      return '<button class="opt' + (chosen ? " chosen" : "") + (d.recommended === i + 1 ? " rec-opt" : "") + (!r && S.choiceIdx === i ? " checked" : "") + '" data-idx="' + i + '"' + (r || busy ? " disabled" : "") + ">" +
         '<span class="num">' + (chosen ? icon("check") : i + 1) + "</span>" +
         '<span class="txt"><span class="lab">' + esc(o.label) +
         (d.recommended === i + 1 ? '<span class="rec">推荐</span>' : "") + "</span>" +
@@ -563,7 +628,11 @@
     opts.hidden = !(d.options || []).length;
     var ta = $("replyText");
     ta.hidden = !!r || !d.allow_text;
-    if (reset) ta.value = "";
+    if (reset) ta.value = !r && dr ? dr.text : "";
+    ta.readOnly = busy;
+    box.setAttribute("aria-busy", busy ? "true" : "false");
+    $("submitBtn").textContent = busy ? "提交中…" : "提交";
+    $("resolveBtn").disabled = busy;
     ta.placeholder = (d.options || []).length ? "补充说明（可选）" : "写下你的回复";
     $("decideFoot").hidden = !!r;
     $("decideTitle").textContent = r ? "你的回复" : (d.options || []).length ? "请选择一个选项" : "请写下你的回复";
@@ -575,7 +644,7 @@
       if (r.resolved) done.innerHTML = "<b>已标为已解决</b> · " + when + "<div>没有选择选项，等待的会话已收到「已经处理好了」。</div>";
       else if (r.dismissed) done.innerHTML = "<b>已跳过</b> · " + when + "<div>没有作出选择，等待的会话已收到通知。</div>";
       else if (r.closed_by === "claude") done.innerHTML = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
-      else done.innerHTML = "<b>已提交</b> · " + when + (r.choice ? "　选择：<b>" + esc(r.choice) + "</b>" : "") +
+      else done.innerHTML = "<b>已提交</b> · 会话已收到你的" + (r.choice ? "选择" : "回复") + (when ? " · " + when : "") + (r.choice ? "　选择：<b>" + esc(r.choice) + "</b>" : "") +
         (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
       // 还有别的待决定：给个按钮过去，但不自动跳（列表和阅读区不突然变）
       if (queue().some(function (x) { return x.id !== d.id; })) done.insertAdjacentHTML("beforeend", '<button class="ghost next-dec" data-next>下一条待决定 →（N）</button>');
@@ -594,16 +663,23 @@
 
   function pick(idx) {
     var d = currentDetail();
-    if (!d || d.response || !d.options || !d.options[idx]) return;
+    if (!d || d.response || S.submitting[d.id] || !d.options || !d.options[idx]) return;
     S.choice = d.options[idx].label;
+    S.choiceIdx = idx;
     $("options").querySelectorAll(".opt").forEach(function (b) {
       b.classList.toggle("checked", +b.dataset.idx === idx);
     });
+    saveDraft(d.id);
     updateSubmit();
+  }
+  function saveDraft(id) { // 每条消息各记各的：切走、改设置、返回列表再回来都还在
+    var text = $("replyText").value;
+    if (S.choiceIdx == null && !text.trim()) delete S.drafts[id];
+    else S.drafts[id] = { idx: S.choiceIdx, text: text };
   }
   function updateSubmit() {
     var d = currentDetail();
-    var ok = d && !d.response && (S.choice != null || (d.allow_text && $("replyText").value.trim()));
+    var ok = d && !d.response && !S.submitting[d.id] && (S.choice != null || (d.allow_text && $("replyText").value.trim()));
     $("submitBtn").disabled = !ok;
     renderHint(d);
   }
@@ -626,15 +702,27 @@
   }
   function submit() {
     var d = currentDetail();
-    if (!d || d.response || $("submitBtn").disabled) return;
-    $("submitBtn").disabled = true;
+    if (!d || d.kind !== "decision" || d.response || S.submitting[d.id] || $("submitBtn").disabled) return;
     var text = d.allow_text ? $("replyText").value.trim() : "";
-    act({ action: "reply", id: d.id, choice: S.choice, text: text }).then(function () {
-      toast("已提交，会话会马上收到");
-      return refreshNow();
+    var o = S.choice != null && d.options && d.options[S.choiceIdx];
+    var body = { action: "reply", id: d.id, choice: S.choice, text: text };
+    if (o && o.label === S.choice) body.choice_index = S.choiceIdx + 1; // 按序号提交：同名的两个选项不会报错成第一个
+    // 提交中：按钮写"提交中…"，选项、输入框锁住；失败原样恢复，可以重试
+    S.submitting[d.id] = 1;
+    renderDecision(d, false);
+    act(body).then(function () {
+      delete S.submitting[d.id];
+      delete S.drafts[d.id];
+      if (shownId() !== d.id) toast("已提交「" + d.title + "」，会话会马上收到"); // 还在看这条：下面的回复框就写着，不再弹提示挡住它
+      return refreshNow(true);
     }).catch(function (e) {
-      toast(e.message, { bad: true });
-      updateSubmit();
+      delete S.submitting[d.id];
+      var sd = S.details[S.shownKey]; // 用最新的详情恢复（期间可能已经在对话里被处理掉了）
+      if (sd && sd.id === d.id) renderDecision(sd, false);
+      toast("提交失败：" + e.message, { bad: true, action: "重试", run: function () {
+        var cd = currentDetail();
+        if (cd && cd.id === d.id) submit(); else window.deskOpen(d.id); // 已经换到别的消息：先带回这条，不替别的消息提交
+      } });
     });
   }
 
@@ -644,16 +732,32 @@
     S.current = id;
     if (!opts.keepMulti) { S.multi.clear(); S.anchor = id; } // 多选时锚点不动，Shift + ↑↓ 从它连选
     var m = S.byId[id];
+    var marked = false;
+    clearTimeout(readTimer);
     if (m && m.unread && !opts.noRead) {
-      m.unread = false; // 乐观更新
-      act({ action: "read", ids: [id] }).catch(function () {});
+      if (opts.via === "key") readTimer = setTimeout(function () { if (markRead(id)) { renderRow(id); renderNav(); } }, 800); // j/k 扫过去不算读：停 0.8 秒才算
+      else marked = markRead(id);
     }
-    renderList();
+    // 只改前后两行，不重建整个列表（上千条时每按一次 ↑↓ 都重建会卡）
+    if (S.multi.size || $("list").classList.contains("multi-mode") || !rowEl(id)) renderList();
+    else {
+      $("list").querySelectorAll(".item.selected").forEach(function (el) { el.classList.remove("selected"); el.setAttribute("aria-selected", "false"); });
+      renderRow(id);
+    }
+    if (marked) renderNav();
     renderReader();
     if (opts.scroll) {
       var el = document.querySelector('.item[data-id="' + cssEsc(id) + '"]');
       if (el) el.scrollIntoView({ block: "nearest" });
     }
+  }
+  var readTimer = null;
+  function markRead(id) { // 乐观更新，再告诉服务端；已经换走了就不算
+    var m = S.byId[id];
+    if (S.current !== id || !m || !m.unread) return false;
+    m.unread = false;
+    act({ action: "read", ids: [id] }).catch(function () {});
+    return true;
   }
   function cssEsc(s) { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
   // ↑↓：有勾选时只挪光标，不丢勾选、不标已读；extend（Shift）= 从锚点连选到光标
@@ -674,7 +778,7 @@
       ext.at = ids[j]; ext.size = S.multi.size;
     } else ext = null;
     var keep = extend || S.multi.size > 0;
-    select(ids[j], keep ? { scroll: true, keepMulti: true, noRead: true } : { scroll: true });
+    select(ids[j], keep ? { scroll: true, keepMulti: true, noRead: true, via: "key" } : { scroll: true, via: "key" });
     if (extend) renderList(); // 勾选变了：列表要重画（select 以后可能只挪高亮）
   }
   function setView(v) {
@@ -706,14 +810,18 @@
     if (on == null) on = !ids.every(function (id) { return S.byId[id] && S.byId[id].archived; });
     var unread = ids.filter(isUnread); // 归档会顺手标已读：撤销时把它们改回未读
     var go = function () {
-      var next = S.view !== "all" || on ? nextAfter(ids) : S.current;
+      // 先在本地改好、移走选中并重画，再发请求：长轮询比操作的回应先到也不会"看的是 A、键盘操作的是 B"
+      var cur = S.current, leaves = ids.indexOf(cur) >= 0 && (S.view !== "archive" ? on : !on);
+      var next = leaves ? nextAfter(ids) : cur;
+      ids.forEach(function (id) { if (S.byId[id]) S.byId[id].archived = on; });
+      S.multi.clear();
+      S.current = next;
+      renderAll();
       act({ action: "archive", ids: ids, on: on }).then(function () {
-        S.multi.clear();
-        if (ids.indexOf(S.current) >= 0 && (S.view !== "archive" ? on : !on)) S.current = next;
-        return refreshNow();
+        return refreshNow(true);
       }).then(function () {
         toast((on ? "已归档 " : "已移出归档 ") + ids.length + " 条", { undo: undoArchive(ids, on, unread) });
-      }).catch(function (e) { toast(e.message, { bad: true }); });
+      }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
     };
     if (on && hasOpen(ids)) {
       confirmBox("归档还在等你决定的消息？", "等待中的会话会收到「用户跳过了这条决定」，然后继续往下走。", "归档并跳过").then(function (ok) { if (ok) go(); });
@@ -724,15 +832,21 @@
     if (!ids.length) return;
     var text = "删除后不能恢复，会从收件箱文件里真正移除。" +
       (hasOpen(ids) ? "\n其中有还在等你决定的消息：等待中的会话会收到「用户跳过了这条决定」。" : "");
-    confirmBox(ids.length > 1 ? "删除这 " + ids.length + " 条消息？" : "删除这条消息？", text, "删除", true).then(function (ok) {
+    var one = ids.length === 1 && S.byId[ids[0]], t = one ? one.title : "";
+    if (t.length > 40) t = t.slice(0, 40) + "…";
+    confirmBox(ids.length > 1 ? "删除这 " + ids.length + " 条消息？" : one ? "删除「" + t + "」？" : "删除这条消息？", text, "删除", true).then(function (ok) {
       if (!ok) return;
-      var next = nextAfter(ids);
+      // 和归档一样：先在本地删掉、选好下一条并重画，再发请求
+      var cur = S.current, next = ids.indexOf(cur) >= 0 ? nextAfter(ids) : cur, gone = new Set(ids);
+      S.msgs = S.msgs.filter(function (m) { return !gone.has(m.id); });
+      ids.forEach(function (id) { delete S.byId[id]; });
+      S.multi.clear();
+      S.current = next;
+      renderAll();
       act({ action: "delete", ids: ids }).then(function () {
-        S.multi.clear();
-        if (ids.indexOf(S.current) >= 0) S.current = next;
-        return refreshNow();
+        return refreshNow(true);
       }).then(function () { toast("已删除 " + ids.length + " 条"); })
-        .catch(function (e) { toast(e.message, { bad: true }); });
+        .catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
     });
   }
 
@@ -741,7 +855,7 @@
     var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; }).length;
     act({ action: "resolve", ids: ids }).then(function () {
       S.multi.clear();
-      return refreshNow();
+      return refreshNow(true);
     }).then(function () {
       toast(open ? "已标为已解决 " + open + " 条，等待的会话已收到" : "已标为已读");
     }).catch(function (e) { toast(e.message, { bad: true }); });
@@ -764,20 +878,20 @@
     act({ action: "read", ids: ids, read: anyUnread }).then(function () {
       if (ids.length > 1) S.multi.clear();
       toast((anyUnread ? "已标为已读" : "已标为未读") + (ids.length > 1 ? " " + ids.length + " 条" : ""), { undo: undoRead(flip, !anyUnread) });
-      return refreshNow();
+      return refreshNow(true);
     });
   }
 
   // ---- 撤销（Z / Ctrl+Z 或提示条上的按钮）：把刚才的操作反过来做一遍
   function isUnread(id) { return !!(S.byId[id] && S.byId[id].unread); }
   function undoRead(ids, read) {
-    return function () { act({ action: "read", ids: ids, read: read }).then(refreshNow).catch(function (e) { toast(e.message, { bad: true }); }); };
+    return function () { act({ action: "read", ids: ids, read: read }).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); }); };
   }
   function undoArchive(ids, on, unread) {
     return function () {
       act({ action: "archive", ids: ids, on: !on }).then(function () {
         return on && unread.length ? act({ action: "read", ids: unread, read: false }) : null;
-      }).then(refreshNow).catch(function (e) { toast(e.message, { bad: true }); });
+      }).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); });
     };
   }
   var lastUndo = null; // 最近一个还能撤销的操作 { run, el }：跟着它的提示条，提示条没了就不能撤销了
@@ -803,6 +917,9 @@
     if (d.question) out += d.question.trim().split("\n").map(function (l) { return "> " + l; }).join("\n") + "\n\n";
     out += (d.body || "").trim() + "\n";
     if (d.response && d.response.choice) out += "\n---\n\n**我的选择：** " + d.response.choice + (d.response.text ? "\n\n" + d.response.text : "") + "\n";
+    else if (d.response && d.response.text && !d.response.dismissed && !d.response.resolved && !d.response.closed_by) { // 只写了文字的回复（跳过 / 已解决 / 对话里处理的不算）
+      out += "\n---\n\n**我的回复：** " + d.response.text + "\n";
+    }
     return out;
   }
   function writeClipboard(text, html) {
@@ -863,6 +980,14 @@
       f.innerHTML = "<hr><p><strong>我的回复：</strong>" + esc(d.response.choice || "（文字回复）") + "</p>" +
         (d.response.text ? "<p>" + esc(d.response.text).replace(/\n/g, "<br>") + "</p>" : "");
       a.appendChild(f);
+    } else if (d.kind === "decision" && (d.options || []).length) { // 还没决定：选项在 #decide 里，不在文章里，单独印出来
+      var o = document.createElement("div");
+      o.className = "md";
+      o.innerHTML = "<hr><p><strong>待决定的选项：</strong></p><ol>" + d.options.map(function (x, i) {
+        return "<li><strong>" + esc(x.label) + "</strong>" + (d.recommended === i + 1 ? "（推荐）" : "") +
+          (x.description ? "：" + esc(x.description) : "") + "</li>";
+      }).join("") + "</ol>";
+      a.appendChild(o);
     }
     var foot = document.createElement("div");
     foot.className = "print-foot";
@@ -1076,7 +1201,8 @@
         applySettings(s);
         act({ action: "settings", values: vals }).catch(function () {});
         repaintSettings();
-        if (S.current) { S.shownKey = null; renderReader(); } // 字号变了，公式重排
+        var cd = currentDetail(); // 字号变了，公式重排：只重画正文，选项和没写完的回复不动
+        if (cd && shownId() === cd.id) renderBody(cd);
         return;
       }
       if (b.dataset.unalias) {
@@ -1265,7 +1391,7 @@
       var b = e.target.closest(".opt");
       if (b && !b.disabled) pick(+b.dataset.idx);
     });
-    $("replyText").addEventListener("input", updateSubmit);
+    $("replyText").addEventListener("input", function () { var id = shownId(); if (id) saveDraft(id); updateSubmit(); });
     $("submitBtn").addEventListener("click", submit);
     $("resolveBtn").addEventListener("click", function () { var d = currentDetail(); if (d) doResolve([d.id]); });
     $("copyBtn").addEventListener("click", function () { copy("md"); });
