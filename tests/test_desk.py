@@ -52,6 +52,18 @@ def test_post_records_repo(tmp_path):
     assert len(out) == 1 and json.loads(out[0])["title"] == "t"
 
 
+def test_decisions_allow_text_by_default_and_allow_text_flag_still_works(tmp_path):
+    assert desk.make_message("decision", "s", "t", options=["A"])["allow_text"] is True
+    assert desk.make_message("decision", "s", "t", options=["A"], allow_text=False)["allow_text"] is True
+    assert "allow_text" not in desk.make_message("answer", "s", "t")
+    data = tmp_path / "data"
+    for extra in ([], ["--allow-text"]):  # --allow-text 照样认（已经不需要了）
+        subprocess.run([sys.executable, str(ROOT / "desk.py"), "--data", str(data), "post", "--kind", "decision", "--source", "s",
+                        "--title", "t", "--option", "A", "--no-launch", *extra], capture_output=True, encoding="utf-8", check=True)
+    msgs = [json.loads(line) for line in (data / desk.INBOX).read_text(encoding="utf-8").splitlines()]
+    assert [m["allow_text"] for m in msgs] == [True, True]
+
+
 def test_folder_fallback_outside_git(tmp_path):
     d = tmp_path / "acme-data-pipeline"
     d.mkdir()

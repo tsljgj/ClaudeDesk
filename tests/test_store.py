@@ -104,6 +104,21 @@ def test_resolve_writes_reply_and_marks_read(tmp_path):
     assert s.resolve([a]) == 0  # 已经有回复：不再写
 
 
+def test_resolve_text_says_handled_and_every_decision_allows_text(tmp_path):
+    """标为已处理：等待的会话收到的话说"已处理（可能已经在对话里处理）"；决定一律能写补充说明（旧消息没写 allow_text 也一样）。"""
+    from claudedesk.store import RESOLVE_TEXT, normalize
+    a = post(tmp_path, kind="decision", options=["A"])
+    s = Store(tmp_path)
+    s.poll()
+    s.resolve([a])
+    assert desk.read_all(tmp_path / desk.RESPONSES)[0]["text"] == RESOLVE_TEXT
+    assert RESOLVE_TEXT == "（用户在 ClaudeDesk 里把这条标为已处理：已经处理好了（可能已经在对话里直接处理），不需要你再按选项做什么）"
+    assert normalize({"id": "x", "kind": "decision", "title": "t", "options": ["A"]})["allow_text"] is True
+    assert normalize({"id": "y", "kind": "decision", "title": "t", "options": ["A"], "allow_text": False})["allow_text"] is True
+    assert normalize({"id": "z", "kind": "answer", "title": "t"})["allow_text"] is False
+    assert s.detail(a)["allow_text"] is True
+
+
 def test_project_of_and_scoped_bulk(tmp_path):
     from claudedesk.store import project_of
     assert project_of("webapp") == "webapp" and project_of("webapp/data") == "webapp"

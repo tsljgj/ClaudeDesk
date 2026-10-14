@@ -200,7 +200,7 @@ def test_hover_actions_and_checkbox_bulk(env):
     page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{c}\"]')")
     assert c in store.archived and store.is_unread(store.msgs[a])
 
-    # 勾两条 → 批量"已解决"
+    # 勾两条 → 批量"标为已处理"
     page.locator(f'.item[data-id="{a}"]').hover()
     page.locator(f'.item[data-id="{a}"] .cb').click()
     page.wait_for_selector("#bulkbar:not([hidden])")
@@ -209,7 +209,8 @@ def test_hover_actions_and_checkbox_bulk(env):
     assert "2" in page.inner_text("#bulkCount")
     assert page.is_visible("#bulkResolve")
     page.click('[data-bulk="resolve"]')
-    page.wait_for_selector("#bulkbar", state="hidden")
+    page.wait_for_selector("#bulkbar", state="hidden")  # 勾选马上清掉（和归档一样先在本地改好）；回复写好了才有提示
+    page.wait_for_selector(".toast >> text=已标为已处理 2 条，2 条待决定已告诉会话")
     resp = {r["id"]: r for r in desk.read_all(d / desk.RESPONSES)}
     assert resp[a]["resolved"] is True and resp[b]["resolved"] is True and resp[a]["choice"] is None
     page.wait_for_selector(f'.item[data-id="{a}"] .st.done')

@@ -245,8 +245,8 @@ def make_message(kind, source, title, body="", question=None, options=None,
         recommended = int(recommended)
         if not (1 <= recommended <= len(opts)):
             raise ValueError(f"--recommended 是从 1 开始的选项序号，应在 1..{len(opts)}")
-    if kind == "decision" and not opts:
-        allow_text = True  # 没有选项就只能文字回复
+    if kind == "decision":
+        allow_text = True  # 决定一律可以写补充说明（没有选项时就只收文字）；allow_text 参数 / --allow-text 留着兼容
     msg = {
         "id": new_id(),
         "ts": now_ts(),
@@ -516,7 +516,7 @@ def main(argv=None) -> int:
     sp.add_argument("--question-file", help="answer 类：原问题放在文件里")
     sp.add_argument("--option", action="append", default=[], help='选项 "label::description"，可重复')
     sp.add_argument("--recommended", type=int, help="推荐的选项序号（从 1 开始）")
-    sp.add_argument("--allow-text", action="store_true", help="decision 类允许用户写补充文字")
+    sp.add_argument("--allow-text", action="store_true", help="（已不需要，留着兼容）decision 一律可以写补充文字")
     sp.add_argument("--priority", choices=("normal", "high"), default="normal")
     sp.add_argument("--no-launch", action="store_true", help="程序没在运行时不要自动启动")
     sp.set_defaults(func=cmd_post)
