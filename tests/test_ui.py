@@ -273,7 +273,7 @@ def test_projects_are_separated(env):
     store.poll()
     page.goto(server.url)
     page.click('[data-view="all"]')
-    page.wait_for_selector(".ptab")
+    page.wait_for_selector('.ptab[data-project="__other__"]')  # 数据到了再数（"全部项目"一开始就在）
     names = [t.split("\n")[0] for t in page.locator(".ptab .pname").all_inner_texts()]
     assert names == ["acme-data-pipeline", "webapp", "未归类"]  # 标签就是仓库名，按名字排；没认出来的放最后
     # 全部：按项目分组，同一项目挨在一起；对不上的在最后（灰点，属于"未归类"）

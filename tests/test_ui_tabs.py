@@ -229,7 +229,7 @@ def test_unsorted_tab_only_when_it_has_unarchived_messages(env):
     page.wait_for_selector(f'.item[data-id="{o1}"]')
     assert sorted(page.locator(".group-label.other .gname").all_inner_texts()) == ["老实验", "随手记"]
     page.reload()  # 一开始就只有归档的：没有这个标签
-    page.wait_for_selector(".ptab")
+    page.wait_for_selector('.ptab[data-project="alpha"]')  # 等数据到了再数（"全部项目"一开始就在）
     assert tabs(page) == ["", "alpha"]
     # 来了新的：标签回来；右键它只有"关闭这个标签"（归类在分组标题上做）
     post(d, kind="info", title="旧来源三", body="x", source="老实验")

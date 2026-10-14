@@ -215,7 +215,7 @@ def test_all_projects_tab_wheel_and_fade(env):
     store.poll()
     page.set_viewport_size({"width": 480, "height": 800})
     page.goto(server.url)
-    page.wait_for_selector(".ptab")
+    page.wait_for_selector('.ptab[data-project="__other__"]')  # 数据到了再看（"全部项目"一开始就在）
     first = page.locator(".ptab").first
     assert first.inner_text().startswith("全部项目") and "on" in first.get_attribute("class")
     assert first.get_attribute("aria-selected") == "true"
