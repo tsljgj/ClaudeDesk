@@ -237,6 +237,10 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .item.selected .t { color: var(--ink); }
 .item.multi { background: var(--sunken); }
 .item.multi.selected { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+/* 新到的消息：淡强调底色 1.6 秒内褪回原样；减少动效时改成左边一道细线 */
+@keyframes fresh { from { background: var(--accent-soft); } }
+.item.fresh { animation: fresh 1.6s ease-out; }
+@media (prefers-reduced-motion: reduce) { .item.fresh { animation: none; box-shadow: inset 3px 0 0 var(--accent-line); } }
 .item .dot { pointer-events: none; position: absolute; left: 13px; top: calc(var(--item-pad) + 8px); width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); }
 .item .dot.hot { background: var(--accent); width: 7px; height: 7px; left: 12.5px; }
 /* 勾选框：平时藏着（位置给状态圆点），鼠标移上来或已经在多选时才出现 */
@@ -409,6 +413,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .opt.checked .num { color: var(--accent); }
 .opt:disabled { cursor: default; color: var(--ink-3); }
 .opt:disabled:not(.chosen) { opacity: .55; }
+.decide[aria-busy="true"] .opt.checked { opacity: 1; } /* 提交中：选中的那项保持清楚 */
 .opt.chosen { border-color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
 .opt.chosen .num { color: var(--ok); }
 .opt .num i[data-icon] { width: 14px; height: 14px; }
