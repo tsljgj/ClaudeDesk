@@ -31,7 +31,7 @@ process with that PID **and** that creation time exists, so PID reuse is not mis
 | file | written by | records |
 |---|---|---|
 | `inbox.jsonl` | `post` | messages; v2 adds `session`, `session_pid`, `session_pid_start`. Rewritten by the app only to drop deleted messages. |
-| `responses.jsonl` | app (reply / resolve / dismiss), `close` | one reply per message id; v2 adds `session` (so a reply can be routed after its message is deleted) |
+| `responses.jsonl` | app (reply / resolve / dismiss), `close` | one reply per message id; v2 adds `session` (so a reply can be routed after its message is deleted). Resolve / dismiss lines carry `silent: true` (never delivered, see §3). Rewritten by the app only to undo a silent line. |
 | `followups.jsonl` | app | follow-ups `{id, ts, msg, source, title, text, session}`; legacy delivery marks `{"delivered": fid}` (read, no longer written) |
 | `deliveries.jsonl` | `listen`, `wait`, `close`, `inbox --adopt` | see below; never rewritten |
 
@@ -55,7 +55,8 @@ process with that PID **and** that creation time exists, so PID reuse is not mis
 
 An **event** is an undelivered item owned by a session:
 
-- a reply (`responses.jsonl`) to a message whose owner is S. Replies the session wrote itself (`closed_by: "claude"`) are never events;
+- a reply (`responses.jsonl`) to a message whose owner is S. Replies the session wrote itself (`closed_by: "claude"`) and
+  silent replies (the user marked the decision handled or skipped it in the app, see below) are never events;
 - a follow-up on a message whose owner is S, unless a message already answers it (`reply_to` pairing, see `pair_followups`).
 
 Owner = the message's `session`, mapped through adoptions for the message's repo. Legacy messages without `session`
@@ -70,9 +71,29 @@ Event lines are compact one-line JSON, without message bodies:
 {"ev":"followup","id":"…","msg":"…","kind":"decision","title":"…","choice":"B","reply_text":"…","text":"…"}
 ```
 
-`text` is omitted when empty and for `resolved` / `dismissed` replies (the flag says it all). Follow-ups carry the original
-`question` (clipped) so a session whose context was compacted, or that adopted the event, knows what was asked.
-Answer a follow-up with `post --reply-to <follow-up id>`.
+`text` is omitted when empty and for `resolved` / `dismissed` replies (the flag says it all; only replies written before
+silent replies existed still arrive this way). Follow-ups carry the original `question` (clipped) so a session whose
+context was compacted, or that adopted the event, knows what was asked; a follow-up on a handled decision carries
+`resolved` / `dismissed` as well. Answer a follow-up with `post --reply-to <follow-up id>`.
+
+### Handled in the app: silent replies
+
+Marking a decision handled in the app (R, the ✓ on a row, the bulk bar, the context menu, the decision card), and
+archiving or deleting an open decision, writes a reply with `"silent": true` plus `"resolved": true` or
+`"dismissed": true`. The user does this when the matter was settled in chat or no longer matters, so waking the session
+would only cost tokens. The decision is simply no longer open:
+
+- `listen`, `inbox` (and `--adopt`), `status` (`undelivered`, `orphaned`) and `close --mine` ignore silent replies;
+  `close --mine` neither closes nor reports such a decision.
+- Legacy `wait --id` / `wait --source` skip them and keep waiting.
+- `close --id` on such a decision exits 3 and prints the line like any existing reply, but does **not** mark it
+  delivered; stderr says the user handled it. The session has nothing to do.
+- **Undo** (Z in the app) removes the line again (store `unresolve`, server action `unresolve`): under `data/.lock` the
+  app rewrites `responses.jsonl` without it (temp file, fsync, replace), and the decision is open again. Only silent
+  `resolved` / `dismissed` lines without a `reply` delivery record are removed. Readers that keep an offset into
+  `responses.jsonl` (`wait`, the app) start over from the beginning when the file's inode changes or it shrinks.
+- Lines without `silent` (written by older versions) keep the old behaviour: they are delivered as events, and `inbox`
+  hides them and `--adopt` marks them delivered.
 
 ## 4. Commands
 
@@ -80,11 +101,11 @@ Answer a follow-up with `post --reply-to <follow-up id>`.
 |---|---|---|
 | `post … [--session S] [--body-from-chat] [--question-from-chat]` | message id | 0; 1 bad args / transcript text not found. stderr hints when this session has no `listen` running |
 | `listen [--session S] [--timeout s]` | one event per line | 0 delivered; 2 timeout; **4 session process gone (prints nothing)**; **5 this session already has a listener** (one stderr line); 1 no session |
-| `close --id ID [--text T]` | the closing reply, or the user's existing reply | 0; **3 the user already replied in ClaudeDesk** (that reply is printed and marked delivered); 1 unknown id |
-| `close --mine [--text T]` | reply events for this session's decisions the user already answered, then `{"closed":[ids]}` | 0; 3 if any reply events were printed |
+| `close --id ID [--text T]` | the closing reply, or the user's existing reply | 0; **3 the user already replied in ClaudeDesk** (that reply is printed and marked delivered; a silent one is printed but not marked); 1 unknown id |
+| `close --mine [--text T]` | reply events for this session's decisions the user already answered, then `{"closed":[ids]}` | 0; 3 if any reply events were printed (silent replies are skipped) |
 | `inbox [--repo R] [--adopt] [--session S]` | events left by **gone** sessions in repo R (default: detected), with `session` (8-char prefix); with `--adopt`: the same lines as `listen` | 0; 1 `--adopt` without a session |
 | `status [--session S]` | `open=N undelivered=N listen=on/off[ orphaned=N]` | 0; 1 no session |
-| `wait --id ID` (legacy) | the reply | 0; 2 timeout. Holds a per-decision presence marker; marks the reply delivered |
+| `wait --id ID` (legacy) | the reply | 0; 2 timeout. Holds a per-decision presence marker; marks the reply delivered; skips silent replies |
 | `wait --followups --source X` (legacy) | one follow-up | 0; 2; 4. Marks into `deliveries.jsonl` |
 
 Usage errors (for example `close` with neither `--id` nor `--mine`) exit 2, argparse's code; that is the same code as a
@@ -151,10 +172,11 @@ Per message (`summary.session_state`):
 |---|---|---|---|
 | `listening` | session has a `listen` (or legacy waiter for this item) | 会话在等，提交后马上收到。 | 会话在等，发出后马上收到。 |
 | `open` | session PID alive (or unknown), not listening | 会话还开着，但现在没在听：回复会存着，它下次查看时收到。 | 会话还开着，但现在没在听：追问会存着，它下次查看时收到。（a delivered, unanswered follow-up shows 会话收到了你的追问，正在回答。） |
-| `gone` | latest PID dead, not listening | 这个会话已经结束：回复会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回。 + 标为已处理 is emphasized, no confirm | same, plus copy-to-chat |
+| `gone` | latest PID dead, not listening | 这个会话已经结束：回复会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回。 + 标为已处理 is emphasized | same, plus copy-to-chat |
 | `unknown` | legacy message without `session` | 会话已等 N 分钟 · 提交后立即继续 (unchanged) | unchanged legacy wording |
 
-After a reply: `已送达会话 · HH:MM` (from `summary.delivered`) or `还没送达` with a state hint. Each follow-up line:
+After a reply: `已送达会话 · HH:MM` (from `summary.delivered`) or `还没送达` with a state hint; after a silent one
+(`summary.silent`): `已标为已处理 · 没有通知会话` / `已跳过 · 没有通知会话`. Each follow-up line:
 `等待回答… · 已送达会话 · HH:MM` / `等待回答… · 还没送达 · <hint>`. Open decisions of a gone session get a subtle
 `会话已结束` tag in the list.
 
@@ -165,10 +187,13 @@ After a reply: `已送达会话 · HH:MM` (from `summary.delivered`) or `还没�
 - **Subagents** share the session id and `CLAUDE_PID`: they must not run `listen` (it would be the session's single
   listener, and a subagent's prompt cache expires in minutes). The transcript lookup still finds a subagent's call.
 - **New session in the same repo**: `inbox` lists events whose owner is gone (PID known and dead, no listener) and whose
-  message repo matches; resolved/dismissed replies are not listed. `--adopt` writes `adopt` records for (old session,
-  repo), claims the listed events and silently marks the old session's resolved/dismissed replies delivered. Later
+  message repo matches; resolved/dismissed replies are not listed (silent ones are no events at all). `--adopt` writes
+  `adopt` records for (old session, repo), claims the listed events and quietly marks the old session's legacy
+  resolved/dismissed replies delivered. Later
   follow-ups on the old session's messages in that repo route to the adopter.
-- **User answers in chat and in ClaudeDesk**: `close` exits 3 and prints the ClaudeDesk reply (marked delivered).
+- **User answers in chat and in ClaudeDesk**: `close` exits 3 and prints the ClaudeDesk reply (marked delivered). If the
+  user only marked it handled (silent, `"resolved": true`), there is nothing to reconcile.
+- **User undoes "mark handled" and then replies**: the silent line is gone, so the real reply is an ordinary event.
 - **Message deleted** while a reply / follow-up is pending: responses and follow-ups carry `session`, so they still route.
 - **Session without `CLAUDE_PID`** (`--session` by hand): state is `open` unless listening; never considered gone.
 - **Two data dirs**: all marker names include the data-dir hash (`pipe_name`), so copies of `desk.py` elsewhere never
@@ -192,6 +217,8 @@ So the protocol minimises **wakes**, not lines of output:
 - **Duplicates exit immediately (5)** and dead sessions' listeners exit silently (4): a duplicate that later delivered
   something would be a second wake, and an orphan would steal events nobody reads. `post` says when no listener runs,
   so the session never has to check (`status` is a one-line check when needed).
+- **Handled in the app stays in the app**: marking a decision handled, archiving or deleting it writes a silent reply
+  that wakes nobody. The user only does it when the session needs nothing more.
 - **No polling**: `list` / `responses` loops cost a turn each.
 - **No double generation**: an answer is output once in chat; `--body-from-chat` copies it from the transcript.
   Writing it again into a file would cost the answer's output tokens a second time (output tokens are the most

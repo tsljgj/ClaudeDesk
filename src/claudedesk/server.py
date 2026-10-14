@@ -115,8 +115,8 @@ class DeskServer:
         st = self.store
         name = str(body.get("action") or "")
         ids = [str(i) for i in body.get("ids") or ([body["id"]] if body.get("id") else [])]
-        if name == "read":
-            return st.mark_read(ids, bool(body.get("read", True)))
+        if name == "read":  # opened：用户打开了这条（读过的也记下时间，按时间归档已处理的时不算旧）
+            return st.mark_read(ids, bool(body.get("read", True)), bool(body.get("opened")))
         if name == "read_all":
             return st.mark_all_read(body.get("project") or None)
         if name == "archive":
@@ -125,6 +125,8 @@ class DeskServer:
             return st.set_alias(str(body.get("from") or ""), body.get("to"))
         if name == "resolve":
             return st.resolve(ids)
+        if name == "unresolve":  # 撤销标为已处理 / 归档待决定：没通知过会话的那条回复删掉，决定重新打开
+            return st.unresolve(ids)
         if name in ("hide_project", "show_project"):  # 关掉 / 找回项目标签：消息还在，只是不显示、不计数。找回全部：{all: true}
             key = str(body.get("key") or "").strip()
             if name == "show_project" and body.get("all"):

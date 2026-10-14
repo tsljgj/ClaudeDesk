@@ -130,6 +130,12 @@ class Store:
         self.aliases: dict[str, str] = {str(k): str(v) for k, v in aliases.items()} if isinstance(aliases, dict) else {}
         hp = self.state.get("hidden_projects")  # 用户关掉的项目标签（标签键）：消息不显示、不计数，来新消息时自动回来
         self.hidden_projects: set[str] = {str(k) for k in hp} if isinstance(hp, list) else set()
+        ra = self.state.get("read_at")  # 消息 id -> 用户最后一次在界面里打开它的时间（按时间归档已处理的：刚看过的不算旧）
+        self.read_at: dict[str, dt.datetime] = {}
+        for k, v in (ra.items() if isinstance(ra, dict) else ()):
+            t = desk.parse_ts(v) if isinstance(v, str) else None
+            if t is not None:
+                self.read_at[str(k)] = t
         self._repos: dict[str, str] = {}  # 消息里见过的仓库名：规范化名 -> 原名
         self._discovered: dict[str, str] = {}  # 从 Claude Code 会话记录里找到的项目名
         self._loaded = False
@@ -163,6 +169,7 @@ class Store:
                 self.state["deleted"] = sorted(self.deleted & present)  # 压缩成功后自然清掉
                 self.state["aliases"] = dict(self.aliases)
                 self.state["hidden_projects"] = sorted(self.hidden_projects)
+                self.state["read_at"] = {k: v.isoformat() for k, v in sorted(self.read_at.items()) if k in present}
                 data = json.dumps(self.state, ensure_ascii=False, indent=1)
                 self._dirty = False
             tmp = self.state_path.with_name(self.state_path.name + ".tmp")
@@ -495,7 +502,10 @@ class Store:
             "archived": m["id"] in self.archived,
             "choice": (resp or {}).get("choice"), "dismissed": bool((resp or {}).get("dismissed")),
             "resolved": bool((resp or {}).get("resolved")),
+            "last_active": self.last_active(m, resp).isoformat(),
         }
+        if resp is not None and resp.get("silent"):  # 标为已处理 / 跳过时没有通知会话（旧记录没有这个标记：当时通知了）
+            s["silent"] = True
         # 追问（除了还没回复的决定，每条都能追问）：listening = 它的会话现在在不在听；有追问 / 回应的带
         # followup_pending（有追问还没回应）和 fstate（追问数.已送达数.回应数，变了界面就重新拿详情）；回应追问的消息带 reply_to
         s["listening"] = m["source"] in self.listening
@@ -512,6 +522,12 @@ class Store:
             s["followup_pending"] = any(f["id"] not in pairs for f in fus)
             s["fstate"] = f"{len(fus)}.{sum(bool(self.fu_delivered(f['id'])) for f in fus)}.{len(reps)}"
         return s
+
+    def last_active(self, m: dict, resp: dict | None = None) -> dt.datetime:
+        """这条消息最后一次有动静：收到它、回复它、用户在界面里打开它，取最晚的。按时间归档已处理的按它算。"""
+        resp = self.responses.get(m["id"]) if resp is None else resp
+        ts = [m["_dt"], self.read_at.get(m["id"]), desk.parse_ts((resp or {}).get("ts"))]
+        return max(t for t in ts if t is not None)
 
     def _thread(self, mid: str):
         """持锁调用：(这条消息的追问, 回应它们的消息, {追问 id: 回应})。删掉的回应不算。"""
@@ -568,7 +584,9 @@ class Store:
     def _known(self, ids) -> list[str]:
         return [i for i in ids if i in self.msgs]
 
-    def mark_read(self, ids, read: bool = True) -> int:
+    def mark_read(self, ids, read: bool = True, opened: bool = False) -> int:
+        """标为已读 / 未读，返回状态真的变了的条数。opened：用户在界面里打开了它（读过的也算），记下时间（read_at）：
+        按时间归档已处理的时，刚看过的不算旧。批量标为已读不算打开。"""
         with self.lock:
             ids = self._known(ids)
             before = len(self.read)
@@ -577,10 +595,15 @@ class Store:
             else:
                 self.read.difference_update(ids)
             n = abs(len(self.read) - before)
-            if n:
+            touched = bool(read and opened and ids)
+            if touched:
+                now = _now()
+                for i in ids:
+                    self.read_at[i] = now
+            if n or touched:
                 self.schedule_save()
                 self._bump()
-        if n:
+        if n or touched:
             self._emit_changed()
         return n
 
@@ -589,13 +612,14 @@ class Store:
                                and (not project or self.project_info(m)[0] == project)])
 
     def _dismiss_open(self, ids) -> None:
-        """移走还在等回复的决定之前，先告诉等待的会话"用户跳过了"，免得它永远等下去。"""
+        """移走（归档 / 删除）还在等回复的决定之前，记一条"跳过了"的回复：它不再算待决定。
+        silent：不通知会话（listen 不交、不叫醒它）；会话 close 它时会看到这条（退出 3）。"""
         for mid in ids:
             m = self.msgs.get(mid)
             if m is not None and self.is_open(m):
                 try:
                     rec = desk.write_response(mid, None, DISMISS_TEXT, m["source"], self.ddir,
-                                              extra={"title": m["title"], "dismissed": True, **_sess(m)})
+                                              extra={"title": m["title"], "dismissed": True, "silent": True, **_sess(m)})
                     self.responses[mid] = rec
                 except FileExistsError:
                     pass
@@ -624,8 +648,8 @@ class Store:
         return out
 
     def resolve(self, ids) -> int:
-        """标为已处理：还在等回复的决定写一条 resolved 回复（等待的会话会收到），所有选中的都标为已读。
-        返回实际解决的决定数。"""
+        """标为已处理：还在等回复的决定写一条 resolved 回复，所有选中的都标为已读。返回实际解决的决定数。
+        回复带 silent：不通知会话（用户多半已经在对话里说过，或者这件事不重要了；叫醒会话要花 token）。可以 unresolve 撤销。"""
         done = 0
         with self.lock:
             ids = self._known(ids)
@@ -635,7 +659,7 @@ class Store:
                     continue
                 try:
                     rec = desk.write_response(mid, None, RESOLVE_TEXT, m["source"], self.ddir,
-                                              extra={"title": m["title"], "resolved": True, **_sess(m)})
+                                              extra={"title": m["title"], "resolved": True, "silent": True, **_sess(m)})
                     self.responses[mid] = rec
                     done += 1
                 except FileExistsError:
@@ -645,6 +669,54 @@ class Store:
             self._bump()
         self._emit_changed()
         return done
+
+    def unresolve(self, ids) -> int:
+        """撤销"标为已处理 / 跳过"：从 responses.jsonl 里删掉这几条决定的 silent 回复，决定重新变成待决定。
+        只删没通知过会话的（silent 的 resolved / dismissed，而且没有送达记录）：交给了会话的收不回来，用户的真回复也不动。
+        在 data/.lock 锁内整份重写（和 compact 一样换文件）；锁的顺序和 resolve 一样：self.lock → data/.lock。
+        返回删了几条；写不了抛 OSError / TimeoutError（界面提示，下次再撤销也行）。"""
+        want = {str(i) for i in ids}
+        if not want:
+            return 0
+        tmp = self.resp_path.with_name(self.resp_path.name + ".unresolve")
+        dropped: set[str] = set()
+        with self.lock:
+            try:
+                with desk.file_lock(self.ddir, timeout=2.0):
+                    raw = self.resp_path.read_bytes() if self.resp_path.exists() else b""
+                    sent = desk.read_ledger(self.ddir)["reply"]
+                    keep = []
+                    for line in raw.splitlines(keepends=True):
+                        rec = None
+                        if line.strip():
+                            try:
+                                rec = json.loads(line.strip().decode("utf-8-sig"))
+                            except Exception:  # noqa: BLE001 - 坏行原样保留
+                                rec = None
+                        rid = str(rec.get("id") or "") if isinstance(rec, dict) else ""
+                        if rid and rid in want and rec.get("silent") and (rec.get("resolved") or rec.get("dismissed")) \
+                                and rid not in sent:
+                            dropped.add(rid)
+                            continue
+                        keep.append(line if line.endswith(b"\n") else line + b"\n")
+                    if dropped:
+                        with open(tmp, "wb") as f:
+                            f.write(b"".join(keep))
+                            f.flush()
+                            os.fsync(f.fileno())
+                        _retry(lambda: os.replace(tmp, self.resp_path), attempts=20, delay=0.05)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    tmp.unlink(missing_ok=True)
+                raise
+            if not dropped:
+                return 0
+            for mid in dropped:
+                self.responses.pop(mid, None)
+            self._resp_pos = (None, 0)  # 文件换了：下一轮从头读（已经有的不会重复加）
+            self._bump()
+        self._emit_changed()
+        return len(dropped)
 
     def archive(self, ids, on: bool = True) -> int:
         with self.lock:

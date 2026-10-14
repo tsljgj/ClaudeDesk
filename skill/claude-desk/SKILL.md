@@ -25,7 +25,7 @@ desk.py 自己记下当前会话和仓库，不用给 `--source`。正文用文�
 - post 在 stderr 提示"没有 listen 在跑"时，用 Bash `run_in_background: true`、不设超时启动 `desk listen`。已经在跑就别再开（重复的立刻退出 5）。
 - 醒来（退出 0）时 stdout 每行一件事。**一次处理完这一批，再重启一次 listen。**
   - `{"ev":"reply","id","title","choice","choice_index","text"}`：先在对话里复述一句"用户选了 X（补充：…），开始做"，再按 choice 做，text 里的补充也要遵守；只有 text 或和 choice 冲突时以 text 为准；看不懂就再发 decision，不要猜。选项同名时以 choice_index 为准。
-  - 带 `"resolved":true`（用户标为已处理）或 `"dismissed":true`（跳过）：不按任何选项做，说一句就继续。
+  - 用户在 ClaudeDesk 里标为已处理、跳过的决定不会送来，不用等。旧记录还可能带 `"resolved":true` / `"dismissed":true`：不按任何选项做，说一句就继续。
   - `{"ev":"followup","id","msg","kind","title","question","text"}`（追问回复过的决定时还带 choice、reply_text）：在对话里回答，然后在同一条消息里 `desk post --kind answer --reply-to <id> --title "<概括>" --body-from-chat`。
 - 退出 4（会话没了）、5（重复）不用处理。不要用 `list` / `responses` 轮询。
 
@@ -38,7 +38,7 @@ desk.py 自己记下当前会话和仓库，不用给 `--source`。正文用文�
 
 ## 用户在对话里答了决定
 - 一条：`desk close --id <id> --text "用户在对话里选了 B"`；本会话所有还在等的：`desk close --mine`。
-- 退出 3 = 用户也在 ClaudeDesk 里答了（stdout 有那条回复）：一致就照做，不一致就在对话里问清以哪个为准。
+- 退出 3 = 用户也在 ClaudeDesk 里答了（stdout 有那条回复）：一致就照做，不一致就在对话里问清以哪个为准。那条带 `"resolved":true` 或 `"dismissed":true` = 用户在那边处理掉了，不用为它做什么。
 
 ## 新会话、检查
 - `desk status`：一行，`open=待决定 undelivered=没送达 listen=on/off`；有 `orphaned=N` 表示这个仓库里已结束的会话留下了没送达的回复或追问。

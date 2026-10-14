@@ -717,7 +717,8 @@ def _reply_fields(r: dict) -> dict:
 def pending_events(ddir: Path | None = None) -> list[dict]:
     """所有还没送达的事（按时间）：决定的回复、追问。每项 {"session": 归属会话（接管过的按接管后的）, "orig": 原会话, "repo",
     "key": (reply|followup, id), "ev": 交给会话的那一行（不带消息正文）}。没有会话信息的旧消息不算（它们走 wait --id / wait --followups）；
-    会话自己 close 掉的不算；已经在对话里回应过的追问（会话 --reply-to 回过）也不算。"""
+    会话自己 close 掉的不算；用户在 ClaudeDesk 里标为已处理 / 跳过的（silent：不通知会话，叫醒它要花 token）不算；
+    已经在对话里回应过的追问（会话 --reply-to 回过）也不算。"""
     d = data_dir(ddir)
     msgs = {str(m["id"]): m for m in read_all(d / INBOX) if m.get("id")}
     led = read_ledger(d)
@@ -730,7 +731,7 @@ def pending_events(ddir: Path | None = None) -> list[dict]:
 
     for r in read_all(d / RESPONSES):
         mid = str(r.get("id") or "")
-        if not mid or mid in led["reply"] or r.get("closed_by") == "claude":
+        if not mid or mid in led["reply"] or r.get("closed_by") == "claude" or r.get("silent"):
             continue
         m = msgs.get(mid) or {}
         base = m.get("session") or r.get("session")
@@ -1139,15 +1140,21 @@ def _wait_responses(a, d: Path) -> int:
     if not a.id and since is None:
         since = _dt.datetime.now().astimezone()
     deadline = time.monotonic() + a.timeout if a.timeout and a.timeout > 0 else None
-    offset = 0
+    offset, ino = 0, None
     title_cache: dict[str, str] = {}
     while True:
-        recs, offset2 = read_jsonl(path, offset)
-        if offset2 < offset:  # 文件被换掉了
-            recs, offset2 = read_jsonl(path, 0)
-        offset = offset2
+        try:  # 文件被整份换掉了（撤销"标为已处理"时程序会重写它）：从头再读，不然会从半行读起、漏掉后来的回复
+            st = os.stat(path)
+            if (ino is not None and st.st_ino != ino) or st.st_size < offset:
+                offset = 0
+            ino = st.st_ino
+        except OSError:
+            pass
+        recs, offset = read_jsonl(path, offset)
         hits = []
         for r in recs:
+            if r.get("silent"):  # 用户标为已处理 / 跳过、没通知会话的：不算回复，接着等（用户撤销后可能还会回复）
+                continue
             if a.id:  # id 是唯一的：只按 id 认，--source 写得不一样也不能一直等下去
                 if r.get("id") != a.id:
                     continue
@@ -1328,6 +1335,7 @@ def cmd_inbox(a) -> int:
     evs = [e for e in pending_events(d) if e["session"] != me and norm(e["repo"]) == norm(repo)]
     gone = _gone_sessions(d, {e["session"] for e in evs}, msgs, led)
     evs = [e for e in evs if e["session"] in gone]
+    # 旧版写的标为已处理 / 跳过（没有 silent 标记，pending_events 照样算它们）：不列；新版的 pending_events 已经不算了
     quiet = [e for e in evs if e["ev"]["ev"] == "reply" and (e["ev"].get("resolved") or e["ev"].get("dismissed"))]
     evs = [e for e in evs if e not in quiet]
     if not a.adopt:
@@ -1418,6 +1426,9 @@ def cmd_close(a) -> int:
         old = next((r for r in read_all(d / RESPONSES) if r.get("id") == a.id), None)
         if old is not None:
             print(_dump(dict(old, title=old.get("title") or m.get("title", ""))))
+            if old.get("silent"):  # 用户标为已处理 / 跳过了：不记送达（用户撤销后再回复，listen 还要交那条真回复）
+                print("用户已经在 ClaudeDesk 里处理掉了这条（标为已处理或跳过，没有通知会话），不用再为它做什么", file=sys.stderr)
+                return EXIT_ANSWERED
             mark_delivered(d, "reply", a.id, me, "close")  # 这就算交给会话了
         print("这条已经有回复了（用户已在 ClaudeDesk 里答复，见 stdout 那行 JSON）", file=sys.stderr)
         return EXIT_ANSWERED
@@ -1439,7 +1450,7 @@ def cmd_close_mine(a, d: Path) -> int:
             and owner_of(m.get("session"), led["adopt"], m.get("repo")) == me]
     closed = []
     for m in mine:
-        if str(m["id"]) in answered:
+        if str(m["id"]) in answered:  # 用户标为已处理 / 跳过的（silent）也算回复过：不再关，下面也不报告
             continue
         try:
             write_response(m["id"], None, a.text or "（已在对话中处理）", m.get("source", ""), d,
