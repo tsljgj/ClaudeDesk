@@ -260,7 +260,7 @@ def test_failed_compaction_is_retried_with_backoff(tmp_path, monkeypatch):
     assert s.compact_if_due() is None  # 还没到重试时间
     s._compact_at = 0
     assert s.compact_if_due() is False
-    assert 8 < s._compact_at - time.monotonic() <= 10  # 第二次失败：间隔翻倍
+    assert 8 < s._compact_at - time.monotonic() <= 10.001  # 第二次失败：间隔翻倍（Windows 时钟粗，留一点浮点余量）
     s.save_state()
 
     monkeypatch.setattr(os, "replace", real)
