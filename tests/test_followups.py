@@ -60,8 +60,8 @@ def test_wait_followups_wakes_on_its_source_only_and_holds_the_marker(tmp_path):
     assert got["msg"] == a and got["title"] == "为什么慢" and got["question"] == "为什么这么慢？"
     assert got["text"] == "那换成 B 呢？" and got["source"] == "s1" and got["id"] and got["ts"]
     assert until(lambda: not desk.listening_sources(["s1"], d))  # 退出就放掉标记
-    recs = lines(d / desk.FOLLOWUPS)
-    assert {"delivered": got["id"]}.items() <= recs[-1].items()  # 交出去之前记了一条"送达"
+    recs = lines(d / desk.DELIVERIES)  # 送达标记统一记在 deliveries.jsonl（协议 v2）
+    assert {"kind": "followup", "id": got["id"], "via": "wait"}.items() <= recs[-1].items()  # 交出去之前记了一条"送达"
     assert not (d / desk.RESPONSES).exists()  # 追问不进 responses.jsonl
 
 

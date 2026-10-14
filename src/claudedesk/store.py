@@ -78,6 +78,8 @@ def normalize(r: dict) -> dict:
     m["priority"] = "high" if r.get("priority") == "high" else "normal"
     m["reply_to"] = str(r.get("reply_to") or "").strip()  # 回答用户追问的消息：指向被追问的那条
     m["followup_id"] = str(r.get("followup_id") or "").strip()
+    m["session"] = str(r.get("session") or "").strip()  # 发它的 Claude Code 会话（协议 v2）；旧消息没有
+    m["session_pid"], m["session_pid_start"] = desk._as_int(r.get("session_pid")), desk._as_int(r.get("session_pid_start"))
     m["_dt"] = desk.parse_ts(r.get("ts")) or _now()
     m["_search"] = " ".join([m["title"], m["body"], m["source"], m["question"],
                              " ".join(o["label"] + " " + o["description"] for o in m["options"])]).lower()
@@ -105,9 +107,20 @@ class Store:
         self.replies: dict[str, list[str]] = {}  # 消息 id -> 回应它的追问的消息 id（reply_to 指向它）
         self.listening: set[str] = set()  # 现在有 wait --followups 在听的来源
         self._listen_at = 0.0
+        # 协议 v2：按会话送（deliveries.jsonl）
+        self.dl_path = self.ddir / desk.DELIVERIES
+        self.dl_reply: dict[str, str] = {}  # 决定 id -> 回复什么时候交给了会话
+        self.dl_fu: dict[str, str] = {}  # 追问 id -> 什么时候交给了会话（旧版记在 followups.jsonl 的在 self.delivered）
+        self.adopted: dict[tuple, str] = {}  # (已结束的会话, 仓库) -> 接管它的会话（desk.py inbox --adopt）
+        self.spid: dict[str, tuple] = {}  # 会话 -> (pid, 创建时间, 什么时候知道的)，取最新的
+        self.live_sessions: set[str] = set()  # 有 listen 在跑的会话
+        self.waiting_ids: set[str] = set()  # 有 wait --id 在等的决定（旧协议）
+        self.alive: dict[str, bool] = {}  # 会话进程还在不在（只有知道 pid 的会话）
+        self._dead: set[tuple] = set()  # 查到已经退出的 (pid, 创建时间)：不会再活过来，不用再查
         self._inbox_pos = (None, 0)  # (st_ino, offset)
         self._resp_pos = (None, 0)
         self._fu_pos = (None, 0)
+        self._dl_pos = (None, 0)
         self.state = self._load_state()
         self.read: set[str] = set(self.state.get("read", []))
         self.notified: set[str] = set(self.state.get("notified", []))
@@ -240,6 +253,8 @@ class Store:
                     self._repos.setdefault(norm_name(m["repo"]), m["repo"])
                 if m["reply_to"]:
                     self.replies.setdefault(m["reply_to"], []).append(m["id"])
+                if m["session"] and m["session_pid"]:
+                    self._note_pid(m["session"], m["session_pid"], m["session_pid_start"], m["_dt"])
                 changed = True
                 if not self.hidden(m) and m["id"] not in self.read and m["id"] not in self.notified:
                     new.append(m)
@@ -262,6 +277,15 @@ class Store:
                 changed = True
             for r in recs:
                 changed = self._add_followup_rec(r) or changed
+
+            recs, self._dl_pos, reset = self._advance(self.dl_path, self._dl_pos)
+            if reset:
+                self.dl_reply.clear()
+                self.dl_fu.clear()
+                self.adopted.clear()
+                changed = True
+            for r in recs:
+                changed = self._add_delivery_rec(r) or changed
 
             first = not self._loaded
             self._loaded = True
@@ -302,20 +326,76 @@ class Store:
         lst.sort(key=lambda x: x["_dt"])
         return True
 
+    def _add_delivery_rec(self, r: dict) -> bool:
+        """持锁调用：收一行 deliveries.jsonl（送达、接管、会话换了进程）。返回有没有变化。"""
+        k, rid = r.get("kind"), str(r.get("id") or "")
+        when = desk.parse_ts(r.get("ts")) or _now()
+        if k in ("reply", "followup") and rid:
+            dst = self.dl_reply if k == "reply" else self.dl_fu
+            if rid in dst:
+                return False
+            dst[rid] = when.isoformat()
+            return True
+        s = str(r.get("session") or "")
+        if k not in ("adopt", "pid") or not s:
+            return False
+        if k == "adopt" and r.get("from") and r["from"] != s:
+            self.adopted[(str(r["from"]), str(r.get("repo") or "").lower())] = s
+        pid = desk._as_int(r.get("session_pid"))
+        if pid:
+            self._note_pid(s, pid, desk._as_int(r.get("session_pid_start")), when)
+        return True
+
+    def _note_pid(self, session: str, pid: int, start, when) -> None:
+        """持锁调用：记下会话最新的进程（会话恢复后 pid 会变；按时间取最晚的）。"""
+        old = self.spid.get(session)
+        if old is None or when >= old[2]:
+            self.spid[session] = (pid, start, when)
+
+    def owner(self, m: dict) -> str:
+        """消息现在归哪个会话：发它的会话；被接管过的按接管后的（可以接力）。旧消息返回空串。"""
+        return desk.owner_of(m.get("session") or "", self.adopted, m.get("repo")) or ""
+
+    def fu_delivered(self, fid: str) -> str | None:
+        return self.dl_fu.get(fid) or self.delivered.get(fid)
+
+    def session_state(self, m: dict) -> str:
+        """listening：会话在等（listen；旧协议的 wait --id 在等这条决定、wait --followups 在听这个来源的追问也算）；
+        open：会话还开着但没在听；gone：会话进程已经没了；unknown：旧消息，不知道是哪个会话。"""
+        s = self.owner(m)
+        if not s:
+            return "unknown"
+        if s in self.live_sessions:
+            return "listening"
+        if self.is_open(m) and m["id"] in self.waiting_ids or not self.is_open(m) and m["source"] in self.listening:
+            return "listening"
+        return "gone" if self.alive.get(s) is False else "open"
+
     def refresh_listening(self, force: bool = False) -> bool:
-        """看哪些来源有会话在听追问（wait --followups 占着的命名管道），最多每 LISTEN_EVERY 秒一次。
-        只列一次管道目录，不按消息挨个查；列的时候不持锁。变了返回 True。"""
+        """看哪些会话在听、哪些会话还在，最多每 LISTEN_EVERY 秒一次：列一次管道目录（listen、wait --id、wait --followups
+        占着的标记），再按 pid 查一遍会话进程（已经退出的记住，不再查）。列的时候不持锁。变了返回 True。"""
         now = time.monotonic()
         if not force and now < self._listen_at:
             return False
         self._listen_at = now + LISTEN_EVERY
         with self.lock:
             sources = {m["source"] for m in self.msgs.values()}
-        live = desk.listening_sources(sources, self.ddir)
+            sessions = {self.owner(m) for m in self.msgs.values() if m["session"]}
+            ids = {m["id"] for m in self.msgs.values() if self.is_open(m)}
+            pids = {s: self.spid[s][:2] for s in sessions if s in self.spid}
+        live, sess, waiting = desk.presence(self.ddir, sources, sessions, ids)
+        alive = {}
+        for s, key in pids.items():
+            if key not in self._dead:
+                alive[s] = desk.pid_alive(*key)
+                if not alive[s]:
+                    self._dead.add(key)
+            else:
+                alive[s] = False
         with self.lock:
-            if live == self.listening:
+            if (live, sess, waiting, alive) == (self.listening, self.live_sessions, self.waiting_ids, self.alive):
                 return False
-            self.listening = live
+            self.listening, self.live_sessions, self.waiting_ids, self.alive = live, sess, waiting, alive
             self._bump()
         self._emit_changed()
         return True
@@ -419,12 +499,18 @@ class Store:
         # 追问（除了还没回复的决定，每条都能追问）：listening = 它的会话现在在不在听；有追问 / 回应的带
         # followup_pending（有追问还没回应）和 fstate（追问数.已送达数.回应数，变了界面就重新拿详情）；回应追问的消息带 reply_to
         s["listening"] = m["source"] in self.listening
+        # 协议 v2：session_state = listening / open / gone / unknown（见 session_state）；delivered = 回复什么时候交给了会话
+        s["session_state"] = self.session_state(m)
+        if s["session_state"] == "listening":
+            s["listening"] = True
+        if m["id"] in self.dl_reply:
+            s["delivered"] = self.dl_reply[m["id"]]
         if m["reply_to"]:
             s["reply_to"] = m["reply_to"]
         if m["id"] in self.followups or m["id"] in self.replies:
             fus, reps, pairs = self._thread(m["id"])
             s["followup_pending"] = any(f["id"] not in pairs for f in fus)
-            s["fstate"] = f"{len(fus)}.{sum(f['id'] in self.delivered for f in fus)}.{len(reps)}"
+            s["fstate"] = f"{len(fus)}.{sum(bool(self.fu_delivered(f['id'])) for f in fus)}.{len(reps)}"
         return s
 
     def _thread(self, mid: str):
@@ -438,7 +524,7 @@ class Store:
         """持锁调用：详情里加上追问这一串。followups：每条追问（delivered = 什么时候交给了会话、reply = 哪条消息回应了它）；
         replies：所有回应它的消息；回应追问的消息另有 reply_ref = 原来那条（id、标题、类型、还在不在）和它回应的追问原文。"""
         fus, reps, pairs = self._thread(m["id"])
-        d["followups"] = [{"id": f["id"], "ts": f["_dt"].isoformat(), "text": f["text"], "delivered": self.delivered.get(f["id"]),
+        d["followups"] = [{"id": f["id"], "ts": f["_dt"].isoformat(), "text": f["text"], "delivered": self.fu_delivered(f["id"]),
                            "reply": {"id": pairs[f["id"]]["id"], "title": pairs[f["id"]]["title"]} if f["id"] in pairs else None}
                           for f in fus]
         paired = {r["id"] for r in pairs.values()}
@@ -509,7 +595,7 @@ class Store:
             if m is not None and self.is_open(m):
                 try:
                     rec = desk.write_response(mid, None, DISMISS_TEXT, m["source"], self.ddir,
-                                              extra={"title": m["title"], "dismissed": True})
+                                              extra={"title": m["title"], "dismissed": True, **_sess(m)})
                     self.responses[mid] = rec
                 except FileExistsError:
                     pass
@@ -549,7 +635,7 @@ class Store:
                     continue
                 try:
                     rec = desk.write_response(mid, None, RESOLVE_TEXT, m["source"], self.ddir,
-                                              extra={"title": m["title"], "resolved": True})
+                                              extra={"title": m["title"], "resolved": True, **_sess(m)})
                     self.responses[mid] = rec
                     done += 1
                 except FileExistsError:
@@ -691,7 +777,7 @@ class Store:
                 raise KeyError("没有这条消息")
             if mid in self.responses:
                 raise FileExistsError("这条已经回复过了")
-            extra = {"title": m["title"]}
+            extra = {"title": m["title"], **_sess(m)}
             labels = [o["label"] for o in m["options"]]
             if choice_index is not None:
                 s = str(choice_index).strip()
@@ -734,11 +820,16 @@ class Store:
                 raise ValueError("这条决定还在等你回复：先在上面选择或写回复，回复之后才能追问")
             if not text:
                 raise ValueError("追问不能为空")
-            rec = desk.write_followup({"id": mid, "source": m["source"], "title": m["title"]}, text, self.ddir)
+            rec = desk.write_followup({"id": mid, "source": m["source"], "title": m["title"], **_sess(m)}, text, self.ddir)
             self._add_followup_rec(rec)
             self._bump()
         self._emit_changed()
         return rec
+
+
+def _sess(m: dict) -> dict:
+    """写回复 / 追问时带上消息的会话：原消息删掉了也知道送给谁。"""
+    return {"session": m["session"]} if m.get("session") else {}
 
 
 def _retry(fn, attempts: int = 25, delay: float = 0.1):

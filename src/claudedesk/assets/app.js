@@ -464,9 +464,28 @@
     var m = S.current && S.byId[S.current], d = currentDetail(), ds = $("eyebrow").querySelector(":scope > span[title]");
     if (!m) return renderEmpty();
     if (ds) ds.textContent = ebDate(m); // 只换日期那几个字，不重画（焦点不丢）
-    if (d && d.kind === "decision" && !d.response) $("decideState").textContent = waitState(d);
+    if (d && d.kind === "decision" && !d.response) renderDecideState(d);
   }
   function waitState(d) { return "会话已等 " + fmtWait(d.ts) + " · 提交后立即继续"; }
+
+  // ---------------------------------------------------------------- 会话状态（消息记着是哪个会话发的，服务端算出 session_state）
+  // listening 会话在等 / open 会话还开着、没在听 / gone 会话已经结束 / unknown 旧消息，不知道是哪个会话（照旧的说法）
+  function sessOf(d) { var m = d && (S.byId[d.id] || d); return (m && m.session_state) || "unknown"; }
+  var DECIDE_STATE = {
+    listening: "会话在等，提交后马上收到。",
+    open: "会话还开着，但现在没在听：回复会存着，它下次查看时收到。",
+    gone: "这个会话已经结束：回复会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回。"
+  };
+  function renderDecideState(d) { // 卡片顶上那行：知道是哪个会话的，带个圆点单独一行（在等是绿点）；旧消息照旧写"会话已等 …"
+    var st = sessOf(d), el = $("decideState");
+    el.textContent = DECIDE_STATE[st] || waitState(d);
+    el.className = "decide-state" + (DECIDE_STATE[st] ? " sess" + (st === "listening" ? " on" : "") : "");
+    $("decide").classList.toggle("gone", st === "gone"); // 会话已经结束：标为已处理是最自然的一步（按钮描边、提示里写出来）
+    renderHint(d);
+  }
+  function hhmm(ts) { var t = new Date(ts); return pad(t.getHours()) + ":" + pad(t.getMinutes()); }
+  // 回复 / 追问送到会话了没有：送达了写时间；还没送达按会话状态说一句
+  function notYet(st) { return st === "listening" ? "会话在等，马上就到" : st === "gone" ? "会话已经结束" : "会话下次查看时收到"; }
 
   // ---------------------------------------------------------------- 渲染
   function renderAll() {
@@ -663,6 +682,7 @@
     else if (m.kind === "decision" && m.dismissed) bits.push('<span class="st skip">已跳过</span>');
     else if (m.kind === "decision" && m.answered) bits.push('<span class="st done">✓ ' + esc(m.choice || "已回复") + "</span>");
     else if (m.priority === "high" && m.unread) bits.push('<span class="st open">紧急</span>');
+    if (m.open && m.session_state === "gone") bits.push('<span class="st gone" title="发它的会话已经结束：不需要了就标为已处理（R）">会话已结束</span>');
     if (m.followup_pending) bits.push('<span class="st fu">已追问 · 等回答</span>'); // 你追问了，会话还没回应（等的是 Claude，不用强调色）
     else if (m.reply_to) bits.push('<span class="st kind">回应追问</span>');
     if (src) bits.push('<span class="src">' + esc(src) + "</span>");
@@ -724,7 +744,7 @@
     $("empty").hidden = true;
     $("detail").hidden = false;
     var key = m.id + "|" + m.answered;
-    if (S.shownKey === key) { renderEyebrow(m); syncFollowup(m); return; }
+    if (S.shownKey === key) { renderEyebrow(m); syncDecision(m); syncFollowup(m); return; }
     var cached = S.details[key];
     if (cached) return showDetail(keepDetail(key, cached), key);
     api("/api/message?id=" + encodeURIComponent(m.id)).then(function (d) {
@@ -834,22 +854,43 @@
     $("decideTitle").textContent = r ? "你的回复" : (d.options || []).length ? "请选择一个选项" : "请写下你的回复";
     var done = $("doneBox");
     if (r) {
-      var when = r.ts ? fmtRel(r.ts).split(" · ")[0] : ""; // 和阅读区顶上一样写"今天 00:07"
       done.hidden = false;
-      done.className = "reply-done" + (r.dismissed ? " skip" : "");
-      if (r.resolved) done.innerHTML = "<b>已标为已处理</b> · " + when + "<div>没有选择选项，等待的会话已收到「已经处理好了」。</div>";
-      else if (r.dismissed) done.innerHTML = "<b>已跳过</b> · " + when + "<div>没有作出选择，等待的会话已收到通知。</div>";
-      else if (r.closed_by === "claude") done.innerHTML = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
-      else done.innerHTML = "<b>已提交</b> · " + (when ? when + " · " : "") + "会话已收到" + // 选了哪项看上面打了 ✓ 的那项，不再重复
-        (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
-      // 还有别的待决定：给个按钮过去，但不自动跳（列表和阅读区不突然变）
-      if (queue().some(function (x) { return x.id !== d.id; })) done.insertAdjacentHTML("beforeend", '<button class="ghost next-dec" data-next>下一条待决定 →（N）</button>');
+      renderDone(d);
       $("decideState").textContent = "";
+      $("decideState").className = "decide-state";
+      box.classList.remove("gone");
     } else {
       done.hidden = true;
-      $("decideState").textContent = waitState(d);
+      renderDecideState(d);
     }
     updateSubmit();
+  }
+  // "你的回复"：知道是哪个会话的，写送达了没有（已送达会话 · 时间 / 还没送达 + 为什么）；旧消息照旧写"会话已收到"
+  function renderDone(d) {
+    var r = d.response, done = $("doneBox"), m = S.byId[d.id] || d, st = sessOf(d), known = st !== "unknown";
+    var when = r.ts ? fmtRel(r.ts).split(" · ")[0] : ""; // 和阅读区顶上一样写"今天 00:07"
+    var deliv = m.delivered ? "已送达会话 · " + hhmm(m.delivered) : '<span class="undeliv">还没送达</span>';
+    var hint = !m.delivered ? notYet(st) + (st === "gone" ? "：在同一个仓库开新会话时，可以用 desk.py inbox 找回。" : "。") : "";
+    var html, what = r.resolved ? "没有选择选项，" : "没有作出选择，";
+    if (r.resolved || r.dismissed) {
+      var head = (r.resolved ? "<b>已标为已处理</b> · " : "<b>已跳过</b> · ") + when;
+      if (!known) html = head + "<div>" + what + (r.resolved ? "等待的会话已收到「已经处理好了」。" : "等待的会话已收到通知。") + "</div>";
+      else if (st === "gone" && !m.delivered) html = head + "<div>" + what + "会话已经结束，不用再通知它。</div>"; // 收尾清理：不催用户去找回
+      else html = head + " · " + deliv + "<div>" + what + (r.resolved ? "告诉会话「已经处理好了」。" : "告诉会话这条跳过了。") + hint + "</div>";
+    } else if (r.closed_by === "claude") html = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
+    else html = "<b>已提交</b> · " + (when ? when + " · " : "") + (known ? deliv : "会话已收到") + // 选了哪项看上面打了 ✓ 的那项，不再重复
+      (known && hint ? '<div class="deliv-hint">' + hint + "</div>" : "") + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
+    // 还有别的待决定：给个按钮过去，但不自动跳（列表和阅读区不突然变）
+    if (queue().some(function (x) { return x.id !== d.id; })) html += '<button class="ghost next-dec" data-next>下一条待决定 →（N）</button>';
+    done.className = "reply-done" + (r.dismissed ? " skip" : "");
+    if (lastDone !== html) { lastDone = html; keepFocus(done, function () { done.innerHTML = html; }); } // 长轮询每次都来：没变就不重写
+  }
+  var lastDone = null;
+  // 长轮询来了：会话上线 / 下线、回复送达了，只重画决定卡片的状态行或"你的回复"
+  function syncDecision(m) {
+    var d = S.details[S.shownKey];
+    if (!m || !d || d.id !== m.id || d.kind !== "decision") return;
+    if (d.response) renderDone(d); else renderDecideState(d);
   }
 
   function currentDetail() {
@@ -884,6 +925,7 @@
     if (!d || d.response) return;
     if (S.submitting[d.id]) { $("decideHint").textContent = "正在发给会话…"; return; } // 提交中：不再说"Ctrl+Enter 提交"
     var n = (d.options || []).length, text = $("replyText").value.trim();
+    if (S.choice == null && !text && sessOf(d) === "gone") { $("decideHint").textContent = "会话已经结束 · 不需要了就标为已处理（R）"; return; }
     $("decideHint").textContent = S.choice != null ? "Ctrl+Enter 提交「" + S.choice + "」" :
       !n ? (text ? "Ctrl+Enter 提交" : "写好后 Ctrl+Enter 提交") :
       "按 " + (n > 1 ? "1–" + Math.min(n, 9) : "1") + " 选择" + (text ? "，或 Ctrl+Enter 提交" : "，或直接写回复");
@@ -930,10 +972,20 @@
   var fuSending = {}; // 正在发追问的消息 id（和决定的 S.submitting 分开：决定刚提交完、卡片刚出现时不能是锁着的）
   function fuAnswering(f) { return !!f.delivered && !f.reply && Date.now() - new Date(f.delivered) < 3600e3; }
   function fuState(d) {
-    var m = S.byId[d.id] || d;
-    if (m.listening) return ["on", "会话在线，发出后它会接着回答。"];
-    if ((d.followups || []).some(fuAnswering)) return ["on", "会话收到了你的追问，正在回答。"];
-    return ["off", "这个会话现在没在听（可能已经结束了）。追问会存在这里；也可以复制下来，直接粘到 Claude 对话里。"];
+    var m = S.byId[d.id] || d, st = sessOf(d);
+    if (st === "unknown") { // 旧消息：不知道是哪个会话，照旧按来源有没有 wait --followups 在听
+      if (m.listening) return ["on", "会话在线，发出后它会接着回答。"];
+      if ((d.followups || []).some(fuAnswering)) return ["on", "会话收到了你的追问，正在回答。"];
+      return ["off", "这个会话现在没在听（可能已经结束了）。追问会存在这里；也可以复制下来，直接粘到 Claude 对话里。"];
+    }
+    if (st === "listening") return ["on", "会话在等，发出后马上收到。"];
+    if (st === "open" && (d.followups || []).some(fuAnswering)) return ["on", "会话收到了你的追问，正在回答。"]; // listen 交出去就退出，答完再挂上
+    if (st === "open") return ["off", "会话还开着，但现在没在听：追问会存着，它下次查看时收到。"];
+    return ["off", "这个会话已经结束：追问会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回，也可以复制下来粘到对话里。"];
+  }
+  function fuWait(d, f) { // 一条追问下面那行：旧消息照旧；知道会话的写送达了没有
+    if (sessOf(d) === "unknown") return "等待回答…" + (f.delivered ? " · 已送到会话" : "");
+    return "等待回答… · " + (f.delivered ? "已送达会话 · " + hhmm(f.delivered) : "还没送达 · " + notYet(sessOf(d)));
   }
   function fuStored(d) { return (d.followups || []).filter(function (f) { return !f.reply && !fuAnswering(f); }); } // 可以复制到对话里的
   function renderFollowup(d, reset) {
@@ -945,7 +997,7 @@
     var html = (d.followups || []).map(function (f) {
       return '<div class="fu-item"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
         '<div class="fu-q">' + esc(f.text) + "</div>" + (f.reply ? link(f.reply) :
-        '<div class="fu-wait">等待回答…' + (f.delivered ? " · 已送到会话" : "") + "</div>") + "</div>";
+        '<div class="fu-wait" data-fid="' + esc(f.id) + '">' + fuWait(d, f) + "</div>") + "</div>";
     }).join("") + (d.replies || []).filter(function (r) { return !r.paired; }).map(link).join(""); // 配不上追问的回应也列出来
     var ta = $("fuText"), dr = S.drafts[d.id], sc = $("scroller").getBoundingClientRect(), r0 = ta.getBoundingClientRect();
     var seen = document.activeElement === ta && r0.top >= sc.top - 4 && r0.bottom <= sc.bottom + 4; // 正在框里写、框看得见（贴着边的也算）
@@ -963,6 +1015,10 @@
     var st = fuState(d), busy = !!fuSending[d.id], text = $("fuText").value.trim();
     $("fuState").className = "fu-state " + st[0];
     $("fuState").textContent = st[1];
+    (d.followups || []).forEach(function (f) { // 还没送达的那几行跟着会话状态换说法
+      var el = $("fuList").querySelector('.fu-wait[data-fid="' + cssEsc(f.id) + '"]');
+      if (el && el.textContent !== fuWait(d, f)) el.textContent = fuWait(d, f);
+    });
     $("fuCopy").hidden = st[0] === "on" || !fuStored(d).length;
     $("fuSend").disabled = busy || !text;
     $("fuHint").textContent = busy ? "正在发送…" : text ? "Ctrl+Enter 发送" : "";
@@ -1181,10 +1237,11 @@
     renderAll();
     refocusList();
     if (!open && !unread.length) return toast(ids.length > 1 ? "选中的都已经处理过了" : "这条已经处理过了");
+    var told = ids.filter(waiting).length; // 会话已经结束的不算"告诉了会话"
     act({ action: "resolve", ids: ids }).then(function () {
       return refreshNow(true);
     }).then(function () { // 已经发给会话的回复收不回来：有待决定的就不给撤销
-      toast("已标为已处理 " + n + " 条" + (open ? "，" + open + " 条待决定已告诉会话" : ""), open ? null : { undo: undoRead(unread, false) });
+      toast("已标为已处理 " + n + " 条" + (told ? "，" + told + " 条待决定已告诉会话" : ""), open ? null : { undo: undoRead(unread, false) });
     }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
   }
 
@@ -1240,9 +1297,10 @@
     toast("已撤销");
   }
   // R 键：牵涉待决定的会发给等待的会话、不能撤销，所以先确认；没有待决定的直接标（可以撤销）
+  function waiting(id) { var m = S.byId[id]; return !!m && m.open && m.session_state !== "gone"; } // 待决定、发它的会话还在
   function askResolve(ids) {
     if (!ids.length) return;
-    var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; }).length;
+    var open = ids.filter(waiting).length; // 会话已经结束的待决定：没人在等，标为已处理只是收起来，不用确认
     if (!open) return doResolve(ids);
     confirmBox(ids.length > 1 ? "把 " + ids.length + " 条标为已处理？" : "标为已处理？",
       ids.length > 1 ? "其中 " + open + " 条待决定会告诉等待中的会话「已经处理好了」。" : "等待中的会话会收到「已经处理好了」，然后继续往下走。",
