@@ -281,12 +281,16 @@ def _dropper(d, store):
 
 
 def test_arrival_off_screen_toasts_and_n_opens_it_across_projects(env):
-    """全部项目视图里，新到的待决定插在屏幕外：也弹提示；提示还在时按 N 先打开它，筛着别的项目也能跨过去。"""
+    """多选的两个项目里，新到的待决定插在屏幕外：也弹提示；提示还在时按 N 先打开它，只看别的项目时也能跨过去。"""
     d, store, server, page, errors = env
     mk, drop = _dropper(d, store)
-    drop(*[mk("answer", f"回答 {i}", "aaa") for i in range(20)], mk("decision", "aaa 的决定", "aaa", options=["A"]))
+    drop(*[mk("answer", f"回答 {i}", "aaa") for i in range(20)], mk("decision", "aaa 的决定", "aaa", options=["A"]),
+         mk("answer", "zzz 的旧回答", "zzz"))
     page.goto(server.url)
     page.wait_for_selector(".item")
+    page.click('.ptab[data-project="aaa"]')
+    page.click('.ptab[data-project="zzz"]', modifiers=["Control"])  # 两个都看：按项目分组，zzz 排在最后
+    page.wait_for_selector('.group-label[data-project="zzz"]')
     page.click(".item >> nth=1")  # 在看一条回答
     page.wait_for_function(SAME)
     # 新的待决定来自排在最后的项目：插在列表底下，屏幕外
@@ -300,6 +304,7 @@ def test_arrival_off_screen_toasts_and_n_opens_it_across_projects(env):
     page.wait_for_function("id => deskTest.S.current === id", arg=x)
     page.wait_for_function(SAME)
     assert page.locator(".toast", has_text="要不要发版？").count() == 0  # 用过的提示收起来
+    assert sorted(page.evaluate("Array.from(deskTest.S.projects)")) == ["aaa", "zzz"]  # 本来就在看的项目里：选择不动
 
     # 只看 aaa 时，zzz 又来一条：N 跨项目打开它
     page.click('.ptab[data-project="aaa"]')

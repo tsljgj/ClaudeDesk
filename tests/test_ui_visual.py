@@ -1,4 +1,4 @@
-"""视觉和信息层：待决定队列条、N 键、等待时间、计数胶囊和提示、"全部项目"标签、文字对比度。"""
+"""视觉和信息层：待决定队列条、N 键、等待时间、计数胶囊和提示、项目标签、文字对比度。"""
 import datetime as dt
 import re
 
@@ -22,7 +22,13 @@ def test_queue_strip_and_empty_reader(env):
     store.poll()
     page.goto(server.url)
     q = page.locator("#queueBtn")
-    page.wait_for_function("() => (document.querySelector('#queueBtn span') || {}).textContent?.startsWith('2 条')")
+    # 默认只看有最久待决定的 alpha：队列条只数它的
+    page.wait_for_function("() => (document.querySelector('#queueBtn span') || {}).textContent?.startsWith('1 条')")
+    assert q.locator("span").inner_text() == "1 条待决定 · 最久已等 2 小时"
+    assert page.inner_text("#empty .empty-lead") == "等了很久的决定"
+    assert page.inner_text("#empty .empty-sub") == "alpha · 已等 2 小时"
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])  # 两个都选上
+    page.wait_for_function("() => document.querySelector('#queueBtn span').textContent.startsWith('2 条')")
     assert q.locator("span").inner_text() == "2 条待决定 · 1 条紧急 · 最久已等 2 小时"
     assert q.locator("kbd").inner_text() == "N"
     # 阅读区空着：不重复队列条那句话，写出 N 会打开的那条（紧急的先）+ "开始处理"
@@ -36,7 +42,7 @@ def test_queue_strip_and_empty_reader(env):
     assert q.is_visible()
     page.click('.ptab[data-project="alpha"]')
     assert q.locator("span").inner_text() == "1 条待决定 · 最久已等 2 小时"
-    page.click(".ptab.all")
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])
     page.click('.tab[data-view="all"]')
     # 点队列条 = N：紧急的先
     q.click()
@@ -89,6 +95,7 @@ def test_n_key_jumps_through_open_decisions(env):
     store.poll()
     store.submit(done, "A", "")
     page.goto(server.url)
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])  # 两个项目都看（只看一个时见 test_ui_tabs）
     page.wait_for_selector(f'.item[data-id="{done}"] .st.done')
     order = page.evaluate("deskTest.S.visible")
     seq = []
@@ -172,6 +179,7 @@ def test_count_pills_and_tooltips(env):
     post(d, kind="answer", title="乙的回答", body="y", repo="beta")
     store.poll()
     page.goto(server.url)
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])  # 两个项目都看：数是两边加起来的
     page.wait_for_selector(".group-label")
     tab = lambda v: page.locator(f'.tab[data-view="{v}"]')  # noqa: E731
     assert tab("all").get_attribute("title") == "3 条未读"
@@ -205,7 +213,7 @@ def test_count_pills_and_tooltips(env):
     assert errors == []
 
 
-def test_all_projects_tab_wheel_and_fade(env):
+def test_project_tabs_wheel_and_fade(env):
     d, store, server, page, errors = env
     post(d, kind="decision", title="甲", options=["A"], repo="alpha")
     post(d, kind="decision", title="乙", options=["A"], repo="beta")
@@ -215,24 +223,26 @@ def test_all_projects_tab_wheel_and_fade(env):
     store.poll()
     page.set_viewport_size({"width": 480, "height": 800})
     page.goto(server.url)
-    page.wait_for_selector('.ptab[data-project="__other__"]')  # 数据到了再看（"全部项目"一开始就在）
-    first = page.locator(".ptab").first
-    assert first.inner_text().startswith("全部项目") and "on" in first.get_attribute("class")
-    assert first.get_attribute("aria-selected") == "true"
-    assert first.locator(".n.hot").inner_text() == "2"  # 一直带着所有项目的待决定总数：点别的标签时它不会冒出来把标签挤走
-    assert "2 条待决定" in first.get_attribute("title")
+    page.wait_for_selector('.ptab[data-project="__other__"]')
+    # 没有"全部项目"：一开始就选着一个仓库（有待决定的），每个标签自己带着待决定的胶囊
+    assert page.locator(".ptab.all").count() == 0 and "全部项目" not in page.inner_text("#projects")
+    on = page.locator(".ptab.on")
+    assert on.count() == 1 and on.get_attribute("aria-selected") == "true"
+    assert on.get_attribute("data-project") in ("alpha", "beta") and on.locator(".n.hot").inner_text() == "1"
+    assert page.locator(".ptab .n.hot").count() == 2
     assert page.locator(".ptab-clear").count() == 0
     other = page.locator('.ptab[data-project="__other__"]')
     assert "没认出属于哪个仓库的旧消息" in other.get_attribute("title") and "未识别" not in page.content()
-    # 点一个：只看它；再点一次不取消；点"全部项目"回来
+    # 点一个：只看它；再点一次不取消
     page.click('.ptab[data-project="alpha"]')
-    assert "on" not in first.get_attribute("class")
-    assert first.locator(".n.hot").inner_text() == "2"
     page.click('.ptab[data-project="alpha"]')
     assert page.evaluate("Array.from(deskTest.S.projects)") == ["alpha"]
-    page.click(".ptab.all")
-    assert page.evaluate("deskTest.S.projects.size") == 0 and "on" in first.get_attribute("class")
-    assert first.locator(".n.hot").inner_text() == "2"
+    assert page.locator('.ptab[data-project="alpha"].on').count() == 1 and page.locator(".ptab.on").count() == 1
+    # 选最左边的：标签条回到最左
+    first = page.locator(".ptab").first
+    first.click()
+    assert "on" in first.get_attribute("class")
+    page.wait_for_function("() => document.getElementById('projects').scrollLeft === 0")
     # 放不下：右边淡出；竖着滚轮横着翻，翻过去左边也淡出
     bar = page.locator("#projects")
     assert "fade-r" in bar.get_attribute("class") and "fade-l" not in bar.get_attribute("class")
@@ -339,6 +349,7 @@ def test_list_pane_lines_up_on_two_columns(env):
         post(d, kind="answer", title=f"乙的回答 {i}", body="x", repo="beta")
     store.poll()
     page.goto(server.url)
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])  # 两个项目都看：有分组标题
     page.wait_for_selector(".group-label")
     xs = page.evaluate("""() => { const X = e => Math.round(e.getBoundingClientRect().left);
         const T = e => { const w = document.createTreeWalker(e, NodeFilter.SHOW_TEXT, { acceptNode: n => n.data.trim() ? 1 : 3 });
@@ -419,6 +430,8 @@ def test_more_dot_points_at_pending_tabs_out_of_sight(env):
     page.set_viewport_size({"width": 720, "height": 800})
     page.emulate_media(reduced_motion="reduce")
     page.goto(server.url)
+    page.locator(".ptab").first.click()  # 默认选着 zz-last（有待决定）会滚过去：先选回最左边的
+    page.wait_for_function("() => document.getElementById('projects').scrollLeft === 0")
     more = page.locator("#ptabMore")
     more.wait_for()
     assert more.get_attribute("title") == "右边还有 1 个项目在等你决定"

@@ -273,25 +273,28 @@ def test_projects_are_separated(env):
     store.poll()
     page.goto(server.url)
     page.click('[data-view="all"]')
-    page.wait_for_selector('.ptab[data-project="__other__"]')  # 数据到了再数（"全部项目"一开始就在）
+    page.wait_for_selector('.ptab[data-project="__other__"]')
     names = [t.split("\n")[0] for t in page.locator(".ptab .pname").all_inner_texts()]
     assert names == ["acme-data-pipeline", "webapp", "未归类"]  # 标签就是仓库名，按名字排；没认出来的放最后
-    # 全部：按项目分组，同一项目挨在一起；对不上的在最后（灰点，属于"未归类"）
+    # 没有"全部项目"：默认只看有待决定的 webapp（来源对上 webapp 的旧消息也在里面），不分组
+    assert page.evaluate("Array.from(deskTest.S.projects)") == ["webapp"]
+    assert set(page.evaluate("deskTest.S.visible")) == {a, b} and page.locator(".group-label").count() == 0
+    # Ctrl + 点把别的也加上：按项目分组，同一项目挨在一起；对不上的在最后（灰点，属于"未归类"）
+    page.click('.ptab[data-project="acme-data-pipeline"]', modifiers=["Control"])
+    page.click('.ptab[data-project="__other__"]', modifiers=["Control"])
+    page.wait_for_function("() => document.querySelectorAll('.item').length === 4")
     assert page.locator(".group-label .gname").all_inner_texts() == ["acme-data-pipeline", "webapp", "随手记"]
     order = page.evaluate("deskTest.S.visible")
     assert order[0] == c and set(order[1:3]) == {a, b} and order[3] == o
     assert page.locator(".group-label.other").count() == 1
-    # 点标签：只看它；视图计数跟着变；再点一次不变，点"全部项目"回到全部
+    # 点标签：只看它；视图计数跟着变；再点一次不变
     page.click('.ptab[data-project="acme-data-pipeline"]')
     page.wait_for_function("() => document.querySelectorAll('.item').length === 1")
     assert page.inner_text('.tab[data-view="decide"]').strip() == "决定"
     assert page.locator(".group-label").count() == 0
     page.click('.ptab[data-project="acme-data-pipeline"]')
     assert page.locator(".item").count() == 1
-    page.click('.ptab.all')
-    page.wait_for_function("() => document.querySelectorAll('.item').length === 4")
     # Ctrl + 点：同时看两个
-    page.click('.ptab[data-project="acme-data-pipeline"]')
     page.click('.ptab[data-project="__other__"]', modifiers=["Control"])
     page.wait_for_function("() => document.querySelectorAll('.item').length === 2")
     assert page.locator(".ptab.on").count() == 2
@@ -300,16 +303,16 @@ def test_projects_are_separated(env):
     page.click('[data-l="read_all"]')
     page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{c}\"].unread')")
     assert store.is_unread(store.msgs[a]) and not store.is_unread(store.msgs[o])
-    # 把"未归类"的来源归到 webapp（先点"全部项目"，回到全部）
-    page.click('.ptab.all')
+    # 把"未归类"的来源归到 webapp（分组标题上的"归到…"）：标签没了，选择里剩下 acme
     page.locator('.group-label.other .gmerge').click()
     page.click('.popover [data-to="webapp"]')
     page.wait_for_function("() => !document.querySelector('.ptab[data-project=\"__other__\"]')")
     assert store.aliases == {"随手记": "webapp"}
     assert store.summary(store.msgs[o])["project"] == "webapp"
+    page.wait_for_function("() => deskTest.S.projects.size === 1 && deskTest.S.projects.has('acme-data-pipeline')")
     # [ ] 切换；从通知打开别的项目的消息：自动切过去
     page.keyboard.press("]")
-    page.wait_for_function("() => deskTest.S.projects.size === 1")
+    page.wait_for_function("() => deskTest.S.projects.size === 1 && deskTest.S.projects.has('webapp')")
     page.evaluate(f"deskOpen('{c}')")
     page.wait_for_function("() => deskTest.S.projects.has('acme-data-pipeline')")
     assert errors == []
@@ -331,13 +334,14 @@ def test_nothing_moves_when_clicking(env):
 
     boxes = """sel => [...document.querySelectorAll(sel)].map(e => { const r = e.getBoundingClientRect();
         return [Math.round(r.left), Math.round(r.top), Math.round(r.width)]; })"""
+    assert page.evaluate("Array.from(deskTest.S.projects)") == ["webapp"]  # 默认：有待决定的那个
     tabs0, ptabs0 = page.evaluate(boxes, ".tab"), page.evaluate(boxes, ".ptab")
-    # 切视图、选项目标签：所有标签位置不变（"全部项目"一直带着待决定总数，不会点了才冒出来把别的挤走）
+    # 切视图、加选项目标签：所有标签位置不变（× 一直占着位置，选中时才显示；视图上的数位数没变）
     page.click('.tab[data-view="decide"]')
-    page.click('.ptab[data-project="webapp"]')
+    page.click('.ptab[data-project="acme-data-pipeline"]', modifiers=["Control"])
     assert page.evaluate(boxes, ".tab") == tabs0
     assert page.evaluate(boxes, ".ptab") == ptabs0
-    page.click('.ptab.all')
+    page.click('.ptab[data-project="webapp"]')
     page.click('.tab[data-view="all"]')
 
     # 读一条（未读 -> 已读、计数变少）：标签和列表项位置不变，标题宽度不变
@@ -352,10 +356,10 @@ def test_nothing_moves_when_clicking(env):
 
     # 勾选：批量栏盖在搜索框上，列表不往下挤
     page.wait_for_timeout(300)  # 读过之后服务端推一次新状态，列表会重画一次
-    page.locator(f'.item[data-id="{ids[1]}"]').scroll_into_view_if_needed()
+    page.locator(f'.item[data-id="{ids[2]}"]').scroll_into_view_if_needed()
     items1 = page.evaluate(boxes, ".item")
-    page.locator(f'.item[data-id="{ids[1]}"]').hover()
-    page.locator(f'.item[data-id="{ids[1]}"] .cb').click()
+    page.locator(f'.item[data-id="{ids[2]}"]').hover()
+    page.locator(f'.item[data-id="{ids[2]}"] .cb').click()
     page.wait_for_selector("#bulkbar:not([hidden])")
     assert page.evaluate(boxes, ".item") == items1
     page.keyboard.press("Escape")

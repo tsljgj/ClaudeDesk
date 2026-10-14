@@ -209,7 +209,8 @@
     }
     return PCOLORS[pcolorMap[name]];
   }
-  function inScope(m) { return !S.projects.size || S.projects.has(tabKey(m)); }
+  // 没有"全部项目"：总是看一个（或 Ctrl / Shift 多选的几个）项目。选择只在一个标签都没有时才是空的，那时什么都不在范围里
+  function inScope(m) { return S.projects.has(tabKey(m)); }
   function onlyProject() { // 只选了一个真正的仓库时返回它的名字
     if (S.projects.size !== 1) return "";
     var k = S.projects.values().next().value;
@@ -272,10 +273,14 @@
     return c;
   }
 
-  // 点标签：只看这个（再点一次不变）；点"全部项目"回到全部。Ctrl / Shift + 点 = 加选 / 减选
+  // 点标签：只看这个（再点一次不变）。Ctrl / Shift + 点 = 加选 / 减选；最后一个选着的减不掉（选择不能是空的）
   function clickTab(key, multi) {
-    if (!key) S.projects = new Set();
-    else if (multi) { if (S.projects.has(key)) S.projects.delete(key); else S.projects.add(key); }
+    if (!key) return;
+    if (multi) {
+      if (!S.projects.has(key)) S.projects.add(key);
+      else if (S.projects.size > 1) S.projects.delete(key);
+      else return;
+    } else if (S.projects.size === 1 && S.projects.has(key)) return;
     else S.projects = new Set([key]);
     applyProjects();
   }
@@ -285,7 +290,25 @@
     if (S.current && S.byId[S.current] && !inScope(S.byId[S.current])) S.current = S.keep = null; // 换走了：读完先留着的那条也不留
     renderAll();
   }
-  function setProject(p) { S.projects = p ? new Set([p]) : new Set(); applyProjects(); } // 测试 / 通知用
+  function setProject(p) { if (p) { S.projects = new Set([p]); applyProjects(); } } // 测试 / 通知用
+  // 最久的一条待决定（只在开着的标签里找；skip：不算这几个标签）
+  function oldestOpen(skip) {
+    var best = null;
+    S.msgs.forEach(function (m) {
+      if (m.open && !m.archived && !(skip && skip.has(tabKey(m))) && (!best || new Date(m.ts) < new Date(best.ts))) best = m;
+    });
+    return best;
+  }
+  // 选择空了（启动、选着的标签没了 / 关了）时选谁：存着的选择（标签还在的那些）→ 有最久待决定的项目 → 最近来过消息的项目
+  function defaultProjects(ps) {
+    var keys = {}, last = null;
+    ps.forEach(function (p) { keys[p.key] = 1; if (!last || p.last > last.last) last = p; });
+    var saved = Array.from(loadSet("projects")).filter(function (k) { return keys[k]; });
+    if (saved.length) return saved;
+    var o = oldestOpen();
+    if (o && keys[tabKey(o)]) return [tabKey(o)];
+    return last ? [last.key] : [];
+  }
   function scopeLabel() {
     if (!S.projects.size) return "";
     if (S.projects.size === 1) { var k = S.projects.values().next().value; return k === OTHER ? "未归类" : k; }
@@ -316,24 +339,27 @@
     });
     return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return (a.key === OTHER) - (b.key === OTHER) || byName(a.name, b.name); });
   }
-  // 关掉一个标签：先在本地关好、重画，再发请求；还有待决定的先确认。可以撤销（Z）
+  // 关掉一个标签：先在本地关好、重画，再发请求；还有待决定的先确认。可以撤销（Z）。
+  // 关的是唯一选着的那个：选中它右边的标签，没有就左边的，都没有就按默认的选
   function closeTab(key) {
     if (!key) return;
     var name = tabName(key), open = S.msgs.filter(function (m) { return m.open && tabKey(m) === key; }).length;
     var go = function () {
-      var was = S.projects.has(key);
+      var was = S.projects.has(key), prev = Array.from(S.projects);
+      var ks = projectList().map(function (p) { return p.key; }), i = ks.indexOf(key), nb = ks[i + 1] || ks[i - 1];
       dropUndo();
       S.hidden.add(key);
       filterClosed();
+      if (!S.projects.size && nb) { S.projects = new Set([nb]); save("projects", JSON.stringify([nb])); }
       S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
-      if (S.current && !S.byId[S.current]) S.current = null;
+      if (S.current && (!S.byId[S.current] || !inScope(S.byId[S.current]))) S.current = S.keep = null;
       renderAll();
       refocusList();
       var done = pendHidden([key], true);
       act({ action: "hide_project", key: key }).then(function () { done(); return refreshNow(true); }).then(function () {
         toast("已关闭「" + name + "」", { undo: function () {
           reopenTabs([key]);
-          if (was) S.projects.add(key); // 关之前选着它：撤销后还选着
+          if (was) S.projects = new Set(prev.filter(function (k) { return !S.hidden.has(k); })); // 关之前选着它：撤销后回到原来的选择
           applyProjects();
         } });
       }).catch(function (e) { done(); toast(e.message, { bad: true }); refreshNow(true); });
@@ -364,13 +390,13 @@
     b.title = "已关闭 " + n + " 个标签：它们的消息不显示、不计数。点开找回";
     b.setAttribute("aria-label", b.title);
   }
-  function openClosedMenu() {
+  function openClosedMenu(anchor) { // anchor：从哪个按钮打开（标签条右头的"已关闭 N"，或标签都关掉时列表里的"找回标签"）
     var cs = closedList();
     var html = '<div class="menu-label">已关闭的标签 · 点一个找回</div>' + cs.map(function (p) {
       return '<button class="menu-item" data-reopen="' + esc(p.key) + '"><span class="pdot" style="background:' + pcolor(p.key) + '"></span>' +
         '<span class="mname">' + esc(p.name) + '</span><span class="sub">' + closedSub(p) + "</span></button>";
     }).join("") + (cs.length > 1 ? '<div class="menu-sep"></div><button class="menu-item" data-reopen-all>' + icon("refresh") + "全部恢复</button>" : "");
-    openPopover($("closedBtn"), html, "", function (e) {
+    openPopover(anchor || $("closedBtn"), html, "", function (e) {
       var b = e.target.closest("[data-reopen],[data-reopen-all]");
       if (!b) return;
       closePopover();
@@ -433,22 +459,29 @@
   }
   function renderEmpty() { // 阅读区什么都没打开时：不重复队列条，写出 N 会打开的那条
     var q = queue(), m = q[0], unread = q.length ? 0 : scopeCounts().unread;
+    var away = q.length ? 0 : S.msgs.filter(function (x) { return x.open && !x.archived; }).length; // 这里没有、别的项目里有：N 会切过去
     keepFocus($("empty"), function () {
       $("empty").innerHTML = '<div class="empty-box">' + (q.length
         ? '<p class="empty-lead">' + esc(m.title) + '</p><p class="empty-sub">' + esc(projectOf(m)) + (m.priority === "high" ? " · 紧急" : "") +
           " · 已等 " + fmtWait(m.ts) + (q.length > 1 ? " · 后面还有 " + (q.length - 1) + " 条" : "") + '</p><button class="primary" id="startBtn">开始处理（N）</button>'
+        : away ? '<p class="empty-lead">这里没有待决定的事</p><p class="empty-sub">其他项目还有 ' + away + " 条待决定" +
+          (unread ? " · 这里还有 " + unread + " 条未读" : "") + '</p><button class="primary" id="startBtn">去处理（N）</button>'
         : unread ? '<p class="empty-lead">没有待决定的事</p><p class="empty-sub">还有 ' + unread + " 条未读 · <kbd>↓</kbd> 开始看</p>"
         : '<p class="empty-lead">都处理完了</p><p class="empty-sub"><kbd>↑</kbd> <kbd>↓</kbd> 切换　<kbd>?</kbd> 快捷键</p>') + "</div>";
     });
   }
-  function nextDecision(dir) { // N / Shift+N：下一条 / 上一条待决定，到头绕回来
+  // N / Shift+N：当前项目里的下一条 / 上一条待决定，到头绕回来；这里没有别的了，就切到有最久待决定的项目、打开那条
+  function nextDecision(dir) {
     if (dir > 0 && S.jump && document.contains(S.jump.el)) { // 新到提示还在：先打开它说的那条（跨项目）
       var j = S.byId[S.jump.id]; S.jump.el.remove(); S.jump = null;
       if (j && j.id !== S.current && (j.open || j.unread)) { window.deskOpen(j.id); return; }
     }
-    var q = queue();
-    if (!q.length) { toast("没有待决定的事"); return; }
-    var i = q.map(function (m) { return m.id; }).indexOf(S.current);
+    var q = queue(), ids = q.map(function (m) { return m.id; }), i = ids.indexOf(S.current);
+    if (!q.length || (q.length === 1 && i === 0)) {
+      var o = oldestOpen(S.projects);
+      if (o) { window.deskOpen(o.id); return; }
+      if (!q.length) { toast("没有待决定的事"); return; }
+    }
     var m = q[i < 0 ? (dir > 0 ? 0 : q.length - 1) : (i + dir + q.length) % q.length];
     if (S.query && !(S.searchIds && S.searchIds.has(m.id))) { $("search").value = ""; S.query = ""; S.searchIds = null; renderAll(); }
     if (!inView(m, S.view)) setView("decide");
@@ -523,26 +556,32 @@
     var ps = projectList();
     var keys = {};
     ps.forEach(function (p) { keys[p.key] = 1; });
-    var gone = Array.from(S.projects).filter(function (k) { return !keys[k]; });
-    if (gone.length && S.msgs.length) { gone.forEach(function (k) { S.projects.delete(k); }); save("projects", JSON.stringify(Array.from(S.projects))); }
+    // 选着的标签没了（最后一条删了、"未归类"出了归档视图）：从选择里拿掉；选择空了就按默认的选一个。
+    // 数据还没到（启动时）不动：存着的选择要等标签出来再对
+    if (S.msgs.length) {
+      var n0 = S.projects.size, gone = Array.from(S.projects).filter(function (k) { return !keys[k]; });
+      gone.forEach(function (k) { S.projects.delete(k); });
+      if (!S.projects.size && ps.length) S.projects = new Set(defaultProjects(ps));
+      if (gone.length || S.projects.size !== n0) {
+        save("projects", JSON.stringify(Array.from(S.projects)));
+        S.multi.clear();
+        if (S.current && S.byId[S.current] && !inScope(S.byId[S.current])) S.current = S.keep = null;
+      }
+    }
     var tab = function (p) {
       var on = S.projects.has(p.key);
       var badge = '<span class="n' + (p.open ? " hot" : "") + '">' + (p.open || p.unread || "") + "</span>";
       var tip = (p.key === OTHER ? "没认出属于哪个仓库的旧消息 · 右键或点「归到…」可以归到某个仓库" : p.name +
         (p.open ? " · " + p.open + " 条待决定" : "") + (p.unread ? " · " + p.unread + " 条未读" : "")) +
-        "\n点：只看它 · Ctrl/Shift + 点：多选 · ×（或中键）：关掉" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
+        "\n点：只看它 · Ctrl/Shift + 点：多选 · [ ]：切换 · ×（或中键）：关掉" + (p.key === OTHER ? "" : " · 右键：归到别的仓库");
       return '<button class="ptab' + (on ? " on" : "") + (p.key === OTHER ? " other" : "") + '" data-project="' + esc(p.key) +
         '" role="tab" aria-selected="' + on + '" title="' + esc(tip) + '">' +
         '<span class="pdot" style="background:' + pcolor(p.key) + '"></span>' +
         '<span class="pname">' + esc(p.name) + "</span>" + badge +
         '<span class="pclose" title="关闭这个标签：它的消息不再显示、不计数，来新消息时自动回来">' + icon("x") + "</span></button>";
     };
-    var box = $("projects"), open = ps.reduce(function (s, p) { return s + p.open; }, 0), all = !S.projects.size;
-    keepFocus(box, function () {
-      box.innerHTML = '<button class="ptab all' + (all ? " on" : "") + '" data-project="" role="tab" aria-selected="' + all + '" title="看所有仓库' +
-        (open ? " · " + open + " 条待决定" : "") + '（Esc）">全部项目<span class="n' + (open ? " hot" : "") + '">' + (open || "") + "</span></button>" +
-        ps.map(tab).join("");
-    });
+    var box = $("projects");
+    keepFocus(box, function () { box.innerHTML = ps.map(tab).join(""); });
     renderClosed(); // 先定好右头按钮在不在：下面量标签条宽度要用
     var on = box.querySelector(".ptab.on");
     if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) {
@@ -627,8 +666,11 @@
     S.visible = items.map(function (m) { return m.id; });
     var vis = new Set(S.visible); // 勾选只留看得见的（在别处归档了、被搜索筛掉的不留）：批量操作只作用在眼前这些
     S.multi.forEach(function (id) { if (!vis.has(id)) S.multi.delete(id); });
-    var more = searchMore(); // 搜索命中但被视图 / 项目挡住的："另有 N 条…"一行，和列表一起写
-    if (!items.length) {
+    var more = searchMore(); // 搜索命中但被视图 / 项目挡住的："另有 N 条…"、"其他项目：…"，和列表一起写
+    if (!items.length && !S.query && !projectList().length && closedList().length) { // 标签都关掉了：没有能看的项目，给个找回的入口
+      setList('<div class="list-empty"><b>项目标签都关掉了</b>它们的消息不显示、不计数；来新消息时标签会自动回来' +
+        '<button class="ghost" data-reopen-menu>找回标签…</button></div>');
+    } else if (!items.length) {
       setList('<div class="list-empty"><b>' +
         (S.query ? (more ? "「" + v.label + (scopeLabel() ? " · " + esc(scopeLabel()) : "") + "」里没有「" + esc(S.query) + "」" : "没有找到「" + esc(S.query) + "」")
           : (scopeLabel() ? esc(scopeLabel()) + "：" : "") + (todoOn() ? "没有未处理的了" : v.empty)) + "</b>" +
@@ -1445,17 +1487,37 @@
     var p = runSearch();
     if (p) p.then(go); else go();
   }
-  // 搜到了、但被当前视图 / 项目挡住的条数：列表末尾给一行"另有 N 条…"，点了去能看到它们的地方
+  // 搜到了、但被挡住的：当前项目里被视图挡住的给一行"另有 N 条…"，点了换视图；别的项目里的按项目各给一个按钮，点了切过去（搜索词留着）
   function searchMore() {
     if (!S.searchIds) return "";
-    var shown = new Set(S.visible), live = 0, arch = 0, done = 0, ch = closedHits(); // done：只是被"只看未处理"收起来的
+    var shown = new Set(S.visible), live = 0, arch = 0, done = 0, ch = closedHits(), per = {}, ks = []; // done：只是被"只看未处理"收起来的
     S.searchIds.forEach(function (id) {
       var m = S.byId[id];
-      if (m && !shown.has(id)) { if (m.archived) arch++; else live++; if (todoOn() && !m.archived && !needsYou(m)) done++; }
+      if (!m || shown.has(id)) return;
+      if (!inScope(m)) { var k = tabKey(m); if (!per[k]) { per[k] = 0; ks.push(k); } per[k]++; return; }
+      if (m.archived) arch++; else live++;
+      if (todoOn() && !m.archived && !needsYou(m)) done++;
     });
+    ks.sort(function (a, b) { return per[b] - per[a] || (a === OTHER) - (b === OTHER) || byName(tabName(a), tabName(b)); }); // 命中多的在前
     return (live || arch ? '<button class="search-more" data-more="' + (live ? "all" : "archive") + '">另有 ' + (live + arch) +
-      (done ? " 条已处理或在其他视图、项目里" : " 条在其他视图或项目里") + "<span>" + (live ? "查看全部结果" : "去归档里看") + " →</span></button>" : "") +
+      (done ? " 条已处理或在其他视图里" : " 条在其他视图里") + "<span>" + (live ? "查看全部结果" : "去归档里看") + " →</span></button>" : "") +
+      (ks.length ? '<div class="search-other"><span class="so-lbl">其他项目：</span>' + ks.map(function (k) {
+        return '<button class="so-p" data-more-project="' + esc(k) + '" title="切到「' + esc(tabName(k)) + "」，看这 " + per[k] + ' 条结果">' +
+          '<span class="pdot" style="background:' + pcolor(k) + '"></span>' + esc(tabName(k)) + " " + per[k] + "</button>";
+      }).join('<span class="so-sep"> · </span>') + "</div>" : "") +
       (ch.n ? '<button class="search-more" data-more-closed>另有 ' + ch.n + " 条在已关闭的标签里<span>找回并查看 →</span></button>" : "");
+  }
+  // 点"其他项目"里的一个：只选它，搜索词不动；它的结果在当前视图里一条都看不到时，换到看得到的视图
+  function searchInProject(k) {
+    var hits = S.msgs.filter(function (m) { return S.searchIds && S.searchIds.has(m.id) && tabKey(m) === k; });
+    var shows = function (v) { return hits.some(function (m) { return inView(m, v) && (!S.todo || v === "archive" || needsYou(m)); }); };
+    S.projects = new Set([k]);
+    if (hits.length && !shows(S.view)) {
+      var v = hits.some(function (m) { return !m.archived; }) ? "all" : "archive";
+      if (!shows(v)) { S.todo = false; save("todo", ""); } // 都是处理过的：别让"只看未处理"又把它们藏起来
+      setView(v);
+    }
+    applyProjects();
   }
   function closedHits() { // 搜到了、但在关掉的标签里的：{ n, keys, live 有没归档的 }
     var r = { n: 0, keys: [], live: false };
@@ -1680,9 +1742,9 @@
       if (b && e.target.closest(".pclose")) closeTab(b.dataset.project);
       else if (b) clickTab(b.dataset.project, e.ctrlKey || e.metaKey || e.shiftKey);
     });
-    $("projects").addEventListener("mousedown", function (e) { if (e.button === 1 && e.target.closest(".ptab:not(.all)")) e.preventDefault(); }); // 中键：不要进自动滚动
+    $("projects").addEventListener("mousedown", function (e) { if (e.button === 1 && e.target.closest(".ptab")) e.preventDefault(); }); // 中键：不要进自动滚动
     $("projects").addEventListener("auxclick", function (e) { // 中键点标签：关掉（和浏览器一样）
-      var b = e.target.closest(".ptab:not(.all)");
+      var b = e.target.closest(".ptab");
       if (e.button === 1 && b) { e.preventDefault(); closeTab(b.dataset.project); }
     });
     $("projects").addEventListener("contextmenu", function (e) {
@@ -1691,7 +1753,7 @@
       e.preventDefault();
       mergeMenu(e.clientX, e.clientY, b.dataset.project, true);
     });
-    $("closedBtn").addEventListener("click", openClosedMenu);
+    $("closedBtn").addEventListener("click", function () { openClosedMenu(); });
     $("projects").addEventListener("wheel", function (e) { // 竖着滚轮也能横着翻标签
       var b = $("projects");
       if (b.scrollWidth <= b.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
@@ -1713,17 +1775,21 @@
       if (b) setView(b.dataset.view);
     });
     $("list").addEventListener("click", function (e) {
-      var more = e.target.closest("[data-more]"); // "另有 N 条在其他视图或项目里"
+      var more = e.target.closest("[data-more]"); // "另有 N 条在其他视图里"：项目不动，只换视图
       if (more) {
         if (more.dataset.more === "all" && S.todo) { S.todo = false; save("todo", ""); } // 查看全部结果：已处理的也要露出来
-        S.projects = new Set(); setView(more.dataset.more); applyProjects(); return $("list").focus();
+        setView(more.dataset.more); return $("list").focus();
       }
-      if (e.target.closest("[data-more-closed]")) { // "另有 N 条在已关闭的标签里"：找回这些标签，去看得到它们的视图
+      var mp = e.target.closest("[data-more-project]"); // "其他项目：webapp 3 · …"：切到那个项目，搜索词留着
+      if (mp) { searchInProject(mp.dataset.moreProject); return $("list").focus(); }
+      if (e.target.closest("[data-more-closed]")) { // "另有 N 条在已关闭的标签里"：找回这些标签、只选它们，去看得到它们的视图
         var ch = closedHits();
         if (S.todo) { S.todo = false; save("todo", ""); } // 找回来的可能已经处理过了：别让"只看未处理"又把它们藏起来
-        reopenTabs(ch.keys); S.projects = new Set(); setView(ch.live ? "all" : "archive"); applyProjects();
+        reopenTabs(ch.keys); S.projects = new Set(ch.keys); setView(ch.live ? "all" : "archive"); applyProjects();
         return $("list").focus();
       }
+      var rm = e.target.closest("[data-reopen-menu]"); // 标签都关掉了："找回标签…"打开和"已关闭 N"同一个菜单
+      if (rm) return openClosedMenu(rm);
       var gl = e.target.closest(".group-label");
       if (gl) {
         if (e.target.closest(".gmerge")) {
@@ -1912,13 +1978,21 @@
     var el = rowEl(S.cursor); if (el) el.scrollIntoView({ block: "nearest" });
   }
   function findBox() { if (narrow() && S.current) backToList(); $("search").focus(); } // 窄窗口的阅读页盖住了搜索框：先回到列表，不然字打进看不见的框里
-  // Esc 一次只退一层：菜单 → 窄窗口的阅读页 → 搜索 → 勾选 → 项目筛选
+  // Esc 一次只退一层：菜单 → 窄窗口的阅读页 → 搜索 → 勾选（项目选择不归 Esc 管：没有"全部项目"可退）
   function escLayer() {
     if (!$("popover").hidden) return closePopover();
     if (narrow() && S.current) return backToList();
     if (S.query || $("search").value) return clearSearch();
     if (S.multi.size) { S.multi.clear(); return renderList(); }
-    if (S.projects.size) { S.projects = new Set(); applyProjects(); }
+  }
+  // [ ]：在开着的标签之间转，到头绕回来。多选时从选着的最左（[）/ 最右（]）那个往外走
+  function cycleTab(dir) {
+    var ks = projectList().map(function (p) { return p.key; });
+    var at = ks.map(function (k, i) { return S.projects.has(k) ? i : -1; }).filter(function (i) { return i >= 0; });
+    if (!ks.length || (ks.length === 1 && at.length)) return;
+    var i = !at.length ? (dir > 0 ? -1 : 0) : dir > 0 ? at[at.length - 1] : at[0];
+    S.projects = new Set([ks[(i + dir + ks.length) % ks.length]]);
+    applyProjects();
   }
 
   function onKey(e) {
@@ -1955,18 +2029,7 @@
     if (k === "ArrowDown" || k === "j" || k === "J") { e.preventDefault(); move(1, e.shiftKey); return; }
     if (k === "ArrowUp" || k === "k" || k === "K") { e.preventDefault(); move(-1, e.shiftKey); return; }
     if (k === "/") { e.preventDefault(); findBox(); return; }
-    if (k === "[" || k === "]") {
-      var names = [""].concat(projectList().map(function (p) { return p.key; }));
-      if (names.length > 2) {
-        var cur = S.projects.size === 1 ? S.projects.values().next().value : "";
-        var i = Math.max(0, names.indexOf(cur));
-        S.projects = new Set();
-        var nk = names[(i + (k === "]" ? 1 : names.length - 1)) % names.length];
-        if (nk) S.projects.add(nk);
-        applyProjects();
-      }
-      return;
-    }
+    if (k === "[" || k === "]") { cycleTab(k === "]" ? 1 : -1); return; }
     if (k === "n" || k === "N") { nextDecision(e.shiftKey ? -1 : 1); return; }
     if (k === "?") { showShortcuts(); return; }
     if (k === "e" || k === "E") { doArchive(targets()); return; }
@@ -2000,7 +2063,7 @@
       if (c && !S.byId[id] && !S.gone[id] && closedOf(c)) { reopenTabs([tabKey(c)]); renderAll(); } // 关掉的标签里的（点了旧通知）：先找回标签
       if (!S.byId[id]) return false;
       var m = S.byId[id];
-      if (!inScope(m)) { S.projects = new Set([tabKey(m)]); applyProjects(); }
+      if (!inScope(m)) { S.projects = new Set([tabKey(m)]); applyProjects(); } // 别的项目的：只选它的项目（不会清空选择）
       if (!inView(m, S.view)) setView(view || (m.archived ? "archive" : m.kind === "decision" ? "decide" : m.kind === "answer" ? "answer" : "all"));
       if (S.query) { $("search").value = ""; S.query = ""; S.searchIds = null; renderAll(); }
       select(id, { scroll: true });

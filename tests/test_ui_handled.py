@@ -87,7 +87,7 @@ def test_only_unhandled_toggle_filters_each_view_and_persists(env):
     # 都处理完了：空状态
     store.resolve([dec, ans, info, seen])
     page.wait_for_selector(".list-empty")
-    assert page.inner_text(".list-empty b") == "没有未处理的了"
+    assert page.inner_text(".list-empty b") == "未归类：没有未处理的了"  # 总是在看某个项目：说的是它
     assert "处理过的都收起来了" in page.inner_text(".list-empty")
     assert errors == []
 
@@ -283,8 +283,9 @@ def test_archive_handled_button_archives_the_handled_ones_in_scope_and_undo_puts
     start(page, server)
     page.wait_for_selector(".item")
     h = page.locator("#handledBtn")
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])  # 两个项目都看：两边的都算
+    page.wait_for_function("document.getElementById('handledBtn').title === '归档已处理的 3 条（2 个项目 · 已读、不用再决定）'")
     assert h.is_visible() and h.get_attribute("aria-disabled") == "false"
-    assert h.get_attribute("title") == "归档已处理的 3 条（已读、不用再决定）"
     page.click('.ptab[data-project="alpha"]')
     page.wait_for_function("document.getElementById('handledBtn').title === '归档已处理的 2 条（alpha · 已读、不用再决定）'")
 
@@ -334,7 +335,7 @@ def test_search_queue_and_n_still_work_with_the_filter(env):
     page.keyboard.press("Enter")
     wait_vis(page, [new])
     more = page.locator(".search-more")
-    assert more.inner_text().startswith("另有 1 条已处理或在其他视图、项目里")
+    assert more.inner_text().startswith("另有 1 条已处理或在其他视图里")
     more.click()
     wait_vis(page, [new, old])
     assert page.get_attribute("#todoBtn", "aria-pressed") == "false"

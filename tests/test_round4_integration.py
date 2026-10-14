@@ -78,6 +78,8 @@ def test_todo_kept_row_leaves_once_you_leave_it_by_closing_its_tab_or_switching_
     c = post(d, kind="answer", title="乙的另一条", body="x", repo="beta")
     store.poll()
     start(page, server)
+    page.click('.ptab[data-project="alpha"]')
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])  # 两个项目都看
     page.keyboard.press("f")
     page.click(f'.item[data-id="{a}"]')
     shown(page, a)
@@ -92,14 +94,15 @@ def test_todo_kept_row_leaves_once_you_leave_it_by_closing_its_tab_or_switching_
     assert wait_until(lambda: store.hidden_projects == set())
     page.wait_for_function("() => deskTest.S.hidden.size === 0")
     assert page.evaluate("deskTest.S.current") is None
+    assert sorted(page.evaluate("Array.from(deskTest.S.projects)")) == ["alpha", "beta"]  # 撤销：回到关之前的选择
     assert visible_titles(page) == ["乙的另一条", "乙的回答"]
-    # 换项目：点"beta"再回"全部项目"
+    # 换项目：点"alpha"再 Ctrl + 点"beta"回到两个都看
     page.click(f'.item[data-id="{b}"]')
     shown(page, b)
     assert wait_until(lambda: b in store.read)
     page.click('.ptab[data-project="alpha"]')
     page.wait_for_function("() => deskTest.S.current === null")
-    page.click(".ptab.all")
+    page.click('.ptab[data-project="beta"]', modifiers=["Control"])
     page.wait_for_function("() => deskTest.S.visible.length === 1")
     assert visible_titles(page) == ["乙的另一条"] and c
     assert errors == []
@@ -221,16 +224,17 @@ def test_unsorted_group_label_in_the_archive_view_still_filters(env):
     store.poll()
     store.archive([o1, al])
     start(page, server)
-    assert page.evaluate("[...document.querySelectorAll('#projects .ptab')].map(t => t.dataset.project)") == ["", "alpha"]
+    assert page.evaluate("[...document.querySelectorAll('#projects .ptab')].map(t => t.dataset.project)") == ["alpha"]
     page.click('[data-view="archive"]')
+    page.click('.ptab[data-project="__other__"]', modifiers=["Control"])  # 归档视图里它有标签：加选上，按项目分组
     page.wait_for_selector(f'.item[data-id="{o1}"]')
     page.click(".group-label.other .gname")
     page.wait_for_function("() => deskTest.S.visible.length === 1")
     assert page.evaluate("Array.from(deskTest.S.projects)") == ["__other__"]
     assert page.locator('.ptab[data-project="__other__"].on').count() == 1
-    page.click('[data-view="answer"]')  # 离开归档：未归类没有没归档的，标签和选择都收起来；视图上的数按收起以后的范围（全部项目）算
+    page.click('[data-view="answer"]')  # 离开归档：未归类没有没归档的，标签收起来，选择换到还在的 alpha；视图上的数按换了以后的范围算
     page.wait_for_function("() => !document.querySelector('.ptab[data-project=\"__other__\"]')")
-    assert page.evaluate("Array.from(deskTest.S.projects)") == []
+    assert page.evaluate("Array.from(deskTest.S.projects)") == ["alpha"]
     assert visible_titles(page) == ["甲"]
     assert page.inner_text('.tab[data-view="answer"] .n') == "1" and page.inner_text('.tab[data-view="all"] .n') == "1"
     assert errors == []
