@@ -127,10 +127,10 @@ def test_narrow_reading_toast_goes_under_the_toolbar_and_n_opens_it(env):
     assert where(page) == "toolbar" and on_top(page, ".toast")
     tb, sc = t.bounding_box(), box(page, "#scroller")
     assert tb["y"] >= box(page, "#toolbar")["y"] + 40 and tb["y"] + tb["height"] <= sc["y"] + .5  # 工具栏正下方，把正文往下推
-    assert not hits(tb, clip(box(page, "#article"), sc))  # 看得见的正文
-    page.evaluate("document.getElementById('decide').scrollIntoView({ block: 'end' })")
+    assert not hits(tb, clip(box(page, "#decide .decide-card"), sc))  # 决定卡片（在最上面）
+    page.evaluate("document.getElementById('scroller').scrollTop = 1e6")  # 滚到底下的正文
     page.wait_for_function("() => { const s = document.getElementById('scroller'); return s.scrollTop > 0; }")
-    assert t.is_visible() and not hits(t.bounding_box(), clip(box(page, "#decide .decide-card"), box(page, "#scroller")))  # 决定卡片
+    assert t.is_visible() and not hits(t.bounding_box(), clip(box(page, "#article"), box(page, "#scroller")))  # 看得见的正文
     assert tb["width"] > 400  # 用满宽度
 
     # 提示还在时按 N：打开它说的那条

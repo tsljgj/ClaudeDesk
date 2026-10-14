@@ -1,6 +1,7 @@
 """在真浏览器（Playwright + Chromium）里驱动界面。没装 Playwright 时跳过。"""
 import os
 import threading
+import time
 
 import desk
 import pytest
@@ -110,7 +111,11 @@ def test_render_reply_archive_delete(env):
     page.wait_for_selector("#modal:not([hidden])")
     page.click("#modalOk")
     page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{a}\"]')")
-    page.wait_for_selector(".toast:has-text('已删除')")  # 删除请求返回了 = inbox.jsonl 已经压缩完（列表可能先一步更新）
+    page.wait_for_function(f"() => !deskTest.S.allById['{a}']")  # 服务端那边也没了（列表可能先一步更新）
+    for _ in range(100):  # inbox.jsonl 压缩完
+        if a not in (d / desk.INBOX).read_text(encoding="utf-8"):
+            break
+        time.sleep(0.05)
     assert a not in (d / desk.INBOX).read_text(encoding="utf-8")
 
     # 搜索正文
