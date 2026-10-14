@@ -1,127 +1,250 @@
 # ClaudeDesk
 
+[![build](https://github.com/tsljgj/ClaudeDesk/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/tsljgj/ClaudeDesk/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/tsljgj/ClaudeDesk?display_name=tag)](https://github.com/tsljgj/ClaudeDesk/releases/latest)
+[![license](https://img.shields.io/github/license/tsljgj/ClaudeDesk)](LICENSE)
+![platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)
+
 [English](README.md) · 中文
 
-Windows 托盘程序，专门接收 Claude Code 会话发给你的东西：
+ClaudeDesk 是一个 Windows 托盘小程序，让 Claude Code 会话在终端之外找得到你。需要你拍板时，会话不再用自带的 AskUserQuestion，而是发来一条**决定**，带着选项在后台等；你在桌面上选一个、写两句补充，会话就被唤醒、接着干活。你问会话的问题，它除了在对话里回答，也把原问题和完整**回答**发到这里，不会被一屏屏工具输出淹没；看完还能直接在这里**追问**。偶尔的**通知**（"长任务跑完了"、"任务挂了"）也发到这里。
 
-- **决定**：取代 Claude Code 自带的 AskUserQuestion。你在这里选一个选项、写两句补充，提交后 Claude 会话自动被唤醒并照办。
-- **回答**：你问 Claude 的问题，它在对话里回答的同时也发到这里，不会被一屏屏工具输出淹没。
-- **通知**：少量"长任务跑完了 / 出错了"。
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img alt="ClaudeDesk 主窗口：仓库标签、消息列表，以及一条打开的决定（选项和回复框）" src="docs/screenshot-light.png">
+</picture>
 
-正文是完整的 Markdown：表格、代码高亮、LaTeX 公式（`$…$`、`$$…$$`、`\(…\)`、`\[…\]`）都能正常显示。每条消息可以一键复制（Markdown / 富文本 / 纯文本）或导出 PDF，看完可以归档或删除。
+> 第三方工具，与 Anthropic 无关，也未经其认可。界面是简体中文。
 
-![ClaudeDesk](docs/screenshot-light.png)
+## 目录
 
-> 第三方工具，与 Anthropic 无关。
+- [功能](#功能)
+- [安装](#安装)
+- [快速上手：接入 Claude Code](#快速上手接入-claude-code)
+- [日常使用](#日常使用)
+- [快捷键](#快捷键)
+- [命令行参考（`desk.py`）](#命令行参考deskpy)
+- [工作原理](#工作原理)
+- [数据文件](#数据文件)
+- [自动更新](#自动更新)
+- [安全与隐私](#安全与隐私)
+- [从源码构建](#从源码构建)
+- [参与贡献](#参与贡献)
+- [许可](#许可)
+
+## 功能
+
+- **决定都带回复框。** 选项可以带说明、标出推荐的那个，每条决定都能另写补充文字。等待中的会话收到的是一行 JSON。
+- **回答和追问。** 回答保留你的原问题。任何回答、通知、已经处理过的决定都能追问；会话在听的话会接着回答，回答挂回你的追问下面。
+- **每个仓库一个标签。** 消息按会话所在的 git 仓库分开。标签可以关掉、再找回来；关掉的标签在那个仓库来新消息时自动回来。
+- **为分拣设计。** 待决定队列条和 `N` 跳到下一条，"只看未处理"（`F`），任意选中的消息都能"标为已处理"（`R`），一键归档已处理的，撤销（`Z`），键盘多选。
+- **完整的 Markdown。** 表格、代码高亮、LaTeX 公式（`$…$`、`$$…$$`、`\(…\)`、`\[…\]`），字体和渲染库都打包在本地，离线可用。每条消息可以复制成 Markdown、富文本或纯文本，也可以导出 PDF。
+- **不会错过，也不吵。** Windows 通知、托盘角标和任务栏角标显示未读数；紧急的决定一直闪到你看过为止。
+- **浅色 / 深色 / 跟随系统**，四种强调色，无衬线或衬线正文字体，三档字号，三档正文宽度，两种列表密度。
+- **小、全在本地。** 一个 exe，一个只用标准库的命令行，旁边几份普通的 JSONL 文件。不用注册，不收集数据，从 GitHub Releases 自动更新。
 
 ## 安装
 
-需要 Windows 10/11（自带 Edge WebView2）。
+需要 Windows 10 或 11（自带 Edge WebView2）。
 
-1. 从 [Releases](https://github.com/tsljgj/ClaudeDesk/releases/latest) 下载 `ClaudeDesk.exe`，放进一个你有写权限的文件夹，例如 `%LOCALAPPDATA%\Programs\ClaudeDesk\`（不要放 `Program Files`，否则没法自动更新）。
-2. 双击运行。它会在自己旁边放好 `desk.py`（给 Claude 用的命令行）和 `data\`（收件箱）。
-3. 让 Claude Code 用它：把 [`skill/claude-desk/SKILL.md`](skill/claude-desk/SKILL.md) 复制到 `~/.claude/skills/claude-desk/SKILL.md`，把开头的 `DESK` 改成上面那个文件夹里的 `desk.py`，`PY` 改成你的 Python（3.10+）。想让每个会话都遵守，再在 `~/.claude/CLAUDE.md` 里加一句：
+1. 从 [Releases](https://github.com/tsljgj/ClaudeDesk/releases/latest) 下载 `ClaudeDesk.exe`，放进一个你有写权限的文件夹，例如 `%LOCALAPPDATA%\Programs\ClaudeDesk\`。不要放 `Program Files`，否则没法自动更新。
+2. 双击运行。它会在自己旁边放好 `desk.py`（给 Claude 用的命令行）和 `data\`（收件箱），然后待在托盘里。
+3. 接入 Claude Code（见下一节）。
 
-```markdown
-## 和用户沟通：ClaudeDesk
-- 需要用户决定的事不用 AskUserQuestion，一律用 skill claude-desk 发 decision，然后后台 wait。
-- 回答用户的问题时，对话里照常回答，同时用 claude-desk 发 answer（附原问题和完整回答）。
-```
+从 1.x 升级：先在托盘里退出旧版本，把新的 `ClaudeDesk.exe` 放进原来的文件夹即可。`data\` 原样沿用；旧的 `_internal\` 文件夹可以删掉。
 
-从 1.x 升级：把下载的 `ClaudeDesk.exe` 覆盖进原来的仓库目录即可（先在托盘里退出旧版本），`data\` 原样沿用；旧的 `_internal\` 文件夹可以删掉。
+> Windows 11 默认把新托盘图标收进"^"里。想让它常驻显示：设置 → 个性化 → 任务栏 → 其他系统托盘图标 → 打开 ClaudeDesk。
 
-### 自动更新
+## 快速上手：接入 Claude Code
 
-CI 每次在 `main` 上构建通过，就发布一个 `build-<N>` release（附 `ClaudeDesk.exe` 和 `.sha256`）。程序启动约 45 秒后检查一次，之后每 6 小时一次；发现新版本就下载、校验 SHA-256，然后把自己改名为 `ClaudeDesk.exe.old`（Windows 允许给运行中的 exe 改名），新文件放到原位置并启动，旧进程退出。
+1. 把 [`skill/claude-desk/SKILL.md`](skill/claude-desk/SKILL.md) 复制到 `~/.claude/skills/claude-desk/SKILL.md`。
+2. 把文件开头的 `DESK` 改成 `ClaudeDesk.exe` 旁边那个 `desk.py`，`PY` 改成你的 Python（3.10+）。
+3. 想让每个会话都遵守，再在 `~/.claude/CLAUDE.md` 里加一段：
 
-- 窗口开着时不会打断你：等你把窗口关回托盘再装；左下角会出现"更新到 build N"，点一下立刻更新。
-- 设置（左上角的滑块图标）或托盘菜单里可以关掉"自动更新"，也可以手动"检查更新"。
-- 更新时 exe 会顺手把旁边的 `desk.py` 换成同版本，命令行和程序永远一致。
-- 自己从源码 `build.cmd` 出来的 exe 是 build 0，不会自动更新。
+   ```markdown
+   ## 和用户沟通：ClaudeDesk
+   - 需要用户决定的事不用 AskUserQuestion，一律用 skill claude-desk 发 decision，然后后台 wait。
+   - 回答用户的问题时，对话里照常回答，同时用 claude-desk 发 answer（附原问题和完整回答）。
+   ```
+
+skill 是用中文写的，和界面一致。英文会话里 Claude 一样照做，命令也完全相同。
 
 ## 日常使用
+
+### 窗口和托盘
 
 | 做什么 | 怎么做 |
 |---|---|
 | 打开 | 双击 `ClaudeDesk.exe` 或点托盘图标。已经在运行时再双击只会把窗口切到前台 |
-| 开机自启 | 设置 / 托盘菜单里的"开机自启"（写在 `HKCU\...\Run`，开机后只待在托盘） |
-| 关窗口 | 点 × 只是缩到托盘，程序继续收消息；右键托盘图标 → 退出 |
-| 托盘图标 | 橙色方块里一个 "C•"。右下角红色数字 = 未读数；没有未读、但还有没回复的决定时右上角一个红点；**橙 / 黑交替闪** = 有没看过的决定或紧急消息 |
-| 任务栏按钮 | 窗口开着或最小化时，按钮右上角的红色角标 = 未读数（和托盘一样）；没有未读、但还有没回复的决定 = 红点；都处理完角标消失 |
+| 关窗口 | 点 × 只是缩到托盘，消息照样收；在托盘菜单里退出 |
+| 开机自启 | 设置或托盘菜单里的"开机自启"（写在 `HKCU\…\Run`，开机后只待在托盘） |
+| 托盘图标 | 红色数字 = 未读数；没有未读、但还有没回复的决定 = 红点；闪烁 = 有没看过的决定或紧急消息 |
+| 任务栏按钮 | 窗口开着或最小化时带同样的红色角标。窗口关在托盘里时来了消息，任务栏会冒出一个最小化的按钮，带着角标闪：决定和紧急的一直闪到你切过来或在别处处理完，其余的闪 3 次 |
 
-新消息到达时弹 Windows 通知（点通知直接打开那一条）；窗口关在托盘里时，任务栏会冒出一个最小化的按钮带着角标闪烁：决定类和紧急的一直闪到你切过来或在别处处理完，普通的闪 3 次。
+新消息到达时还会弹 Windows 通知，点通知直接打开那一条。
 
-窗口里：
+### 仓库标签
 
-- 列表上方四个视图：**全部**（默认，每次打开都在这里）、**决定**、**回答**、**归档**。数字有两种：**橙色胶囊 = 待决定的条数**，灰色数字 = 未读条数（鼠标停在标签上有说明）。仓库标签按名字排，不会因为来了新消息就换位置；点按钮、读消息、勾选时，标签和列表都不会挪动。
-- **按仓库分开（窗口最上面的标签页）**：第一个是"全部项目"，后面的标签就是仓库名（webapp、acme-data-pipeline…）。点一个只看它，点"全部项目"或按 `Esc` 回到全部；`Ctrl` / `Shift` + 点可以同时选几个；`[` / `]` 切换；标签放不下时滚轮可以横着翻，右边有被挡住的待决定时会出现一个小橙点，点它翻过去。选了多个或都不选时，列表按仓库分组。视图上的数字、"全部标为已读"、"归档所有已处理的"都只算选中的仓库。
-- **待决定队列**：有待决定时，搜索框下面有一条"N 条待决定 · M 条紧急 · 最久已等 X"。点它或按 `N` 跳到下一条待决定（只在选中的项目里找；紧急的、等得最久的在前；`Shift+N` 往回）。待决定的那一行，时间的位置写着已经等了多久（等 25 分 / 等 2 小时），等过半小时变成橙色。阅读区空着时会写出按 `N` 会打开哪一条。在别的项目、或在列表看不到的地方来了新的待决定 / 紧急消息时，右下角会提示，按 `N` 直接打开它。
-- 仓库名怎么来的：`desk.py post` 发消息时记下当前目录所在的 git 仓库（origin 地址里的仓库名；worktree 认得出主仓库；不在 git 里就用当前目录名；`--repo` 可以手动指定）。
-- 旧消息（更新前发的，没有仓库信息）：程序会读 Claude Code 自己的会话记录（`~/.claude/projects`，以及 `CLAUDE_CONFIG_DIR` 指的目录），找出你在哪些仓库里用过 Claude，再把旧消息的来源对上去（`webapp`、`webapp/eval`、`webapp-runner` 都算 webapp）。实在对不上的放进最后的"未归类"，在分组标题旁点"归到…"（或右键仓库标签）就能归到某个仓库，设置里可以撤销。
-- 列表左边的圆点：**实心（深色主题里是白的）= 没读过**；**橙色实心 = 没看过的待决定**；**橙色空心环 = 看过、还没决定**；**外面再套一圈 = 紧急的待决定**（处理完才消失）；读过、处理完的不画。第二行写着状态（"待决定"、"✓ 你选的选项"、"✓ 已解决"、"已跳过"）。当前打开的那条左边有一道橙色竖条。用 `↑` `↓` 扫过去不算读，停 0.8 秒才标为已读；点开的马上算读。
-- **鼠标移到一条上**，右边会出现它自己的操作：标为已读 / 未读、标为已解决（只对待决定的）、归档、删除；左边出现勾选框。不悬停时都不显示。
-- 决定：按 `1`–`9` 或点选项，需要的话写补充，`Ctrl+Enter` 提交（焦点在哪都行）。推荐的选项带"推荐"标记，卡片上写着会话已经等了多久。选了一半、写了一半切到别的消息再回来，草稿还在。提交后同一条不能再提交；提交完可以点"下一条待决定 →"（或按 `N`）。
-- 阅读区右上角只有复制（旁边的小箭头可选"富文本 / 纯文本"）和导出 PDF。代码块悬停时也有自己的复制按钮。
-- **标为已解决**（`R`，或决定面板里的"标为已解决"）：不选选项，直接告诉等待中的会话"已经处理好了"（回复里带 `"resolved": true`），同时标为已读。按 `R` 会先问一下（回车确认），免得手滑；点按钮不问。
-- **归档**（`E`）：收起来，在"归档"里还能找到。**删除**（`Delete`）：从收件箱文件里真正去掉，不能恢复（确认框里写着删的是哪条）。归档或删除一条还没回复的决定时，会告诉等待中的会话"用户跳过了"。
-- **撤销**：归档、移出归档、标为已读 / 未读（包括批量和"全部标为已读"）之后，右下角的提示里有"撤销（Z）"，提示还在时按 `Z` 或 `Ctrl+Z` 撤销。
-- **多选 / 批量**：点勾选框（`Shift` 连选），或 `Ctrl` + 点击、`X` 勾当前这条、`Shift+↑↓` 连续勾选、`Ctrl+A` 全选；勾着的时候 `↑` `↓` 只挪光标、不丢勾选。勾上以后列表上方出现批量栏：全选、已读、已解决、归档、删除。也可以右键。列表右上角"⋯"里有"全部标为已读"和"归档所有已处理的"。
-- 搜索：`/` 或 `Ctrl+F`，按标题、正文、来源、原问题、选项搜，空格分隔多个词。`↓` / 回车打开第一条结果；`Esc` 第一下清空、第二下离开搜索框。搜到的被当前视图或项目挡住时，列表末尾会说"另有 N 条在其他视图或项目里"。
-- `Esc` 一次只退一层：菜单 / 对话框 → 窄窗口的阅读页 → 搜索 → 勾选 → 项目筛选。
-- 窄窗口（宽度 ≤ 720）：列表和阅读页轮流占满窗口；在列表里 `↑` `↓` 挪光标、回车打开，`Esc` / `Backspace` 回到列表，光标停在刚看的那条。
-- 设置：浅色 / 深色 / 跟随系统，四种强调色，正文字体（无衬线：Inter + 思源黑体；衬线：Source Serif + 思源宋体），字号，列表密度。
-- 按 `?` 看全部快捷键。
+- 窗口最上面一排是**全部项目**，后面每个仓库一个标签，按名字排。仓库名由 `desk.py post` 记下：发消息时当前目录所在的 git 仓库（origin 地址里的仓库名；worktree 认得出主仓库；不在 git 里就用当前目录名；`--repo` 可以手动指定）。
+- 点一个标签只看它；`Ctrl` / `Shift` + 点可以同时选几个；`[` / `]` 切换；`Esc` 或点"全部项目"回到全部。同时看几个仓库时，列表按仓库分组。视图上的数字、"全部标为已读"、"归档已处理的"都只算选中的仓库。
+- **关掉标签**：点标签上的 × 或用鼠标中键。它的消息不再显示、不计数（那里还有待决定时会先问一下，`Z` 可以撤销）。这个仓库来新消息时，标签自动回来。标签条右头的**已关闭 N** 和设置里都列着关掉的标签，点一下找回。
+- 旧消息（记录仓库之前发的）会对到 Claude Code 自己的会话记录（`~/.claude/projects`，以及 `CLAUDE_CONFIG_DIR` 指的目录）里出现过的仓库。实在对不上的放进**未归类**，它只在有消息时出现。在分组标题旁点"归到…"或右键仓库标签，可以把某个来源归到一个仓库下，设置里可以撤销。
+- 标签放不下时，滚轮可以横着翻；右边被挡住的标签里有待决定时，会出现一个小橙点指着它。
 
-> Windows 11 默认把新托盘图标收进"^"里。想让它常驻显示：设置 → 个性化 → 任务栏 → 其他系统托盘图标 → 打开 ClaudeDesk。
+### 列表
 
-## 给 Claude 用的命令行：`desk.py`
+- 四个视图：**全部**（每次打开窗口都在这里）、**决定**、**回答**、**归档**。橙色胶囊是待决定的条数，灰色数字是未读条数。
+- **待决定队列条**：有待决定时，搜索框下面有一条"N 条待决定 · M 条紧急 · 最久已等 X"。点它或按 `N` 跳到选中仓库里的下一条待决定（紧急的、等得最久的在前；`Shift+N` 往回）。待决定的那一行，时间的位置写着会话已经等了多久。在看不到的地方来了新的待决定或紧急消息时，会弹一条提示，按 `N` 直接打开它。
+- 搜索框旁边的**只看未处理**（`F`）只留下待决定的和没读过的。正在看的那条要等你换到别的才走。这个开关会记住。
+- 再旁边的**归档已处理的**（盒子图标）一键归档选中仓库里已读、不用再决定的消息，不问，`Z` 可以撤销。右上角"⋯"菜单里也有它，另有"全部标为已读"。
+- 列表左边的圆点：**实心 = 没读过**；**橙色实心 = 没看过的待决定**；**橙色空心环 = 看过、还没决定**；**外面再套一圈 = 紧急的待决定**。第二行写着状态（待决定、✓ 你选的选项、✓ 已处理、已跳过、已追问 · 等回答）。用 `↑` `↓` 扫过去不算读，停 0.8 秒才标为已读。
+- 鼠标移到一条上，右边会出现它自己的操作（已读 / 未读、标为已处理、归档、删除），左边出现勾选框。也可以右键。
+- **多选**：点勾选框（`Shift` 连选）、`Ctrl` + 点、`X` 勾当前这条、`Shift+↑↓`、`Ctrl+A`。勾上以后出现批量栏：全选、标为已处理、已读、归档、删除。
+- 搜索：`/` 或 `Ctrl+F`，按标题、正文、来源、原问题、选项搜。被当前视图、仓库或关掉的标签挡住的结果，列表末尾会写出有几条，点一下就能看到。
 
-只用标准库，Python 3.10 或更新版本：
+### 决定
+
+- 按 `1`–`9` 或点选项，需要的话在回复框里写补充（每条决定都有回复框），然后 `Ctrl+Enter`（焦点在哪都行）或点"提交"。没有选项的决定只收文字。选了一半、写了一半切到别的消息再回来，草稿还在。
+- 推荐的选项带"推荐"标记，卡片上写着会话已经等了多久。每条决定只能回复一次；提交后点"下一条待决定 →"（或按 `N`）继续。
+- **标为已处理**（`R`）对任意选中的消息都能用：待决定的告诉等待中的会话"已经处理好了"，不选选项（回复里带 `"resolved": true`）；其余的标为已读。牵涉待决定时 `R` 会先问一下，因为会话马上就会收到；不牵涉的可以撤销。
+- 归档（`E`）或删除（`Delete`）一条还在等的决定时，会告诉等待中的会话"用户跳过了"（`"dismissed": true`），会话不会一直卡着。删除会把消息从收件箱文件里真正去掉。
+
+### 追问
+
+- 回答、通知，以及已经有回复的决定（选了选项、标为已处理、跳过了、在对话里处理了），底部都有一个**追问**框。`Enter` 进入，`Ctrl+Enter` 发送。
+- 发这条消息的会话在听（`desk.py wait --followups`）时，追问框写着会话在线，追问马上送到。会话的回答显示在你的追问下面，列表里标着"回应追问"，点开有链接回到原消息。
+- 没有会话在听时，追问先存着；点**复制追问**会连同原消息的标题和 id 一起复制，粘到 Claude 对话里就行。回答来之前，那一行写着"已追问 · 等回答"。
+
+### 阅读、复制和设置
+
+- 阅读区右上角：复制成 Markdown（`C`；旁边的小箭头可选富文本或纯文本），导出 PDF（`Ctrl+P`）。代码块有自己的复制按钮。
+- 窄窗口（宽度 720 像素以内）：列表和阅读页轮流占满窗口；`↑` `↓` 在列表里挪光标，回车打开，`Esc` 或 `Backspace` 返回。
+- **设置**（右上角的滑块图标，或 `Ctrl+,`）：外观（跟随系统、浅色、深色）、强调色、正文字体（无衬线：Inter + 思源黑体；衬线：Source Serif + 思源宋体）、字号、**正文宽度**（适中 720 像素、宽 920 像素（默认）、铺满）、列表密度、开机自启、自动更新、检查更新、打开数据目录、项目归类、已关闭的标签。
+
+## 快捷键
+
+在程序里按 `?` 看同一张表。
+
+| 浏览 | | 决定 | |
+|---|---|---|---|
+| `↑` `↓` / `J` `K` | 上一条 / 下一条 | `1`–`9` | 选第 N 项 |
+| `N` / `Shift+N` | 下一条 / 上一条待决定 | `Ctrl+Enter` | 提交，或发追问 |
+| `Shift+↑` `↓` | 连续勾选 | `Enter` | 打开，或写补充说明 / 追问 |
+| `/`、`Ctrl+F` | 搜索 | `R` | 标为已处理 |
+| `[` `]` | 切换仓库标签 | | |
+| `F` | 只看未处理（开 / 关） | | |
+| `Esc` | 退一层：菜单或对话框 → 窄窗口的阅读页 → 搜索 → 勾选 → 仓库筛选 | | |
+
+| 整理 | | 其他 | |
+|---|---|---|---|
+| `E` | 归档 / 移出归档 | `C` | 复制 Markdown |
+| `U` | 已读 / 未读 | `Ctrl+P` | 导出 PDF |
+| `X` | 勾选当前这条 | `Ctrl+,` | 设置 |
+| `Ctrl+A` | 全选 | `?` | 快捷键 |
+| `Delete` | 删除 | | |
+| `Z`、`Ctrl+Z` | 撤销（提示还在时） | | |
+
+## 命令行参考（`desk.py`）
+
+`desk.py` 只用标准库（Python 3.10+）。请用 `ClaudeDesk.exe` 旁边的那一份：程序会让它和自己保持同一版本。
 
 ```bash
-PY=python                          # 任意 Python 3.10+
+PY=python
 DESK=C:/path/to/ClaudeDesk/desk.py
 
-# 发一条决定（正文放在 UTF-8 的 Markdown 文件里）；打印新消息 id
-"$PY" "$DESK" post --kind decision --source my-project --title "要不要先复核再冻结？" \
-    --body-file plan.md --option "直接冻结::2 小时" --option "先复核::约 6 小时" --option "暂停" \
-    --recommended 2 --allow-text [--priority high]
+# 发一条决定；打印新消息的 id。正文放在 UTF-8 的 Markdown 文件里
+"$PY" "$DESK" post --kind decision --source my-project --title "发布前先跑一轮完整回归测试吗？" \
+    --body-file plan.md --option "先跑回归测试::约 25 分钟，最稳妥" \
+    --option "直接发布::CI 已经跑过单元测试" --option "只跑冒烟测试::约 5 分钟" \
+    --recommended 1 [--priority high]
 
-# 阻塞到你回复（Claude 用后台命令跑它；你一提交它就退出，会话被唤醒）
-"$PY" "$DESK" wait --id <id> [--timeout 秒]   # 回复 → 退出码 0；超时 → 2
+# 阻塞到你回复（放在后台跑）。退出码 0，回复是一行 JSON
+"$PY" "$DESK" wait --id <id> [--timeout 秒]
 
-# 发一条回答：原问题 + 完整回答
+# 发一条回答：用户的原问题 + 完整回答
 "$PY" "$DESK" post --kind answer --source my-project --title "今天的 CI 为什么变慢了" \
     --question "今天的 CI 为什么比平时多跑了一倍时间？" --body-file answer.md
 
-# 其他
-"$PY" "$DESK" post --kind info --source X --title "长任务跑完了" --body "结果在 ..."   # --body - 表示从 stdin 读
-"$PY" "$DESK" responses --source X [--since 2026-01-15T09:00:00+00:00]
-"$PY" "$DESK" list [--open] [--source X] [--json]
-"$PY" "$DESK" close --id <id> --text "用户在对话里选了 B"   # 你在对话里答了，把这条决定标成已处理
-                                                             # 用户已经在 ClaudeDesk 里答了 → 退出码 3，并打印那条回复
+# 等用户对这个来源的消息追问，再回答它
+"$PY" "$DESK" wait --followups --source my-project
+"$PY" "$DESK" post --kind answer --source my-project --reply-to <追问 id> \
+    --title "大约 25 分钟" --body-file followup.md
+
+# 发一条通知。--body - 表示从 stdin 读正文
+"$PY" "$DESK" post --kind info --source my-project --title "长任务跑完了" --body "结果在 ..."
+
+# 用户直接在对话里答了：把这条决定标成已处理
+"$PY" "$DESK" close --id <id> --text "用户在对话里选了 B"
+
+# 查询
+"$PY" "$DESK" list [--open] [--source S] [--repo R] [--json]
+"$PY" "$DESK" responses [--source S] [--id ID] [--since 2026-01-15T09:00:00+00:00]
+"$PY" "$DESK" followups [--source S] [--since 时间] [--json]
 ```
 
-- `post` 发现 ClaudeDesk 没在运行时会自动以 `--minimized` 启动它；启动后对"程序关着时到的、还没提醒过的消息"补一次通知。`--no-launch` 关掉自动启动。
-- 没有 ClaudeDesk 在看这个 `desk.py` 的数据目录时（比如用了别处的一份 `desk.py` 副本），`post` 会在 stderr 打印"注意：没有 ClaudeDesk 在看这个数据目录…"——这时用户看不到消息，`wait` 也等不到回复。请用 ClaudeDesk 安装目录里的 `desk.py`。
-- `wait --id`：只按 id 认，那一条已经有回复就立刻返回（`--source` 可以不写；写了但对不上也照样返回，只在 stderr 提醒一句）；只给 `--source` 时，等这个来源在"开始等待之后"（或 `--since` 之后）的新回复。
-- `--recommended` 是**从 1 开始**的选项序号。`--option` 写 `"label::description"`，description 可省。
-- 没有选项的 decision 自动允许文字回复。
-- 数据目录默认 `desk.py` 旁边的 `data/`；`--data <目录>`（写在子命令前）或环境变量 `CLAUDEDESK_DATA` 可以改。程序也认 `--data` 与同一个环境变量。
+| 子命令 | 参数 | 退出码 |
+|---|---|---|
+| `post` | `--kind {decision,answer,info}`、`--source`、`--title`（必填）；`--body 文字` / `--body -`（stdin）/ `--body-file 文件`；`--question` / `--question-file`（回答）；`--option "label::description"`（可重复）、`--recommended N`（从 1 开始）、`--priority {normal,high}`（决定）；`--reply-to ID`；`--repo 仓库名`；`--no-launch`；`--allow-text`（已不需要，留着兼容） | 0 发出，打印 id；1 参数不对 |
+| `wait` | `--id ID`；或 `--source S` [`--since 时间`] 等这个来源的下一条回复；`--followups --source S` 等追问；`--timeout 秒`（0 = 一直等，默认）；`--interval 秒` | 0 打印回复或追问；2 超时；4（`--followups`）启动它的 shell 已经没了；1 `--since` 不是时间 |
+| `close` | `--id ID`（必填）、`--text 说明` | 0 已标成已处理；3 用户已经在 ClaudeDesk 里回复过（打印那条回复）；1 没有这条消息 |
+| `responses` | `--source`、`--id`、`--since` | 0；每行一条回复 |
+| `followups` | `--source`、`--since`、`--json` | 0；状态是已回答、已送达（交给了会话）或未送达 |
+| `list` | `--open`（只看待决定）、`--source`、`--repo`、`--json` | 0 |
 
-Claude 会话的用法规范见 [`skill/claude-desk/SKILL.md`](skill/claude-desk/SKILL.md)。
+- `--data 目录`（写在子命令前）或环境变量 `CLAUDEDESK_DATA` 可以让 `desk.py` 用别的数据目录，程序也认这两个。默认是 `desk.py` 旁边的 `data\`。
+- `post` 发现 ClaudeDesk 没在运行时会自动以最小化启动它；`--no-launch` 关掉。没有 ClaudeDesk 在看这个数据目录时（比如用了别处的一份 `desk.py` 副本），`post` 会在 stderr 提醒：这时用户看不到消息，`wait` 也等不到回复。
+- `wait --id` 只按 id 认，已经有回复就立刻返回；`--source` 写得不一样只会提醒一句。
+- `wait --followups` 一次交出一条追问（最早的先交，没人在听时发的、24 小时以内的也算），并记为已送达，两个监听不会拿到同一条。它运行期间 ClaudeDesk 显示会话在线。每个来源挂一个，每次回答完再挂上。
+- `--reply-to` 填 `wait --followups` 输出里的追问 `id`（原问题自动填好），或者填消息 id（这时用 `--question` 放追问原文）。
 
-## 数据格式
+`wait` 打印的回复：
 
-都在 `data\`（`ClaudeDesk.exe` / `desk.py` 旁边）：
+```json
+{"id": "20260115-093000-a1b2c3", "ts": "2026-01-15T09:41:07.512+00:00", "choice": "先跑回归测试",
+ "text": "顺便把支付流程的用例也跑一遍", "source": "my-project", "title": "发布前先跑一轮完整回归测试吗？",
+ "choice_index": 1}
+```
+
+`choice` 是选项的 label（只写了文字时为 `null`），`choice_index` 从 1 开始。程序替你写的回复带一个标记，`choice` 为 `null`：`"resolved": true`（标为已处理）、`"dismissed": true`（还在等时被归档或删除）、`"closed_by": "claude"`（`desk.py close`）。
+
+`wait --followups` 打印的追问：
+
+```json
+{"id": "20260115-095500-d4e5f6", "ts": "…", "msg": "20260115-093000-a1b2c3", "kind": "decision", "source": "my-project",
+ "title": "发布前先跑一轮完整回归测试吗？", "question": "", "choice": "先跑回归测试",
+ "reply_text": "顺便把支付流程的用例也跑一遍", "text": "回归测试要跑多久？"}
+```
+
+`msg` 是被追问的消息，`text` 是追问原文。追问的是决定时，还带着用户当时的回复（`choice`、`reply_text`，以及有的话 `resolved` / `dismissed` / `closed_by`）。
+
+## 工作原理
+
+```text
+Claude Code 会话                              ClaudeDesk（托盘程序）
+  desk.py post --kind decision ...   ──►  data/inbox.jsonl       ──►  通知、角标、列表
+  desk.py wait --id <id>（后台）                                        你选选项、提交
+      ◄── 带着回复 JSON 退出          ◄──  data/responses.jsonl  ◄──
+  desk.py wait --followups           ◄──  data/followups.jsonl   ◄──  你追问
+  desk.py post --reply-to <id>       ──►  data/inbox.jsonl       ──►  显示在你的追问下面
+```
+
+- `desk.py` 追加消息、盯着回复文件等；它从不通过网络和程序通信。
+- 程序盯着这些文件（每秒看一次大小，只读新增的部分），在 Edge WebView2（pywebview）里的本地网页上显示消息，并写下你的回复。
+- 每个数据目录一个命名管道，`desk.py` 靠它知道有没有程序在看；每个来源另有一个，程序靠它知道有没有会话在听追问。
+
+## 数据文件
+
+都在 `ClaudeDesk.exe` 和 `desk.py` 旁边的 `data\` 里。
 
 | 文件 | 谁写 | 内容 |
 |---|---|---|
-| `inbox.jsonl` | Claude（`desk.py post`）追加；你在界面里删除消息时程序整份重写 | 每行一条消息 |
-| `responses.jsonl` | 程序（你提交时），只追加 | 每行一条回复 |
-| `state.json` | 程序 | 已读 / 已提醒 / 已归档 / 已删除的 id、项目归类、界面设置、窗口位置 |
-| `claudedesk.log` | 程序 | 运行日志（启动、更新、出错） |
-| `.lock` | 两边 | 跨进程锁文件（空文件，别删也无妨） |
+| `inbox.jsonl` | `desk.py post` 追加；你在界面里删除消息时程序整份重写 | 每行一条消息 |
+| `responses.jsonl` | 程序（你的回复）和 `desk.py close`；只追加 | 每行一条回复 |
+| `followups.jsonl` | 程序（你的追问）和 `desk.py wait --followups`（送达记录）；只追加 | 追问和"已送达"记录 |
+| `state.json` | 程序 | 已读 / 已提醒 / 已归档 / 已删除的 id、项目归类、关掉的标签、设置、窗口位置 |
+| `instance.json` | 程序 | 正在运行的那个实例的端口和 token，第二次启动时靠它把窗口交给已经在跑的那个 |
+| `claudedesk.log` | 程序 | 运行日志（启动、更新、出错），满 1 MB 轮换 |
+| `.lock` | 两边 | 跨进程锁文件 |
 
 消息（`inbox.jsonl` 一行）：
 
@@ -131,33 +254,37 @@ Claude 会话的用法规范见 [`skill/claude-desk/SKILL.md`](skill/claude-desk
  "options": [{"label": "方案 A", "description": "…"}], "recommended": 1, "allow_text": true}
 ```
 
-- `kind`：`decision` / `answer` / `info`。answer 可带 `"question"`（你的原问题）。
-- `repo`：发消息时所在的 git 仓库名（`desk.py` 自动识别，`--repo` 可覆盖；不在仓库里时没有这个字段）。界面按它分标签。
-- `priority`：`normal` / `high`。
-- `source` 以 `selftest` 开头的消息在界面里默认隐藏（留给自动测试用；启动参数 `--show-selftest` 可显示）。
+- `kind`：`decision` / `answer` / `info`。回答可以带 `question`；回答追问的还带 `reply_to`（和 `followup_id`）。
+- `repo`：发消息时所在的 git 仓库名，标签按它分。`desk.py` 不在仓库里、也没有可用的目录名时没有这个字段。
+- `priority`：`normal` / `high`。`source` 以 `selftest` 开头的消息默认不显示（启动参数 `--show-selftest` 可以显示）。
 
-回复（`responses.jsonl` 一行）：
+**并发与容错。** 三个文件平时都只追加；唯一的例外是你在界面里删除消息时，程序在锁内整份重写 `inbox.jsonl`。每次追加先拿 `data\.lock` 的字节锁（`msvcrt.locking`），一次 `write` 写完整行并 `fsync`；文件末尾是别人崩溃留下的半行时，先补一个换行。实测 24 个进程同时 `post`，24 行全部完整。读的一方只读到最后一个换行，坏行跳过；文件被换掉（变小或换了文件号）就从头重读。"一条决定只能回复一次"在锁内检查，界面和 `close` 都一样。
 
-```json
-{"id": "<对应消息 id>", "ts": "…", "choice": "方案 A", "text": "你写的补充", "source": "<消息的 source>",
- "title": "<消息标题>", "choice_index": 1}
-```
+## 自动更新
 
-`choice` 是选项的 label（只写了文字时为 `null`）；`title`、`choice_index` 是附带的方便字段。`desk.py close` 写的回复带 `"closed_by": "claude"`。你在界面里把一条还没回复的决定**标为已解决**时，程序替你写一条 `"resolved": true`、`choice` 为 `null` 的回复。你在界面里归档或删除一条**还没回复的决定**时，程序会先替你写一条 `"dismissed": true`、`choice` 为 `null` 的回复，正在 `wait` 的会话会收到它并继续往下走，不会一直卡着。
+- CI 每次在 `main` 上构建通过，就发布一个 tag 为 `build-<N>` 的 GitHub release，附 `ClaudeDesk.exe` 和 `ClaudeDesk.exe.sha256`。
+- 程序启动约 45 秒后向 GitHub Releases API 查一次最新版本，之后每 6 小时一次。有新版本就把 exe 下载到自己旁边，校验 SHA-256。
+- 替换时先把自己改名为 `ClaudeDesk.exe.old`（Windows 允许给运行中的 exe 改名），新文件放到原位置并启动，旧进程退出；新进程启动后删掉 `.old`。同时把旁边的 `desk.py` 换成同版本，命令行和程序永远一致。
+- 窗口开着时不会打断你：等你把窗口关回托盘再装，或者点左下角的"更新到 build N"立刻更新。
+- 设置或托盘菜单里可以关掉"自动更新"。关掉后程序照样查新版本、显示"更新到 build N"，但只在你点它时才装。"检查更新"可以手动查。
+- 自己从源码构建的 exe 是 build 0，不会自动更新。
 
-并发与容错：
+## 安全与隐私
 
-- 两个文件平时都只追加（唯一的例外：你在界面里**删除**消息时，程序在锁内整份重写 `inbox.jsonl`，去掉被删的行）。每次追加先拿 `data/.lock` 的字节锁（`msvcrt.locking`），一次 `write` 写完整行并 `fsync`；如果文件末尾是别人崩溃留下的半行，先补换行。实测 24 个进程同时 `post`，24 行全部完整。
-- 读的一方只消费到最后一个换行，半行留到下一轮；坏行跳过。程序每秒看一次文件大小，有新内容才读增量，不需要重启。文件被换掉（变小 / 换了文件号）就整份重读。
-- "不能重复提交"在锁内检查：同一个 id 已有回复，第二次写入会被拒绝（界面和 `close` 都走这条）。
+- 界面用的本机服务只绑 `127.0.0.1`，拒绝陌生的 `Host` 头（防 DNS rebinding），每个 API 请求都要带每次启动随机生成的 token（防别的网页跨站调用）。
+- 正文 Markdown 渲染后经过 DOMPurify 清洗，正文里的 HTML 不能执行脚本，也盖不住界面。
+- 唯一的网络请求是为了更新：访问 GitHub Releases API 和下载 release 文件。不收集任何数据，消息只在 `data\` 里。
+- 发现安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
-## 从源码运行 / 构建
+## 从源码构建
+
+托盘程序需要 Windows 上的 Python 3.10+。界面用 `--serve` 在任何系统的浏览器里都能跑。
 
 ```bat
 pip install -r requirements.txt
 cd src
 python -m claudedesk                 :: 托盘 + 窗口
-python -m claudedesk --serve         :: 只起本机服务，用浏览器打开（任何系统都能用来调界面）
+python -m claudedesk --serve         :: 只起本机服务，用浏览器打开打印出来的地址
 cd ..
 build.cmd [-Install]                 :: 打包成单文件 ClaudeDesk.exe（build 0，不自动更新）
 ```
@@ -165,24 +292,31 @@ build.cmd [-Install]                 :: 打包成单文件 ClaudeDesk.exe（buil
 目录：
 
 ```text
-desk.py                 命令行工具（只用标准库；也被程序当库用）
-src/claudedesk/         app.py（托盘 / 窗口 / 自动更新）、store.py（数据层）、server.py（本机 HTTP 服务）、
-                        update.py、icon.py、winapi.py、assets/（界面：index.html、app.css、app.js、markdown.js）
-src/claudedesk/assets/vendor/   markdown-it、KaTeX、highlight.js、DOMPurify 和字体（离线可用；scripts/vendor.py 生成）
-scripts/                PyInstaller 入口、vendor.py
-tests/                  数据层测试 + 用真浏览器（Playwright）驱动界面的测试
-skill/                  给 Claude Code 用的 skill
-.github/workflows/      CI：测试 → 打包 → 打包后自检 → 真实托盘程序端到端（desk.py 发消息、回复、自更新）→ 发布 release
+desk.py                   命令行工具（只用标准库；也是程序的文件读写层）
+src/claudedesk/           app.py（托盘、窗口、更新）、store.py（数据层）、server.py（本机 HTTP 服务）、
+                          update.py、projects.py、icon.py、winapi.py
+src/claudedesk/assets/    界面：index.html、app.css、app.js、markdown.js
+  vendor/                 markdown-it、KaTeX、highlight.js、DOMPurify 和字体（scripts/vendor.py 生成）
+scripts/                  PyInstaller 入口、vendor.py、screenshots.py
+skill/claude-desk/        给 Claude Code 用的 skill
+tests/                    pytest：数据层、命令行、本机服务，以及用 Playwright 在 Chromium 里驱动真界面
+.github/workflows/        CI：测试 → 打包 → 打包后自检 → 端到端（发消息、回复、自更新）→ 发布 release
 ```
 
-## 技术选型
+测试：
 
-- **界面**是本地网页，跑在 Edge WebView2 里（[pywebview](https://pywebview.flowrl.com/)），托盘用 [pystray](https://github.com/moses-palmer/pystray)。换掉 1.x 的 Qt 控件是因为 Qt 的富文本不支持公式，表格解析也比较挑。
-- Markdown：markdown-it（GitHub 风格表格、任务列表、自动链接）+ DOMPurify 清洗 + KaTeX 渲染公式 + highlight.js。表格里公式和行内代码中的 `|` 不会把单元格切开；`$5 和 $10` 这种价格不会被当成公式。
-- 本机 HTTP 服务只绑 127.0.0.1，检查 Host 头，API 要带每次启动随机生成的 token。
-- 导出 PDF 用 WebView2 自带的 PrintToPdf（打印样式只印文章本身）；不行时退回系统打印对话框（选"另存为 PDF"）。
-- 单文件 exe，自动更新时整个替换。
+```bash
+pip install -r requirements-dev.txt
+python -m playwright install chromium
+python -m pytest -q
+```
+
+在 Windows 上也可以不下载 Chromium，用 `CHROMIUM_PATH` 让界面测试直接用 Edge。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 参与贡献
+
+欢迎报告问题、提建议和 pull request。动手前先看 [CONTRIBUTING.md](CONTRIBUTING.md)；版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可
 
-[MIT](LICENSE)。第三方前端库和字体的许可见 `src/claudedesk/assets/vendor/LICENSES.txt`（均为 MIT / BSD / Apache / OFL）。
+[MIT](LICENSE)。打包进来的前端库和字体分别使用 MIT、BSD、Apache 2.0 和 OFL 许可，见 `src/claudedesk/assets/vendor/LICENSES.txt`。

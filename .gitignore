@@ -1,5 +1,6 @@
 # Your inbox: messages, replies, read state. Never commit.
 data/
+.dev-data/
 
 # Build outputs (build.ps1 regenerates all of these)
 ClaudeDesk.exe
@@ -14,3 +15,12 @@ ClaudeDesk.exe.old
 ClaudeDesk.exe.download
 dist/
 .pytest_cache/
+
+# Claude Code: local worktrees and personal settings
+.claude/worktrees/
+.claude/settings.local.json
+CLAUDE.local.md
+
+# CI self-test output
+selftest.json
+selftest-data/

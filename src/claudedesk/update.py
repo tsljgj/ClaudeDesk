@@ -1,6 +1,6 @@
 """打包版 exe 的自动更新（从 GitHub Releases）。
 
-CI 每次在 main 或 claude/* 分支构建通过，就发布一个 `build-<N>` release，附带 `ClaudeDesk.exe`
+CI 每次在 main 上构建通过，就发布一个 `build-<N>` release，附带 `ClaudeDesk.exe`
 和 `ClaudeDesk.exe.sha256`。运行中的 exe 比较 N 和自己的 BUILD，有新版就把新 exe 下载到旁边、
 校验 SHA-256，然后换文件：Windows 允许给正在运行的 exe *改名*，所以当前的改名成
 `ClaudeDesk.exe.old`，新的放到原位置并启动，旧进程退出。新进程启动时删掉 `.old`。

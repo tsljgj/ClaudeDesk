@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest an improvement to ClaudeDesk, desk.py or the skill
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation and what gets in the way today. A concrete example helps more than a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: How you imagine it working, in the window, the CLI or the skill.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Anything you tried or considered.

@@ -7,7 +7,7 @@ description: 通过桌面程序 ClaudeDesk 和用户沟通。需要用户决定�
 
 用途：需要用户决策时，不用 Claude Code 自带的弹出问题，而是发到桌面程序 ClaudeDesk 提醒用户；用户问的问题，回答除了写在对话里，也发到 ClaudeDesk，免得被指令执行的输出淹没。
 
-程序：`<ClaudeDesk 目录>\ClaudeDesk.exe`（托盘常驻）。说明：同目录的 `README.md`。
+程序：`<ClaudeDesk 目录>\ClaudeDesk.exe`（托盘常驻）。说明：https://github.com/tsljgj/ClaudeDesk#readme
 命令行（只用标准库）。**安装时把下面两个变量改成你机器上的路径：**
 
 ```bash
@@ -23,7 +23,7 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 2. **回答用户的问题：对话里照常回答，同时 `post --kind answer`**，`--question` 放用户原问题（原文），正文放完整回答。用户下达的是任务而不是提问时不用发；"好的 / 收到"这类也不用发。发完确认挂着追问监听（见"追问"）。
 3. **进展通知 `--kind info`：少用。** 只用于用户明确在等的事：长任务完成、跑挂了需要人管、机器或环境出了问题。
 4. **`--source` 用项目名**（仓库名，例如 `my-project`）；同一项目里有多条并行会话时加后缀（`my-project/data`）。同一会话里保持不变。ClaudeDesk 按**仓库**分标签：`post` 会自动记下当前目录所在 git 仓库的名字（origin 地址里的仓库名），所以要在项目目录里运行 `desk.py`（Bash 默认就在）。不在 git 仓库里时用当前目录名；要指定就加 `--repo <仓库名>`。
-5. **子 agent 不要发 decision 等回复，也不挂追问监听。** 子 agent 等不起（它的 prompt cache 很快过期）；把要决定的事交回主会话，由主会话发。
+5. **子 agent 不要发 decision 等回复，也不挂追问监听。** 子 agent 不适合长时间挂起等待；把要决定的事交回主会话，由主会话发。
 
 ## 发决定（decision）
 
@@ -36,17 +36,17 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
 ```bash
 "$PY" "$DESK" post --kind decision --source my-project \
-  --title "第 6 轮之后：先复核还是直接冻结？" \
+  --title "发布前先跑一轮完整回归测试吗？" \
   --body-file "<scratchpad>/decision.md" \
-  --option "先复核::再跑一轮复核然后冻结，约 6 小时" \
-  --option "直接冻结::读一次验证集，2 小时" \
+  --option "先跑回归测试::约 25 分钟，最稳妥" \
+  --option "直接发布::CI 已经跑过单元测试" \
   --option "暂停::先做别的任务" \
-  --recommended 1 --allow-text
+  --recommended 1
 ```
 
    - 标题写成一个问题，30 字以内。
    - 选项写成 `"label::description"`：label 短（10 字左右），description 一行。`--recommended` 从 1 开始。
-   - 默认加 `--allow-text`，让用户能补充条件。没有选项的 decision 自动只收文字。
+   - 每条决定都带回复框，用户随时能写补充条件（`--allow-text` 已经不需要，加了也没关系）。没有选项的 decision 只收文字。
    - 卡住、不决定就没法往下做的，加 `--priority high`：图标和任务栏会一直闪到用户看过为止。
 3. **用后台命令跑 `wait`**（Bash 的 `run_in_background: true`），不设超时：
 
@@ -60,7 +60,7 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 5. 用户一提交，`wait` 退出（退出码 0），会话被唤醒。输出是一行 JSON：
 
 ```json
-{"id": "…", "ts": "…", "choice": "先复核", "text": "复核只看第 4 项", "source": "my-project", "title": "…", "choice_index": 1}
+{"id": "…", "ts": "…", "choice": "先跑回归测试", "text": "顺便把支付流程的用例也跑一遍", "source": "my-project", "title": "…", "choice_index": 1}
 ```
 
    - 按 `choice` 执行，`text` 里的补充条件同样要遵守。`choice_index` 是用户点的第几个选项（从 1 开始）；选项名字有重复时以它为准。
@@ -101,7 +101,7 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 2. 用户一发追问，`wait` 退出（退出码 0），输出一行 JSON：`msg` 是被追问的消息 id，`kind` 是它的类型，`question` 是它的原问题，`text` 是追问原文。追问的是 decision 时另有用户当时的回复：`choice`、`reply_text`，标为已处理 / 跳过 / 在对话里处理的还带 `resolved` / `dismissed` / `closed_by`：
 
 ```json
-{"id": "<追问 id>", "ts": "…", "msg": "<原消息 id>", "kind": "decision", "source": "my-project", "title": "原消息的标题", "question": "", "choice": "先复核", "reply_text": "复核只看第 4 项", "text": "复核要多久？"}
+{"id": "<追问 id>", "ts": "…", "msg": "<原消息 id>", "kind": "decision", "source": "my-project", "title": "原消息的标题", "question": "", "choice": "先跑回归测试", "reply_text": "顺便把支付流程的用例也跑一遍", "text": "回归测试要跑多久？"}
 ```
 
 3. 醒来后：
@@ -110,7 +110,7 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
 ```bash
 "$PY" "$DESK" post --kind answer --source my-project --reply-to <追问 id> \
-  --title "B 也行，但要先改配置" --body-file "<scratchpad>/followup.md"
+  --title "大约 25 分钟" --body-file "<scratchpad>/followup.md"
 ```
 
    3. 重新挂上监听（第 1 步）。你回答期间用户又发的追问不会丢：重新挂上时立刻拿到。

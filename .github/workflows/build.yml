@@ -2,7 +2,7 @@ name: build
 
 # Every green push to main is published as a GitHub release tagged build-<run_number>;
 # installed ClaudeDesk.exe copies pick it up through the self-updater. Other branches
-# (claude/*, pull requests) are built and tested only.
+# and pull requests are built and tested only.
 on:
   push:
     branches: ["main", "claude/**"]
@@ -26,7 +26,7 @@ jobs:
           python-version: "3.12"
       - name: Tests (store + real browser UI)
         run: |
-          python -m pip install pytest pillow playwright
+          python -m pip install -r requirements-dev.txt
           python -m playwright install --with-deps chromium
           python -m pytest -q
 
@@ -35,6 +35,8 @@ jobs:
     needs: ui-tests
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tags and history for the release notes
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -155,6 +157,26 @@ jobs:
             dist/ClaudeDesk.exe
             dist/ClaudeDesk.exe.sha256
 
+      - name: Release notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          # Subject lines only, never commit bodies or trailers: the commits since the previous build tag.
+          changes=""
+          if prev=$(git describe --tags --abbrev=0 --match 'build-*' HEAD^ 2>/dev/null); then
+            changes=$(git log --no-merges --format='- %s' -n 30 "$prev..HEAD")
+          fi
+          [ -n "$changes" ] || changes=$(git log -1 --format='- %s' HEAD)
+          {
+            echo "## Changes"
+            echo
+            echo "$changes"
+            echo
+            echo "Download \`ClaudeDesk.exe\` below. Installed copies update themselves."
+            echo "Full history: [CHANGELOG.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md)"
+          } > release-notes.md
+          cat release-notes.md
+
       - name: Publish release (auto-update channel)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -162,10 +184,7 @@ jobs:
           tag_name: build-${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           name: ClaudeDesk build ${{ github.run_number }}
-          body: |
-            ${{ github.event.head_commit.message }}
-
-            branch `${{ github.ref_name }}` · commit ${{ github.sha }}
+          body_path: release-notes.md
           make_latest: true
           files: |
             dist/ClaudeDesk.exe

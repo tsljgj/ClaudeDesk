@@ -227,7 +227,7 @@ def test_unsorted_tab_only_when_it_has_unarchived_messages(env):
     gone(page, "__other__")
     page.click('[data-view="archive"]')
     page.wait_for_selector(f'.item[data-id="{o1}"]')
-    assert sorted(page.locator(".group-label.other .gname").all_inner_texts()) == ["随手记", "老实验"]
+    assert sorted(page.locator(".group-label.other .gname").all_inner_texts()) == ["老实验", "随手记"]
     page.reload()  # 一开始就只有归档的：没有这个标签
     page.wait_for_selector(".ptab")
     assert tabs(page) == ["", "alpha"]

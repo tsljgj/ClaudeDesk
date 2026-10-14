@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in ClaudeDesk or desk.py doesn't work as described
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please leave real message content, personal paths and project names out of it; use placeholders instead.
+        Security problems go through private reporting instead, see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version and build
+      description: From the bottom-left corner of the window, e.g. "v2.1.0 · build 42", or "源码" when running from source.
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact desk.py command if the CLI is involved.
+      placeholder: |
+        1. Post a decision with `desk.py post --kind decision ...`
+        2. Open it in ClaudeDesk and press ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: The relevant lines from data\claudedesk.log, next to ClaudeDesk.exe. Remove message titles and bodies before pasting.
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Optional. Please blur or replace real message content.
