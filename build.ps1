@@ -21,6 +21,8 @@ if (-not (Test-Path $venvPy)) {
     & $Python @pyArgs -m venv (Join-Path $root '.venv')
     if ($LASTEXITCODE -ne 0) { throw 'venv creation failed' }
 }
+# UTF-8 mode: requirements.txt has a Chinese comment, and older pip reads it with the ANSI code page (GBK) otherwise
+$env:PYTHONUTF8 = '1'
 & $venvPy -m pip install --disable-pip-version-check -q -r (Join-Path $root 'requirements.txt') pyinstaller
 if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
 

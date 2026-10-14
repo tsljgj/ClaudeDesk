@@ -290,6 +290,19 @@ def autostart_command() -> str:
     return f'"{Path(sys.executable).resolve()}" --minimized'
 
 
+def apps_dark_mode() -> bool:
+    """Windows 设置里"应用模式"是不是深色（Personalize 下的 AppsUseLightTheme = 0）。"""
+    if not WIN:
+        return False
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 0
+    except OSError:
+        return False
+
+
 def autostart_enabled() -> bool:
     if not WIN:
         return False

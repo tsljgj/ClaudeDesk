@@ -179,6 +179,7 @@ class TrayApp:
         self.toast_target: str | None = None
         self._icon_key = None
         self._phase = False
+        self._flash = None            # 任务栏按钮在闪："urgent" 闪到处理完；"normal" 闪 3 次后保持高亮到读完
         self._pending_update = None
         self._show_when_ready = False
         self._handoff_window: dict = {}
@@ -306,6 +307,10 @@ class TrayApp:
         tip.append(f"未读 {c['unread']}")
         self.icon.title = "\n".join(tip)
         self._update_overlay(overlay_state(c["unread"], c["open"]))
+        # 在别处处理完了（托盘菜单、desk.py close、另一个窗口）：任务栏按钮不用再闪着催
+        if self._flash and (c["urgent"] == 0 if self._flash == "urgent" else c["unread"] == 0):
+            self._flash = None
+            winapi.stop_flash(self.hwnd)
 
     # 任务栏按钮角标：Windows 只在按钮存在时（窗口显示或最小化）才画；按钮每次（重新）建好都会给窗口发
     # "TaskbarButtonCreated"（显示、从托盘恢复、Explorer 重启后），在那时重设。SetOverlayIcon 对没有按钮的窗口
@@ -396,6 +401,7 @@ class TrayApp:
             if not self.visible:
                 self._show_minimized()  # 任务栏上要有按钮才能闪
             winapi.flash(self.hwnd, urgent=bool(urgent))
+            self._flash = "urgent" if urgent else (self._flash or "normal")
         self.refresh_icon()
 
     # ------------------------------------------------------------ 窗口
@@ -450,6 +456,7 @@ class TrayApp:
         if self.hwnd:
             winapi.force_foreground(self.hwnd)
             winapi.stop_flash(self.hwnd)
+            self._flash = None
         if mid:
             try:
                 self.window.evaluate_js(f"window.deskOpen && window.deskOpen({json.dumps(mid)})")
@@ -663,7 +670,7 @@ class TrayApp:
         w, h, x, y = self._geometry()
         self.window = self.webview.create_window(
             APP, self.server.url, width=w, height=h, x=x, y=y, min_size=(MIN_W, MIN_H), hidden=True,
-            background_color="#F4F4F6", text_select=True, zoomable=True)
+            background_color=self._window_bg(), text_select=True, zoomable=True)
         self.window.events.closing += self._on_closing
         threading.Thread(target=self.icon.run, name="tray", daemon=True).start()
         storage = self.ddir / "webview"
@@ -671,6 +678,12 @@ class TrayApp:
         self.webview.start(self._gui_started, private_mode=False, storage_path=str(storage))
         log.info("gui stopped")
         return 0
+
+    def _window_bg(self) -> str:
+        """网页画出来之前窗口的底色：跟着主题走，深色模式下启动时不闪一下浅色。"""
+        theme = self.store.setting("theme", "system")
+        dark = theme == "dark" or (theme == "system" and winapi.apps_dark_mode())
+        return "#121214" if dark else "#F4F4F6"
 
     def _gui_started(self) -> None:
         try:  # pywebview 6 在窗体建好之前就开线程调本函数（window.native 还是 None）；隐藏窗口建好时也会触发 shown
@@ -831,7 +844,8 @@ def main(argv=None) -> int:
         winapi.allow_foreground_any()
         if ask_running(ddir, "show"):
             return 0
-        winapi.message_box("ClaudeDesk 已经在运行，但没有响应。\n请在任务管理器里结束 ClaudeDesk.exe 后再打开。")
+        winapi.message_box("ClaudeDesk 已经在运行，但这一份联系不上它（可能是别的文件夹里的另一份 ClaudeDesk.exe，"
+                           "或者它卡住了）。\n请右键托盘图标 → 退出它；退不掉就在任务管理器里结束 ClaudeDesk.exe，再打开。")
         return 1
     markers = hold_marker(desk.pipe_name(ddir))  # 句柄要一直开着
 
