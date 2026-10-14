@@ -488,6 +488,35 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .reply-done.skip b { color: var(--ink-2); }
 .reply-done .reply-text { white-space: pre-wrap; margin-top: 4px; color: var(--ink-2); }
 
+/* ------------------------------------------------------------------ 追问（回答底部的卡片，和决定卡片一个样子；回应追问的那条顶上写出处） */
+.followup { max-width: 720px; margin: 8px auto 0; padding: 0 48px 40px; }
+.decide:not([hidden]) + .followup { margin-top: -16px; } /* 回复过的决定：紧跟在"你的回复"下面，不隔出一大段 */
+.fu-state { display: flex; align-items: baseline; gap: 8px; margin: -4px 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--ink-3); }
+.fu-state::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-5); transform: translateY(-1px); } /* 在线绿点，没在听灰点 */
+.fu-state.on::before { background: var(--ok); }
+.fu-list { display: flex; flex-direction: column; gap: 14px; margin-bottom: 14px; }
+.fu-item { padding: 1px 0 1px 14px; border-left: 2px solid var(--line-2); } /* 和正文上面"原问题"一样的竖线 */
+.fu-when { font-size: 12px; color: var(--ink-4); }
+.fu-q { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); font-size: 13.5px; line-height: 1.65; }
+.fu-wait { margin-top: 4px; font-size: 12.5px; color: var(--ink-4); }
+.fu-a { display: block; margin-top: 4px; text-align: left; font-size: 13px; font-weight: 600; color: var(--ok-ink); }
+.fu-a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.fu-list > .fu-a { margin-top: 0; } /* 配不上追问的回应单独一行 */
+#fuText {
+  display: block; width: 100%; padding: 10px 12px; resize: vertical; min-height: 44px;
+  border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); outline: none; line-height: 1.6; font-size: 13.5px;
+}
+#fuText::placeholder { color: var(--ink-4); }
+#fuText:focus { border-color: var(--ink-3); box-shadow: 0 0 0 3px var(--hover); }
+#fuHint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .st.fu { color: var(--ink-2); } /* 等的是 Claude，不是你：不用强调色 */
+.thread-ref { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; max-width: 720px; margin: 0 auto; padding: 18px 48px 0; font-size: 12.5px; color: var(--ink-3); }
+.thread-ref:not([hidden]) + .article { padding-top: 10px; }
+.tr-link { text-align: left; color: var(--ink-2); font-weight: 600; text-decoration: underline; text-decoration-color: var(--ink-5); text-underline-offset: 3px; }
+.tr-link:hover { color: var(--ink); text-decoration-color: var(--ink-4); }
+@media (max-width: 960px) { .followup, .thread-ref { padding-left: 32px; padding-right: 32px; } }
+@media (max-width: 720px) { .followup, .thread-ref { padding-left: 20px; padding-right: 20px; } }
+
 /* ------------------------------------------------------------------ 弹层 */
 .popover {
   position: fixed; z-index: 50; min-width: 200px; max-width: 320px; padding: 5px;

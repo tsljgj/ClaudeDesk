@@ -80,6 +80,7 @@
         <button class="icon-btn" id="pdfBtn" title="导出 PDF（Ctrl+P）"><i data-icon="fileDown"></i></button>
       </div>
       <div class="scroller" id="scroller">
+        <div class="thread-ref" id="threadRef" hidden></div>
         <article class="article" id="article">
           <div class="eyebrow" id="eyebrow"></div>
           <h1 class="title" id="title"></h1>
@@ -101,6 +102,20 @@
             <button class="primary" id="submitBtn" disabled>提交</button>
           </div>
           <div class="reply-done" id="doneBox" hidden></div>
+          </div>
+        </section>
+        <section class="followup" id="followup" hidden>
+          <div class="decide-card">
+          <div class="decide-head"><span class="decide-title">追问</span></div>
+          <p class="fu-state" id="fuState"></p>
+          <div class="fu-list" id="fuList" hidden></div>
+          <textarea id="fuText" rows="2" placeholder="追问 Claude…（Ctrl+Enter 发送）"></textarea>
+          <div class="decide-foot">
+            <span class="hint" id="fuHint"></span>
+            <div class="grow"></div>
+            <button class="ghost" id="fuCopy" hidden title="复制追问（带上原消息的标题），粘到 Claude 对话里">复制追问</button>
+            <button class="primary" id="fuSend" disabled>发送</button>
+          </div>
           </div>
         </section>
       </div>

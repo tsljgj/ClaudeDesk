@@ -1,4 +1,4 @@
-"""数据层：增量读 inbox.jsonl / responses.jsonl，维护已读 / 归档 / 删除状态，写回复。
+"""数据层：增量读 inbox.jsonl / responses.jsonl / followups.jsonl，维护已读 / 归档 / 删除状态，写回复和追问。
 
 不依赖任何 GUI 库：托盘、网页界面、测试都用同一个 Store。所有公开方法线程安全。
 界面靠 `version` 做长轮询：任何可见变化都会让 version 加一并唤醒 `wait_change()`。
@@ -22,6 +22,7 @@ KINDS = desk.KINDS
 DISMISS_TEXT = "（用户在 ClaudeDesk 里移除了这条决定，没有作出选择）"
 RESOLVE_TEXT = "（用户在 ClaudeDesk 里把这条标为已解决：已经处理好了，不需要你再按选项做什么）"
 COMPACT_RETRY_FIRST, COMPACT_RETRY_MAX = 5.0, 300.0  # 压缩失败后重试的间隔：5 秒起，每次翻倍，最长 5 分钟
+LISTEN_EVERY = 2.0  # 隔几秒看一次哪些会话在听追问（列一次命名管道）
 
 
 def _now() -> dt.datetime:
@@ -74,6 +75,8 @@ def normalize(r: dict) -> dict:
     m["recommended"] = rec if rec and 1 <= rec <= len(m["options"]) else None
     m["allow_text"] = bool(r.get("allow_text")) or (m["kind"] == "decision" and not m["options"])
     m["priority"] = "high" if r.get("priority") == "high" else "normal"
+    m["reply_to"] = str(r.get("reply_to") or "").strip()  # 回答用户追问的消息：指向被追问的那条
+    m["followup_id"] = str(r.get("followup_id") or "").strip()
     m["_dt"] = desk.parse_ts(r.get("ts")) or _now()
     m["_search"] = " ".join([m["title"], m["body"], m["source"], m["question"],
                              " ".join(o["label"] + " " + o["description"] for o in m["options"])]).lower()
@@ -94,8 +97,16 @@ class Store:
         self.version = 0
         self.msgs: dict[str, dict] = {}
         self.responses: dict[str, dict] = {}
+        self.fu_path = self.ddir / desk.FOLLOWUPS
+        self.followups: dict[str, list[dict]] = {}  # 消息 id -> 用户对它的追问（按时间）
+        self.fu_by_id: dict[str, dict] = {}
+        self.delivered: dict[str, str] = {}  # 已经交给会话（wait --followups 领走）的追问 id -> 什么时候
+        self.replies: dict[str, list[str]] = {}  # 消息 id -> 回应它的追问的消息 id（reply_to 指向它）
+        self.listening: set[str] = set()  # 现在有 wait --followups 在听的来源
+        self._listen_at = 0.0
         self._inbox_pos = (None, 0)  # (st_ino, offset)
         self._resp_pos = (None, 0)
+        self._fu_pos = (None, 0)
         self.state = self._load_state()
         self.read: set[str] = set(self.state.get("read", []))
         self.notified: set[str] = set(self.state.get("notified", []))
@@ -211,6 +222,7 @@ class Store:
             if reset:
                 self.msgs.clear()
                 self._repos.clear()
+                self.replies.clear()
                 changed = True
             for r in recs:
                 try:
@@ -222,6 +234,8 @@ class Store:
                 self.msgs[m["id"]] = m
                 if m["repo"]:
                     self._repos.setdefault(norm_name(m["repo"]), m["repo"])
+                if m["reply_to"]:
+                    self.replies.setdefault(m["reply_to"], []).append(m["id"])
                 changed = True
                 if not self.hidden(m) and m["id"] not in self.read and m["id"] not in self.notified:
                     new.append(m)
@@ -235,6 +249,15 @@ class Store:
                 if rid and rid not in self.responses:
                     self.responses[rid] = r
                     changed = True
+
+            recs, self._fu_pos, reset = self._advance(self.fu_path, self._fu_pos)
+            if reset:
+                self.followups.clear()
+                self.fu_by_id.clear()
+                self.delivered.clear()
+                changed = True
+            for r in recs:
+                changed = self._add_followup_rec(r) or changed
 
             first = not self._loaded
             self._loaded = True
@@ -252,7 +275,45 @@ class Store:
                     pass
         if changed or first:
             self._emit_changed()
+        self.refresh_listening()
         self.flush_if_due()
+
+    def _add_followup_rec(self, r: dict) -> bool:
+        """持锁调用：收一行 followups.jsonl（追问，或"已交给会话"）。返回有没有变化。"""
+        if r.get("delivered"):
+            fid = str(r["delivered"])
+            if fid in self.delivered:
+                return False
+            self.delivered[fid] = (desk.parse_ts(r.get("ts")) or _now()).isoformat()
+            return True
+        fid, mid = str(r.get("id") or ""), str(r.get("msg") or "")
+        if not fid or not mid or fid in self.fu_by_id:
+            return False
+        f = {"id": fid, "ts": str(r.get("ts") or ""), "msg": mid, "text": str(r.get("text") or ""),
+             "_dt": desk.parse_ts(r.get("ts")) or _now()}
+        self.fu_by_id[fid] = f
+        lst = self.followups.setdefault(mid, [])
+        lst.append(f)
+        lst.sort(key=lambda x: x["_dt"])
+        return True
+
+    def refresh_listening(self, force: bool = False) -> bool:
+        """看哪些来源有会话在听追问（wait --followups 占着的命名管道），最多每 LISTEN_EVERY 秒一次。
+        只列一次管道目录，不按消息挨个查；列的时候不持锁。变了返回 True。"""
+        now = time.monotonic()
+        if not force and now < self._listen_at:
+            return False
+        self._listen_at = now + LISTEN_EVERY
+        with self.lock:
+            sources = {m["source"] for m in self.msgs.values()}
+        live = desk.listening_sources(sources, self.ddir)
+        with self.lock:
+            if live == self.listening:
+                return False
+            self.listening = live
+            self._bump()
+        self._emit_changed()
+        return True
 
     # ------------------------------------------------------------ 查询
     def hidden(self, m: dict) -> bool:
@@ -332,7 +393,7 @@ class Store:
     def summary(self, m: dict) -> dict:
         resp = self.responses.get(m["id"])
         project, pkind, pkey = self.project_info(m)
-        return {
+        s = {
             "id": m["id"], "kind": m["kind"], "title": m["title"], "source": m["source"],
             "project": project, "project_kind": pkind, "project_key": pkey, "repo": m["repo"],
             "ts": m["_dt"].isoformat(), "priority": m["priority"], "snippet": m["_snippet"],
@@ -341,6 +402,44 @@ class Store:
             "choice": (resp or {}).get("choice"), "dismissed": bool((resp or {}).get("dismissed")),
             "resolved": bool((resp or {}).get("resolved")),
         }
+        # 追问（除了还没回复的决定，每条都能追问）：listening = 它的会话现在在不在听；有追问 / 回应的带
+        # followup_pending（有追问还没回应）和 fstate（追问数.已送达数.回应数，变了界面就重新拿详情）；回应追问的消息带 reply_to
+        s["listening"] = m["source"] in self.listening
+        if m["reply_to"]:
+            s["reply_to"] = m["reply_to"]
+        if m["id"] in self.followups or m["id"] in self.replies:
+            fus, reps, pairs = self._thread(m["id"])
+            s["followup_pending"] = any(f["id"] not in pairs for f in fus)
+            s["fstate"] = f"{len(fus)}.{sum(f['id'] in self.delivered for f in fus)}.{len(reps)}"
+        return s
+
+    def _thread(self, mid: str):
+        """持锁调用：(这条消息的追问, 回应它们的消息, {追问 id: 回应})。删掉的回应不算。"""
+        fus = self.followups.get(mid, [])
+        reps = [self.msgs[r] for r in self.replies.get(mid, []) if r in self.msgs and not self.hidden(self.msgs[r])]
+        reps.sort(key=lambda r: r["_dt"])
+        return fus, reps, (desk.pair_followups(fus, reps) if fus and reps else {})
+
+    def _thread_detail(self, m: dict, d: dict) -> None:
+        """持锁调用：详情里加上追问这一串。followups：每条追问（delivered = 什么时候交给了会话、reply = 哪条消息回应了它）；
+        replies：所有回应它的消息；回应追问的消息另有 reply_ref = 原来那条（id、标题、类型、还在不在）和它回应的追问原文。"""
+        fus, reps, pairs = self._thread(m["id"])
+        d["followups"] = [{"id": f["id"], "ts": f["_dt"].isoformat(), "text": f["text"], "delivered": self.delivered.get(f["id"]),
+                           "reply": {"id": pairs[f["id"]]["id"], "title": pairs[f["id"]]["title"]} if f["id"] in pairs else None}
+                          for f in fus]
+        paired = {r["id"] for r in pairs.values()}
+        d["replies"] = [{"id": r["id"], "title": r["title"], "ts": r["_dt"].isoformat(), "paired": r["id"] in paired}
+                        for r in reps]
+        if m["reply_to"]:
+            o = self.msgs.get(m["reply_to"])
+            ok = o is not None and not self.hidden(o)
+            text = m["question"]
+            if not text and m["followup_id"] in self.fu_by_id:
+                text = self.fu_by_id[m["followup_id"]]["text"]
+            if not text and ok:  # 会话没带 --question：看配对配上的是哪条追问
+                text = next((self.fu_by_id[fid]["text"] for fid, r in self._thread(o["id"])[2].items() if r["id"] == m["id"]), "")
+            d["reply_ref"] = {"id": m["reply_to"], "title": o["title"] if ok else "", "kind": o["kind"] if ok else "",
+                              "exists": ok, "text": text}
 
     def summaries(self) -> list[dict]:
         with self.lock:
@@ -357,6 +456,7 @@ class Store:
             d.update(body=m["body"], question=m["question"], options=m["options"],
                      recommended=m["recommended"], allow_text=m["allow_text"],
                      response=self.responses.get(mid))
+            self._thread_detail(m, d)
             return d
 
     def search(self, q: str) -> list[str]:
@@ -575,6 +675,26 @@ class Store:
             self.poll()
         except OSError:  # 回复已经写好了：这里读不到不能让界面以为提交失败
             pass
+        return rec
+
+
+    def add_followup(self, mid: str, text: str) -> dict:
+        """用户对一条消息追问（回答、通知、已经回复过的决定都行）：在 data/.lock 锁内追加到 followups.jsonl，
+        在听的会话（wait --followups）会领走。只写追问文件，不碰 responses.jsonl：追问不会让等这条 id 的 wait 醒来。
+        还没回复的决定不能追问：它有自己的回复框，回复了才能追问。"""
+        text = str(text or "").strip()
+        with self.lock:
+            m = self.msgs.get(mid)
+            if m is None or self.hidden(m):
+                raise KeyError("没有这条消息")
+            if self.is_open(m):
+                raise ValueError("这条决定还在等你回复：先在上面选择或写回复，回复之后才能追问")
+            if not text:
+                raise ValueError("追问不能为空")
+            rec = desk.write_followup({"id": mid, "source": m["source"], "title": m["title"]}, text, self.ddir)
+            self._add_followup_rec(rec)
+            self._bump()
+        self._emit_changed()
         return rec
 
 

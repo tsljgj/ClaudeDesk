@@ -384,7 +384,7 @@ class TrayApp:
         self.toast_target = target["id"]
         if len(msgs) == 1:
             m = msgs[0]
-            head = {"decision": "需要你决定", "answer": "新回答", "info": "通知"}[m["kind"]]
+            head = "追问有回答了" if m.get("reply_to") else {"decision": "需要你决定", "answer": "新回答", "info": "通知"}[m["kind"]]
             title = f"{head}：{m['title']}"
             text = f"[{m.get('repo') or m['source']}] " + (plain_summary(m["question"], 60) + " → " if m["question"] else "") \
                 + plain_summary(m["body"], 100)
