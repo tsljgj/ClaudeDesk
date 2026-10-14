@@ -503,6 +503,28 @@ i[data-icon] svg { width: 100%; height: 100%; }
   .tab { padding: 0 7px; }
 }
 
+/* ------------------------------------------------------------------ 键盘：焦点环、搜索结果提示、减少动效 */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ptab:focus-visible, .tab:focus-visible, .menu-item:focus-visible, .toggle-row:focus-visible, .seg button:focus-visible { outline-offset: -2px; }
+.menu-item:focus-visible, .toggle-row:focus-visible { background: var(--hover); }
+/* 列表本身不画框：用键盘时把当前这条描一圈；还没选中任何一条时描整个列表 */
+.list:focus-visible { outline: none; }
+.list:focus-visible .item.selected { box-shadow: inset 0 0 0 2px var(--accent); }
+.list:focus-visible:not(:has(.item.selected)) { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 输入框获得焦点时边框用强调色（对白底 ≥ 3:1） */
+#replyText:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search:focus-within { border-color: var(--accent); }
+#decideHint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-more {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 8px); margin: 8px 4px 0; padding: 9px 12px;
+  border-radius: 8px; border: 1px dashed var(--line-2); color: var(--ink-3); font-size: 12.5px; text-align: left;
+}
+.search-more span { margin-left: auto; color: var(--accent-ink); font-weight: 600; white-space: nowrap; }
+.search-more:hover { background: var(--hover); color: var(--ink-2); }
+@media (prefers-reduced-motion: reduce) {
+  .reader { transition: none; }
+}
+
 /* ------------------------------------------------------------------ 打印 / 导出 PDF */
 .print-root { display: none; }
 @media print {
