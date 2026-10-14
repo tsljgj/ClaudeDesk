@@ -117,12 +117,16 @@ def test_number_key_scrolls_the_picked_option_into_view(env):
     page.emulate_media(reduced_motion="reduce")  # 减少动效：直接跳过去，不平滑滚动
     start(page, server)
     opened(page, a)
-    assert js(page, "document.getElementById('scroller').scrollTop") == 0
+    assert js(page, "document.getElementById('scroller').scrollTop") == 0  # 打开时在顶上：卡片就在标题下面
+    # 往下读到了正文末尾再按数字：选项在屏幕外，滚回去
+    page.evaluate("document.getElementById('scroller').scrollTop = 1e6")
+    bottom = js(page, "document.getElementById('scroller').scrollTop")
+    assert bottom > 0
     page.keyboard.press("2")
     page.wait_for_function("""() => { const o = document.querySelector('#options .opt.checked');
         const r = o.getBoundingClientRect(), s = document.getElementById('scroller').getBoundingClientRect();
         return r.top >= s.top && r.bottom <= s.bottom; }""")
-    assert js(page, "document.getElementById('scroller').scrollTop") > 0
+    assert js(page, "document.getElementById('scroller').scrollTop") < bottom
     assert errors == []
 
 

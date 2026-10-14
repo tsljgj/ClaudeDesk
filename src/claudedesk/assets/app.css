@@ -385,14 +385,19 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .icon-btn.caret i[data-icon] { width: 13px; height: 13px; }
 
 .scroller { flex: 1; overflow-y: auto; scrollbar-gutter: stable; }
-.article { max-width: var(--read-w); margin: 0 auto; padding: 20px var(--read-pad) 24px; }
+/* 阅读页从上到下：标题 → 要你做的（待决定的卡片 / 追问框）→ 往来记录（新的在上）→ 原消息（原问题、正文）。每块一样宽、一样的留白 */
+.head, .followup, .decide, .article { max-width: var(--read-w); margin: 0 auto; padding-left: var(--read-pad); padding-right: var(--read-pad); }
+.head { padding-top: 20px; }
+.article { padding-bottom: 40px; }
+/* 原消息上面一道细线：和上面的卡片、往来记录分开，往下读就是原来那条 */
+.followup:not([hidden]) ~ .article::before, .decide:not([hidden]) ~ .article::before {
+  content: ""; display: block; height: 1px; margin-bottom: 26px; background: var(--line);
+}
 .eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--ink-4); font-size: 12.5px; margin-bottom: 10px; }
 .eyebrow .eb + .eb::before { content: "·"; margin-right: 6px; } /* 分隔点跟着后面那一段走：折行时不会挂在上一行末尾 */
 .eyebrow .src { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-weight: 550; }
 .eyebrow .hot { color: var(--accent-ink); font-weight: 650; }
-.eyebrow .jump { margin-left: auto; color: var(--accent-ink); font-weight: 600; font-size: 12.5px; }
-.eyebrow .jump:hover { text-decoration: underline; }
-.title { margin: 0 0 24px; font: 680 26px/1.3 var(--font-ui); letter-spacing: -.022em; color: var(--ink); text-wrap: balance; }
+.title { margin: 0 0 22px; font: 680 26px/1.3 var(--font-ui); letter-spacing: -.022em; color: var(--ink); text-wrap: balance; }
 :root[data-font="serif"] .title { font-family: var(--font-serif); font-weight: 620; font-size: 28px; letter-spacing: -.01em; }
 .question { margin: 0 0 28px; padding: 2px 0 2px 16px; border-left: 2px solid var(--line-2); }
 .q-text { white-space: pre-wrap; color: var(--ink-2); font-size: calc(var(--read-size) - 1px); line-height: 1.7; }
@@ -472,8 +477,9 @@ i[data-icon] svg { width: 100%; height: 100%; }
 :root[data-theme="dark"] .hljs-attr, :root[data-theme="dark"] .hljs-property, :root[data-theme="dark"] .hljs-params { color: #F5C66B; }
 
 /* ------------------------------------------------------------------ 决定 */
-.decide { max-width: var(--read-w); margin: 8px auto 0; padding: 0 var(--read-pad) 40px; scroll-margin-top: 12px; }
-.decide-card { border-top: 1px solid var(--line); padding-top: 20px; }
+.decide { padding-bottom: 28px; scroll-margin-top: 12px; }
+/* 回复过的决定排在追问记录下面（是更早的事）：一道细线隔开 */
+.followup:not([hidden]) + .decide .decide-card { border-top: 1px solid var(--line); padding-top: 20px; }
 .decide-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .decide-title { font-weight: 650; font-size: 14px; }
 .decide-state { font-size: 12.5px; color: var(--ink-4); }
@@ -527,13 +533,28 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .reply-done .undeliv { color: var(--ink-2); font-weight: 600; } /* 还没送达：比"已送达"显眼一点，但不用强调色（等的是会话，不是你） */
 .reply-done .deliv-hint { margin-top: 2px; color: var(--ink-4); font-size: 12.5px; }
 
-/* ------------------------------------------------------------------ 追问（回答底部的卡片，和决定卡片一个样子；回应追问的那条顶上写出处） */
-.followup { max-width: var(--read-w); margin: 8px auto 0; padding: 0 var(--read-pad) 40px; }
-.decide:not([hidden]) + .followup { margin-top: -16px; } /* 回复过的决定：紧跟在"你的回复"下面，不隔出一大段 */
-.fu-state { display: flex; align-items: baseline; gap: 8px; margin: -4px 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--ink-3); }
+/* ------------------------------------------------------------------ 追问（标题下面一个小小的追问框，框下是往来记录，新的在上；回应追问的那条顶上写出处） */
+.followup { padding-bottom: 28px; }
+/* 追问框平时只有一行，不把正文往下推；点进去或写了字才长高（写多了跟着字长，最高 40% 屏幕）。
+   收起晚 0.25 秒：点框下面的链接时，鼠标还没抬起，东西先别挪走 */
+#fuText {
+  display: block; width: 100%; padding: 8px 12px; resize: none; min-height: 40px; max-height: 40vh; field-sizing: content;
+  border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); outline: none; line-height: 1.6; font-size: 13.5px;
+  transition: min-height .15s ease .25s;
+}
+.fu-compose:focus-within #fuText, #fuText:not(:placeholder-shown) { min-height: 84px; transition-delay: 0s; }
+#fuText::placeholder { color: var(--ink-4); }
+#fuText:focus { border-color: var(--ink-3); box-shadow: 0 0 0 3px var(--hover); }
+/* 框下一行：会话在不在（小字带圆点）、提示，右边是小号按钮 */
+.fu-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 8px; }
+.fu-state { flex: 1 1 240px; min-width: 0; display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 12px; line-height: 1.55; color: var(--ink-3); }
 .fu-state::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-5); transform: translateY(-1px); } /* 在线绿点，没在听灰点 */
 .fu-state.on::before { background: var(--ok); }
-.fu-list { display: flex; flex-direction: column; gap: 14px; margin-bottom: 14px; }
+.fu-bar .primary, .fu-bar .ghost { flex: none; height: 28px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; }
+.fu-bar .ghost { box-shadow: inset 0 0 0 1px var(--line-2); }
+#fuHint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fuHint:empty { display: none; }
+.fu-list { display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
 .fu-item { padding: 1px 0 1px 14px; border-left: 2px solid var(--line-2); } /* 和正文上面"原问题"一样的竖线 */
 .fu-when { font-size: 12px; color: var(--ink-4); }
 .fu-q { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); font-size: 13.5px; line-height: 1.65; }
@@ -541,18 +562,11 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .fu-a { display: block; margin-top: 4px; text-align: left; font-size: 13px; font-weight: 600; color: var(--ok-ink); }
 .fu-a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .fu-list > .fu-a { margin-top: 0; } /* 配不上追问的回应单独一行 */
-#fuText {
-  display: block; width: 100%; padding: 10px 12px; resize: vertical; min-height: 44px;
-  border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); outline: none; line-height: 1.6; font-size: 13.5px;
-}
-#fuText::placeholder { color: var(--ink-4); }
-#fuText:focus { border-color: var(--ink-3); box-shadow: 0 0 0 3px var(--hover); }
-#fuHint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .st.fu { color: var(--ink-2); } /* 等的是 Claude，不是你：不用强调色 */
 .item .st.gone { color: var(--ink-4); font-weight: 500; } /* 待决定的会话已经结束：淡淡标一下，用户可以标为已处理清掉 */
 .item.selected .st.gone { color: var(--ink-3); }
 .thread-ref { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; max-width: var(--read-w); margin: 0 auto; padding: 18px var(--read-pad) 0; font-size: 12.5px; color: var(--ink-3); }
-.thread-ref:not([hidden]) + .article { padding-top: 10px; }
+.thread-ref:not([hidden]) + .head { padding-top: 10px; }
 .tr-link { text-align: left; color: var(--ink-2); font-weight: 600; text-decoration: underline; text-decoration-color: var(--ink-5); text-underline-offset: 3px; }
 .tr-link:hover { color: var(--ink); text-decoration-color: var(--ink-4); }
 
@@ -612,7 +626,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
 /* ------------------------------------------------------------------ 窄窗口 */
 @media (max-width: 960px) {
   :root { --list-w: 320px; }
-  .article, .decide, .followup, .thread-ref { padding-left: min(var(--read-pad), 28px); padding-right: min(var(--read-pad), 28px); }
+  .head, .article, .decide, .followup, .thread-ref { padding-left: min(var(--read-pad), 28px); padding-right: min(var(--read-pad), 28px); }
 }
 @media (min-width: 721px) and (max-width: 960px) { /* 列表 320px：批量栏放下"标为已处理"和四个图标 */
   .bulk-count .pre { display: none; }
@@ -624,7 +638,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
   .reader { position: fixed; inset: 0; z-index: 10; transform: translateX(100%); transition: transform .2s ease; }
   .app.reading .reader { transform: none; }
   .toolbar .back { display: inline-grid; }
-  .article, .decide, .followup, .thread-ref { padding-left: 20px; padding-right: 20px; }
+  .head, .article, .decide, .followup, .thread-ref { padding-left: 20px; padding-right: 20px; }
   .tab { padding: 0 7px; }
   .toasts { left: 16px; right: 16px; transform: none; } /* 提示条用满宽度，不挤成一半 */
   .toast { max-width: 100%; }
@@ -650,6 +664,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .search-more:hover { background: var(--hover); color: var(--ink-2); }
 @media (prefers-reduced-motion: reduce) {
   .reader { transition: none; }
+  #fuText { transition-duration: 0s; } /* 不动画，收起照样晚一点 */
 }
 
 /* ------------------------------------------------------------------ 打印 / 导出 PDF */
@@ -664,7 +679,7 @@ i[data-icon] svg { width: 100%; height: 100%; }
   .print-root .article { max-width: none; padding: 0; }
   .print-root .md { font-size: 11pt; }
   .print-root .title { font-size: 20pt; }
-  .print-root .code-head, .print-root .jump { display: none; }
+  .print-root .code-head { display: none; }
   .print-root .codeblock, .print-root .math-display, .print-root tr, .print-root .question { break-inside: avoid; }
   .print-root pre, .print-root pre code { white-space: pre-wrap; }
   .print-root .table-wrap { overflow: visible; }
