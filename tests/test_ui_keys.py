@@ -258,6 +258,7 @@ def test_focus_is_visible_and_hidden_controls_are_not_tab_stops(env):
     # 焦点环、输入框 / 搜索框获得焦点：中性的深灰（强调色只留给"等你处理"）
     accent, ink3 = "rgb(242, 84, 27)", "rgb(100, 100, 111)"
     assert js(page, "getComputedStyle(document.querySelector('.item.selected')).boxShadow").startswith(ink3)
+    page.wait_for_selector("#replyText", state="visible")  # 正文是异步取的：慢机器上卡片还没出来就 focus 会落空
     page.focus("#replyText")
     assert js(page, "getComputedStyle(document.getElementById('replyText')).borderTopColor") == ink3 != accent
     page.focus("#search")
