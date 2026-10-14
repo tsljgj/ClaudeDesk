@@ -796,6 +796,7 @@
     if (S.multi.size || $("list").classList.contains("multi-mode") || !rowEl(id)) renderList();
     else {
       $("list").querySelectorAll(".item.selected").forEach(function (el) { el.classList.remove("selected"); el.setAttribute("aria-selected", "false"); });
+      $("list").querySelectorAll(".item.cursor").forEach(function (el) { el.classList.remove("cursor"); }); // 打开了一条：窄窗口的列表光标不再画
       renderRow(id);
     }
     if (marked) renderNav();
@@ -1213,7 +1214,9 @@
   }
   function closeModal(v) {
     $("modal").hidden = true; $("modal").firstElementChild.classList.remove("sheet"); if (modalResolve) modalResolve(v); modalResolve = null;
-    if (modalBack && modalBack.focus && document.contains(modalBack)) modalBack.focus(); // 焦点回到打开对话框之前的地方
+    // 焦点回到打开对话框之前的地方；那里没有（body、已经被删掉的行按钮）就回列表，别停在藏起来的按钮上
+    if (modalBack && modalBack !== document.body && modalBack.focus && document.contains(modalBack)) modalBack.focus();
+    else $("list").focus();
     modalBack = null;
   }
   // 对话框里：Tab / Shift+Tab 只在对话框的按钮之间转

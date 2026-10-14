@@ -329,3 +329,37 @@ def test_enter_in_search_waits_for_the_results_in_flight(env):
     page.wait_for_function("id => deskTest.S.current === id", arg=hit)
     assert page.evaluate("deskTest.S.visible") == [hit] and page.evaluate(FOCUSED, "#list")
     assert errors == []
+
+
+def test_opening_a_message_clears_the_narrow_list_cursor(env):
+    """窄窗口：列表页 ↓ 挪的光标在点开另一条之后不能还画着（只重画了新选中的那一行，旧光标行留着灰底）。"""
+    d, store, server, page, errors = env
+    ids = [post(d, kind="answer", title=f"消息 {i}", body="x") for i in range(3)]
+    store.poll()
+    store.mark_read(ids)  # 都读过：点开不会引起服务端变化、整份重画，旧光标行只能靠 select 自己清
+    page.set_viewport_size({"width": 600, "height": 800})
+    open_page(page, server)
+    page.focus("#list")
+    page.keyboard.press("j")
+    page.keyboard.press("j")
+    assert page.locator(".item.cursor").count() == 1
+    page.click(f'.item[data-id="{ids[0]}"]')
+    page.wait_for_selector("#app.reading")
+    assert page.locator(".item.cursor").count() == 0
+    assert errors == []
+
+
+def test_closing_a_dialog_opened_from_nowhere_puts_focus_on_the_list(env):
+    """对话框打开前焦点在 body：关掉以后焦点回列表，不停在藏起来的"确定"按钮上（之后的按键都失灵）。"""
+    d, store, server, page, errors = env
+    a = post(d, kind="answer", title="甲", body="x")
+    store.poll()
+    open_page(page, server)
+    page.click(f'.item[data-id="{a}"]')
+    page.evaluate("document.activeElement.blur()")
+    page.keyboard.press("Delete")
+    page.wait_for_selector("#modal:not([hidden])")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#modal", state="hidden")
+    assert page.evaluate("document.activeElement.id") == "list"
+    assert errors == []
