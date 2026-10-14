@@ -819,13 +819,19 @@
     if (S.shownKey === key) { renderEyebrow(m); syncDecision(m); syncFollowup(m); return; }
     var cached = S.details[key];
     if (cached) return showDetail(keepDetail(key, cached), key);
+    // 打开一条会记"打开时间"、触发一次刷新：详情还没回来时又进到这里，不再拿第二份。
+    // 第二份晚到会把选项整块重画，键盘焦点就掉了
+    if (detailLoading === key) return;
+    detailLoading = key;
     api("/api/message?id=" + encodeURIComponent(m.id)).then(function (d) {
+      if (detailLoading === key) detailLoading = null;
       if (!d || d.error) return;
       keepDetail(key, d);
       var cm = S.current && S.byId[S.current]; // 回来晚了：这期间它可能已经有了回复（在对话里处理掉了），旧的"未回复"版不能再盖上去
-      if (cm && cm.id + "|" + cm.answered === key) showDetail(d, key);
-    });
+      if (cm && cm.id + "|" + cm.answered === key && S.shownKey !== key) showDetail(d, key);
+    }, function () { if (detailLoading === key) detailLoading = null; });
   }
+  var detailLoading = null; // 正在拿详情的那条（id|answered）
   // 详情缓存：最近用过的排在最后，最多留 60 条；有了"已回复"版就丢掉旧的"未回复"版
   function keepDetail(key, d) {
     delete S.details[key];

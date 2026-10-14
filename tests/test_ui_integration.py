@@ -136,6 +136,35 @@ def test_keyboard_focus_survives_background_updates(env):
     assert errors == []
 
 
+def test_slow_detail_is_fetched_once_and_keeps_option_focus(env):
+    """点开一条会记"打开时间"、触发一次刷新：详情还在路上时刷新又进了阅读区。以前会再拿一份，
+    第二份晚到时把选项整块重画，键盘停在选项上的焦点掉到 body（CI 的慢机器上才碰得到）。"""
+    d, store, server, page, errors = env
+    post(d, kind="answer", title="甲", body="x", repo="alpha")
+    dec = post(d, kind="decision", title="要决定的", body="x", options=["A", "B"], repo="alpha")
+    store.poll()
+    calls, orig = [], store.detail
+
+    def slow(mid):  # 第一份 0.4 秒回来，之后的 1.2 秒：要是拿了第二份，它会在焦点放上去之后才到
+        calls.append(mid)
+        time.sleep(0.4 if len(calls) == 1 else 1.2)
+        return orig(mid)
+
+    store.detail = slow
+    open_page(page, server)
+    page.wait_for_selector(f'.item[data-id="{dec}"]')
+    page.click(f'.item[data-id="{dec}"]')
+    opt = '#options .opt[data-idx="1"]'
+    page.wait_for_selector(opt)
+    page.keyboard.press("Shift")  # 下面的焦点算键盘焦点（:focus-visible）
+    page.focus(opt)
+    assert wait_until(lambda: dec in store.read_at)  # "打开了"已经记下（刷新跟着就来）
+    page.wait_for_timeout(1500)  # 等过第二份可能回来的时间
+    assert calls.count(dec) == 1
+    assert page.evaluate(FOCUSED, opt)
+    assert errors == []
+
+
 def test_slash_in_the_narrow_reader_goes_back_to_the_list(env):
     """窄窗口里阅读页盖住了列表：以前按 / 把焦点放进被盖住的搜索框，之后打的字（还有 j / k / e）都进了看不见的框。"""
     d, store, server, page, errors = env
