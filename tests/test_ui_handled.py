@@ -1,6 +1,7 @@
-"""只看未处理 / 标为已处理 / 每条决定都有补充说明框 / 一键归档已处理的：在真浏览器里点、按键，看界面和服务端。"""
+"""只看未处理 / 标为已处理（不通知会话，可以撤销）/ 每条决定都有补充说明框 / 按时间归档已处理的：在真浏览器里点、按键，看界面和服务端。"""
 import datetime as dt
 import itertools
+import re
 
 import desk
 from claudedesk.store import RESOLVE_TEXT
@@ -130,7 +131,7 @@ def test_the_message_you_are_reading_stays_until_you_move_on(env):
     assert errors == []
 
 
-def test_mark_handled_on_a_mixed_selection_tells_the_sessions_and_cannot_be_undone(env):
+def test_mark_handled_on_a_mixed_selection_is_silent_and_can_be_undone(env):
     d, store, server, page, errors = env
     d1 = post(d, kind="decision", title="决定一", options=["A", "B"])
     d2 = post(d, kind="decision", title="决定二", options=["A", "B"])
@@ -151,21 +152,25 @@ def test_mark_handled_on_a_mixed_selection_tells_the_sessions_and_cannot_be_undo
     page.click(f'.item[data-id="{d1}"] .cb', modifiers=["Shift"])
     page.wait_for_function("deskTest.S.multi.size === 3")
     assert page.is_visible("#bulkResolve") and page.inner_text("#bulkResolve") == "标为已处理"
+    assert page.get_attribute("#bulkResolve", "title") == "不通知会话：待决定的直接关掉，其余的标为已读（R）"
     page.click("#bulkResolve")  # 点按钮：一下就好，不问
-    wait_toast(page, "已标为已处理 3 条，2 条待决定已告诉会话")
+    wait_toast(page, "已标为已处理 3 条")
     assert page.is_hidden("#modal")
-    assert toast_button(page, "已标为已处理 3 条，2 条待决定已告诉会话") is None  # 回复已经发给会话了：不给撤销
+    assert toast_button(page, "已标为已处理 3 条") == "撤销（Z）"  # 没通知会话：撤销得了
     for x in (d1, d2):
         r = resp(d, x)[0]
-        assert r["resolved"] is True and r["choice"] is None and r["text"] == RESOLVE_TEXT
+        assert r["resolved"] is True and r["choice"] is None and r["text"] == RESOLVE_TEXT and r["silent"] is True
     assert not store.is_unread(store.msgs[ans]) and resp(d, ans) == []
     page.wait_for_selector(".list-empty")
+    # Z：两条决定重新打开（那条已处理的回复删掉了），回答改回未读，都回到列表里
     page.keyboard.press("z")
-    wait_toast(page, "没有可以撤销的操作")
+    wait_vis(page, [ans, d2, d1])
+    assert resp(d, d1) == [] and resp(d, d2) == [] and store.is_unread(store.msgs[ans])
+    assert page.evaluate(f"['{d1}', '{d2}'].every(id => deskTest.S.byId[id].open)")
     assert errors == []
 
 
-def test_r_asks_only_when_decisions_are_involved_and_undo_restores_unread(env):
+def test_r_never_asks_and_undo_reopens_decisions_and_restores_unread(env):
     d, store, server, page, errors = env
     dec = post(d, kind="decision", title="等你", options=["A", "B"])
     a1 = post(d, kind="answer", title="回答一", body="x")
@@ -175,7 +180,7 @@ def test_r_asks_only_when_decisions_are_involved_and_undo_restores_unread(env):
     page.wait_for_selector(".item")
     page.click(f'.item[data-id="{a1}"]', modifiers=["Control"])  # Ctrl + 点 = 勾选，不打开、不算读
     page.click(f'.item[data-id="{a2}"]', modifiers=["Control"])
-    page.keyboard.press("r")  # 没有待决定：不问，直接标，可以撤销
+    page.keyboard.press("r")
     wait_toast(page, "已标为已处理 2 条")
     assert page.is_hidden("#modal") and toast_button(page, "已标为已处理 2 条") == "撤销（Z）"
     assert not store.is_unread(store.msgs[a1]) and not store.is_unread(store.msgs[a2])
@@ -183,24 +188,20 @@ def test_r_asks_only_when_decisions_are_involved_and_undo_restores_unread(env):
     page.wait_for_function(f"() => deskTest.S.byId['{a1}'].unread && deskTest.S.byId['{a2}'].unread")
     assert store.is_unread(store.msgs[a1]) and store.is_unread(store.msgs[a2])
 
-    # 牵涉待决定：先问
+    # 牵涉待决定也不问（不通知会话），一样能撤销
     page.focus("#list")
     page.keyboard.press("Control+a")
     page.keyboard.press("r")
-    page.wait_for_function("document.activeElement.id === 'modalOk'")
-    assert page.inner_text("#modalTitle") == "把 3 条标为已处理？"
-    assert page.inner_text("#modalText") == "其中 1 条待决定会告诉等待中的会话「已经处理好了」。"
-    assert page.inner_text("#modalOk") == "标为已处理"
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(300)
-    assert resp(d, dec) == [] and store.is_unread(store.msgs[a1])
-    page.keyboard.press("r")
-    page.wait_for_function("document.activeElement.id === 'modalOk'")
-    page.keyboard.press("Enter")
-    wait_toast(page, "已标为已处理 3 条，1 条待决定已告诉会话")
-    assert resp(d, dec)[0]["resolved"] is True and not store.is_unread(store.msgs[a2])
+    wait_toast(page, "已标为已处理 3 条")
+    assert page.is_hidden("#modal") and toast_button(page, "已标为已处理 3 条") == "撤销（Z）"
+    r = resp(d, dec)[0]
+    assert r["resolved"] is True and r["silent"] is True and not store.is_unread(store.msgs[a2])
     page.wait_for_selector(f'.item[data-id="{dec}"] .st.done')
     assert page.inner_text(f'.item[data-id="{dec}"] .st.done') == "✓ 已处理"
+    page.keyboard.press("z")
+    page.wait_for_selector(f'.item[data-id="{dec}"] .st.open')
+    assert resp(d, dec) == [] and store.is_open(store.msgs[dec])
+    page.wait_for_function(f"() => ['{dec}', '{a1}', '{a2}'].every(id => deskTest.S.byId[id].unread)")
     assert errors == []
 
 
@@ -216,10 +217,11 @@ def test_check_button_and_menu_item_show_on_every_unhandled_row(env):
     acts = lambda i: page.evaluate(f"[...document.querySelectorAll('.item[data-id=\"{i}\"] .act')].map(b => b.dataset.act)")  # noqa: E731
     assert acts(new) == ["read", "resolve", "archive", "delete"] and acts(dec) == acts(new)
     assert acts(old) == ["read", "archive", "delete"]
-    assert page.get_attribute(f'.item[data-id="{new}"] [data-act="resolve"]', "title") == "标为已处理（R）"
+    assert page.get_attribute(f'.item[data-id="{new}"] [data-act="resolve"]', "title") == "标为已处理 · 不通知会话（R）"
     menu = lambda i: (page.click(f'.item[data-id="{i}"]', button="right"), page.wait_for_selector("#popover:not([hidden])"),  # noqa: E731
                       page.evaluate("[...document.querySelectorAll('#popover [data-m]')].map(b => b.dataset.m + ':' + b.textContent)"))[2]
     assert "resolve:标为已处理R" in menu(new)
+    assert page.get_attribute('#popover [data-m="resolve"]', "title") == "不通知会话：你已经在对话里说过，或者这件事不重要了"
     page.keyboard.press("Escape")
     assert not any(m.startswith("resolve") for m in menu(old))
     page.keyboard.press("Escape")
@@ -231,12 +233,14 @@ def test_check_button_and_menu_item_show_on_every_unhandled_row(env):
     assert page.is_hidden("#modal") and not store.is_unread(store.msgs[new]) and resp(d, new) == []
     assert new in vis(page)
 
-    # 决定卡片：按钮写"标为已处理"，点了以后写"已标为已处理"
+    # 决定卡片：按钮写"标为已处理"，点了以后写"已标为已处理 · 没有通知会话"
     opened(page, dec)
     assert page.inner_text("#resolveBtn") == "标为已处理"
+    assert page.get_attribute("#resolveBtn", "title") == "不通知会话：你已经在对话里说过，或者这件事不重要了（R）"
     page.click("#resolveBtn")
     page.wait_for_selector("#doneBox:not([hidden])")
     assert page.inner_text("#doneBox b") == "已标为已处理"
+    assert re.match(r"已标为已处理 · 没有通知会话 · (今天|昨天) \d\d:\d\d$", page.inner_text("#doneBox").split("\n")[0])
     assert resp(d, dec)[0]["text"] == RESOLVE_TEXT
     assert errors == []
 
@@ -271,43 +275,125 @@ def test_every_decision_has_a_reply_box_and_text_alone_can_be_sent(env):
     assert errors == []
 
 
-def test_archive_handled_button_archives_the_handled_ones_in_scope_and_undo_puts_back_exactly_those(env):
+def post_ago(d, ago, **kw):  # 发在 ago 以前
+    kw.setdefault("source", "proj")
+    m = desk.make_message(**kw)
+    m["ts"] = (dt.datetime.now().astimezone() - ago).isoformat(timespec="milliseconds")
+    return desk.post_message(m, d)
+
+
+def ages(page):  # 菜单里每一档：[档, 读屏念的"早于 N · M 条", 按不按得了]
+    return page.evaluate("[...document.querySelectorAll('#popover [data-age]')].map(b => [b.dataset.age, b.getAttribute('aria-label'), !b.disabled])")
+
+
+def test_archive_handled_by_age(env):
+    """按时间归档已处理的：#handledBtn 和"⋯"菜单打开同一个菜单（早于 1 小时 / 24 小时 / 7 天 / 全部，各写条数，0 条的按不了）。
+    "早于"按最后一次动静算（收到、回复、在界面里打开）；正在看的那条永远不动；只动当前项目；记住上次选的那档；能用键盘；
+    撤销恰好放回这一批。"""
     d, store, server, page, errors = env
-    mk = lambda kind, title, repo, **kw: post(d, kind=kind, title=title, repo=repo, **kw)  # noqa: E731
-    r1, r2 = mk("answer", "甲读过一", "alpha"), mk("answer", "甲读过二", "alpha")
-    u = mk("answer", "甲没读", "alpha")
-    dec = mk("decision", "甲看过的决定", "alpha", options=["A"])
-    r3 = mk("answer", "乙读过", "beta")
+    H, D = dt.timedelta(hours=1), dt.timedelta(days=1)
+    mk = lambda ago, title, repo="alpha", kind="answer", **kw: post_ago(d, ago, kind=kind, title=title, body="x", repo=repo, **kw)  # noqa: E731
+    h2 = mk(2 * H, "两小时前")
+    d2 = mk(2 * D, "两天前")
+    w2 = mk(10 * D, "十天前")
+    seen = mk(3 * D, "三天前发的、刚看过")
+    recent = mk(H / 6, "十分钟前")
+    cur = mk(10 * D, "正在看的")
+    unread = mk(10 * D, "没读的")
+    dec = mk(10 * D, "没决定的", kind="decision", options=["A"])
+    beta = mk(10 * D, "别的项目的", repo="beta")
     store.poll()
-    store.mark_read([r1, r2, dec, r3])
+    store.mark_read([h2, d2, w2, recent, cur, dec, beta])  # 批量标为已读：不算打开
+    store.mark_read([seen], opened=True)  # 三天前发的，刚在界面里打开过
     start(page, server)
     page.wait_for_selector(".item")
-    h = page.locator("#handledBtn")
-    assert h.is_visible() and h.get_attribute("aria-disabled") == "false"
-    assert h.get_attribute("title") == "归档已处理的 3 条（已读、不用再决定）"
     page.click('.ptab[data-project="alpha"]')
-    page.wait_for_function("document.getElementById('handledBtn').title === '归档已处理的 2 条（alpha · 已读、不用再决定）'")
+    page.click(f'.item[data-id="{cur}"]')
+    h = page.locator("#handledBtn")
+    page.wait_for_function("document.getElementById('handledBtn').title === '归档已处理的…：选早于多久（alpha · 共 5 条已读、不用再决定）'")
 
-    h.click()  # 不问
-    wait_toast(page, "已归档 2 条")
-    assert page.is_hidden("#modal") and toast_button(page, "已归档 2 条") == "撤销（Z）"
-    assert store.archived == {r1, r2}
-    page.wait_for_function("document.getElementById('handledBtn').getAttribute('aria-disabled') === 'true'")
-    assert h.get_attribute("title") == "没有已处理的可以归档（已读、不用再决定的）"
-    h.click(force=True)  # 没有可归档的（aria-disabled，照样点得到）：只提示
-    wait_toast(page, "没有已处理的可以归档")
-    page.keyboard.press("z")  # 撤销只放回刚才那一批
-    page.wait_for_function(f"() => !deskTest.S.byId['{r1}'].archived && !deskTest.S.byId['{r2}'].archived")
-    assert store.archived == set() and store.is_unread(store.msgs[u]) and not store.is_unread(store.msgs[r1])
-    page.click('[data-view="archive"]')
-    assert page.is_hidden("#handledBtn")
+    # 点按钮：先出菜单，不直接归档；焦点在第一档，↓ 回车选"早于 24 小时"
+    h.click()
+    page.wait_for_selector("#popover:not([hidden])")
+    assert ages(page) == [["1h", "早于 1 小时 · 3 条", True], ["24h", "早于 24 小时 · 2 条", True],
+                          ["7d", "早于 7 天 · 1 条", True], ["all", "全部 · 5 条", True]]
+    assert store.archived == set() and page.evaluate("document.activeElement.dataset.age") == "1h"
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    wait_toast(page, "已归档 2 条（早于 24 小时）")
+    assert store.archived == {d2, w2}  # 三天前发的那条刚看过：不算旧
+    assert page.is_hidden("#popover") and toast_button(page, "已归档 2 条（早于 24 小时）") == "撤销（Z）"
+    assert page.evaluate("localStorage.getItem('desk.handledAge')") == "24h"
+    page.keyboard.press("z")  # 撤销恰好放回这一批
+    page.wait_for_function(f"() => !deskTest.S.byId['{d2}'].archived && !deskTest.S.byId['{w2}'].archived")
+    assert store.archived == set()
 
-    # "⋯"菜单里的"归档所有已处理的"还在，走同一条路
-    page.click('[data-view="all"]')
+    # "⋯"菜单里的"归档已处理的…"打开同一个菜单：上次选的那档打勾，焦点在它上面；鼠标点"早于 7 天"，焦点回列表
     page.click("#listMenuBtn")
     page.click('[data-l="archive_handled"]')
-    wait_toast(page, "已归档 2 条")
-    assert store.archived == {r1, r2}
+    page.wait_for_selector("#popover [data-age]")
+    assert page.evaluate("document.activeElement.dataset.age") == "24h"
+    assert page.evaluate("[...document.querySelectorAll('#popover .menu-item.last')].map(b => b.dataset.age)") == ["24h"]
+    page.click('#popover [data-age="7d"]')
+    wait_toast(page, "已归档 1 条（早于 7 天）")
+    assert store.archived == {w2} and page.evaluate("document.activeElement.id") == "list"
+
+    # 0 条的那档按不了，键盘跳过它；Esc 关掉菜单，焦点回到按钮，回车再打开
+    h.click()
+    page.wait_for_selector("#popover:not([hidden])")
+    assert ages(page) == [["1h", "早于 1 小时 · 2 条", True], ["24h", "早于 24 小时 · 1 条", True],
+                          ["7d", "早于 7 天 · 0 条", False], ["all", "全部 · 4 条", True]]
+    assert page.evaluate("document.activeElement.dataset.age") == "1h"  # 上次选的那档现在是 0 条：焦点在第一档
+    page.keyboard.press("Escape")
+    assert page.is_hidden("#popover") and page.evaluate("document.activeElement.id") == "handledBtn"
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#popover:not([hidden])")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("ArrowDown")
+    assert page.evaluate("document.activeElement.dataset.age") == "all"
+    page.keyboard.press("Enter")
+    wait_toast(page, "已归档 4 条")
+    assert store.archived == {w2, h2, d2, seen, recent}  # 正在看的、没读的、没决定的、别的项目的都不动
+    assert page.evaluate("deskTest.S.current") == cur and not page.evaluate(f"deskTest.S.byId['{unread}'].archived")
+
+    # 只剩正在看的那条：按钮灰掉，点了只提示，不出菜单
+    page.wait_for_function("document.getElementById('handledBtn').getAttribute('aria-disabled') === 'true'")
+    assert h.get_attribute("title") == "没有已处理的可以归档（已读、不用再决定的）"
+    h.click(force=True)
+    wait_toast(page, "没有已处理的可以归档")
+    assert page.is_hidden("#popover") and not ({cur, unread, dec, beta} & store.archived)
+    page.click('[data-view="archive"]')
+    assert page.is_hidden("#handledBtn")
+    assert errors == []
+
+
+def test_delete_of_an_open_decision_says_the_session_is_not_told(env):
+    d, store, server, page, errors = env
+    dec = post(d, kind="decision", title="还在等", options=["A"])
+    store.poll()
+    start(page, server)
+    page.click(f'.item[data-id="{dec}"]')
+    page.keyboard.press("Delete")
+    page.wait_for_function("document.activeElement.id === 'modalOk'")
+    assert page.inner_text("#modalText") == "删除后不能恢复，会从收件箱文件里真正移除。\n其中有还在等你决定的消息：删除不会通知会话。"
+    page.keyboard.press("Enter")
+    wait_toast(page, "已删除 1 条")
+    r = resp(d, dec)[0]
+    assert r["dismissed"] is True and r["silent"] is True
+    assert errors == []
+
+
+def test_old_resolved_records_keep_their_wording(env):
+    """以前写的"标为已处理"（没有 silent）当时通知了会话：完成框照旧那么说。"""
+    d, store, server, page, errors = env
+    a = post(d, kind="decision", title="以前标的", options=["A"])
+    desk.write_response(a, None, RESOLVE_TEXT, "proj", d, extra={"title": "以前标的", "resolved": True})
+    store.poll()
+    start(page, server)
+    opened(page, a)
+    page.wait_for_selector("#doneBox:not([hidden])")
+    assert "等待的会话已收到「已经处理好了」。" in page.inner_text("#doneBox")
+    assert "没有通知会话" not in page.inner_text("#doneBox")
     assert errors == []
 
 

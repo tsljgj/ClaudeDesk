@@ -122,19 +122,22 @@ def test_render_reply_archive_delete(env):
 
 
 def test_dismiss_open_decision_by_archive(env):
+    """归档还在等你决定的：不问，记一条跳过（不通知会话）；撤销 = 移出归档、重新打开、改回未读。"""
     d, store, server, page, errors = env
     a = post(d, kind="decision", title="还在等", options=["A"])
     store.poll()
     page.goto(server.url)
     page.locator(f'.item[data-id="{a}"]').hover()
     page.click(f'.item[data-id="{a}"] [data-act="archive"]')
-    page.wait_for_selector("#modal:not([hidden])")
-    page.click("#modalOk")
-    page.wait_for_selector(".toast")
+    page.wait_for_selector(".toast >> text=已归档 1 条")
+    assert page.is_hidden("#modal")
     r = [x for x in desk.read_all(d / desk.RESPONSES) if x["id"] == a][0]
-    assert r["dismissed"] is True and r["choice"] is None
+    assert r["dismissed"] is True and r["choice"] is None and r["silent"] is True
     page.click('[data-view="archive"]')
     page.wait_for_selector(f'.item[data-id="{a}"] .st.skip')
+    page.click(".toast button")  # 撤销
+    page.wait_for_function(f"() => (m => m && !m.archived && m.open && m.unread)(deskTest.S.byId['{a}'])")
+    assert not [x for x in desk.read_all(d / desk.RESPONSES) if x["id"] == a] and a not in store.archived
     assert errors == []
 
 
@@ -210,9 +213,10 @@ def test_hover_actions_and_checkbox_bulk(env):
     assert page.is_visible("#bulkResolve")
     page.click('[data-bulk="resolve"]')
     page.wait_for_selector("#bulkbar", state="hidden")  # 勾选马上清掉（和归档一样先在本地改好）；回复写好了才有提示
-    page.wait_for_selector(".toast >> text=已标为已处理 2 条，2 条待决定已告诉会话")
+    page.wait_for_selector(".toast >> text=已标为已处理 2 条")
     resp = {r["id"]: r for r in desk.read_all(d / desk.RESPONSES)}
     assert resp[a]["resolved"] is True and resp[b]["resolved"] is True and resp[a]["choice"] is None
+    assert resp[a]["silent"] is True and resp[b]["silent"] is True  # 不通知会话
     page.wait_for_selector(f'.item[data-id="{a}"] .st.done')
 
     # 当前打开的那条有强调色竖条；底色是中性灰，不带强调色（读一条回答不像在报警）

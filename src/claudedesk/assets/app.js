@@ -550,9 +550,14 @@
     }
     ptabFade();
   }
-  // 搜索框右边的两个按钮："只看未处理"开关、一键归档已处理的。归档视图里都收起来
-  function handledIds() { // 已处理 = 已读、不用再决定；只算当前项目范围（和"⋯"菜单里"归档所有已处理的"一样）
-    return S.msgs.filter(function (m) { return !m.archived && inScope(m) && !m.unread && !m.open; }).map(function (m) { return m.id; });
+  // 搜索框右边的两个按钮："只看未处理"开关、按时间归档已处理的。归档视图里都收起来
+  // 已处理 = 已读、不用再决定；只算当前项目范围（和"⋯"菜单里"归档已处理的…"一样）。正在看的那条不算：不能把它收走。
+  // age（毫秒）：只要最后一次动静（收到、回复、打开）早于这么久的
+  function handledIds(age) {
+    var cut = Date.now() - (age || 0);
+    return S.msgs.filter(function (m) {
+      return !m.archived && inScope(m) && !m.unread && !m.open && m.id !== S.current && (!age || new Date(m.last_active || m.ts) <= cut);
+    }).map(function (m) { return m.id; });
   }
   function renderTools() {
     var arch = S.view === "archive", t = $("todoBtn"), h = $("handledBtn"), n = arch ? 0 : handledIds().length;
@@ -560,7 +565,7 @@
     t.classList.toggle("on", S.todo);
     t.setAttribute("aria-pressed", S.todo ? "true" : "false");
     h.setAttribute("aria-disabled", n ? "false" : "true"); // 不用 disabled：按不了也要能看到悬停提示
-    h.title = n ? "归档已处理的 " + n + " 条（" + (scopeLabel() ? scopeLabel() + " · " : "") + "已读、不用再决定）" : "没有已处理的可以归档（已读、不用再决定的）";
+    h.title = n ? "归档已处理的…：选早于多久（" + (scopeLabel() ? scopeLabel() + " · " : "") + "共 " + n + " 条已读、不用再决定）" : "没有已处理的可以归档（已读、不用再决定的）";
     h.setAttribute("aria-label", h.title);
   }
   function setTodo(on) { // F 或点开关。正在看的这条留着（换到别的才走），勾选清掉（只作用在眼前这些）
@@ -571,12 +576,37 @@
     renderNav();
     renderList();
   }
-  function archiveHandled() { // 一键归档已处理的：不问，可以撤销（撤销只放回这一批）
-    var ids = handledIds();
+  // 按时间归档已处理的（像浏览器的"清除多久以前的记录"）：先选早于多久，每档写出条数，0 条的按不了；记住上次选的那档并高亮。
+  // 条数和真正归档的是同一份 id（打开菜单时算好），撤销恰好放回这一批
+  var AGES = [["1h", "早于 1 小时", 3600e3], ["24h", "早于 24 小时", 86400e3], ["7d", "早于 7 天", 7 * 86400e3], ["all", "全部", 0]];
+  function openHandledMenu(anchor) {
+    if (!handledIds().length) return toast("没有已处理的可以归档");
+    var last = load("handledAge", ""), sets = {};
+    var html = '<div class="menu-label">归档已处理的' + (scopeLabel() ? "（" + esc(scopeLabel()) + "）" : "") + " · 早于多久</div>" +
+      AGES.map(function (a) {
+        var ids = sets[a[0]] = handledIds(a[2]);
+        return (a[0] === "all" ? '<div class="menu-sep"></div>' : "") + '<button class="menu-item' + (a[0] === last ? " last" : "") + '" data-age="' + a[0] + '"' +
+          (ids.length ? "" : " disabled") + ' aria-label="' + a[1] + " · " + ids.length + ' 条">' + icon(a[0] === last ? "check" : "") + a[1] +
+          '<span class="sub">' + ids.length + " 条</span></button>";
+      }).join("") + '<div class="menu-label foot">按最后一次收到、回复或打开它的时间算；正在看的那条不动</div>';
+    openPopover(anchor, html, "", function (e) {
+      var b = e.target.closest("[data-age]");
+      if (!b || b.disabled) return;
+      closePopover();
+      save("handledAge", b.dataset.age);
+      var a = AGES.filter(function (x) { return x[0] === b.dataset.age; })[0];
+      archiveHandled(sets[a[0]], a[2] ? a[1] : "");
+      if (e.detail) $("list").focus(); // 鼠标点的：焦点交给列表（不然之后按 Enter 又打开了这个菜单）
+    });
+    var mine = last && !$("popover").hidden && $("popover").querySelector('[data-age="' + last + '"]:not([disabled])');
+    if (mine) mine.focus(); // 上次选的那档：回车就是它（仍然要先打开菜单再选，不偷偷替你选）
+  }
+  function archiveHandled(ids, what) { // 不问，可以撤销。只剔除这期间已经不在、不再是已处理的，和正在看的那条
+    ids = ids.filter(function (id) { var m = S.byId[id]; return m && !m.archived && !m.unread && !m.open && id !== S.current; });
     if (!ids.length) return toast("没有已处理的可以归档");
     dropUndo();
     act({ action: "archive", ids: ids, on: true }).then(function (n) {
-      toast(n ? "已归档 " + n + " 条" : "没有已处理的可以归档", n ? { undo: undoArchive(ids, true, []) } : null);
+      toast(n ? "已归档 " + n + " 条" + (what ? "（" + what + "）" : "") : "没有已处理的可以归档", n ? { undo: undoArchive(ids, true, []) } : null);
       return refreshNow(true);
     }).catch(function (e) { toast(e.message, { bad: true }); });
   }
@@ -690,7 +720,7 @@
     // 悬停按钮和勾选框不进 Tab 顺序（平时看不见；键盘有 U / R / E / Delete / X）
     var acts = '<span class="acts">' +
       '<button class="act" tabindex="-1" data-act="read" title="' + (m.unread ? "标为已读" : "标为未读") + '（U）">' + icon(m.unread ? "mailOpen" : "mail") + "</button>" +
-      (m.open || m.unread ? '<button class="act" tabindex="-1" data-act="resolve" title="标为已处理（R）">' + icon("check") + "</button>" : "") +
+      (m.open || m.unread ? '<button class="act" tabindex="-1" data-act="resolve" title="标为已处理 · 不通知会话（R）">' + icon("check") + "</button>" : "") +
       '<button class="act" tabindex="-1" data-act="archive" title="' + (m.archived ? "移出归档" : "归档") + '（E）">' + icon(m.archived ? "unarchive" : "archive") + "</button>" +
       '<button class="act danger" tabindex="-1" data-act="delete" title="删除（Delete）">' + icon("trash") + "</button></span>";
     return '<div class="' + cls + '" data-id="' + esc(m.id) + '" role="option" aria-selected="' + (m.id === S.current) + '">' +
@@ -872,7 +902,9 @@
     var deliv = m.delivered ? "已送达会话 · " + hhmm(m.delivered) : '<span class="undeliv">还没送达</span>';
     var hint = !m.delivered ? notYet(st) + (st === "gone" ? "：在同一个仓库开新会话时，可以用 desk.py inbox 找回。" : "。") : "";
     var html, what = r.resolved ? "没有选择选项，" : "没有作出选择，";
-    if (r.resolved || r.dismissed) {
+    if ((r.resolved || r.dismissed) && r.silent) { // 现在的标为已处理 / 跳过都不通知会话（省得叫醒它）；下面是以前通知过的旧记录
+      html = (r.resolved ? "<b>已标为已处理</b>" : "<b>已跳过</b>") + " · 没有通知会话" + (when ? " · " + when : "");
+    } else if (r.resolved || r.dismissed) {
       var head = (r.resolved ? "<b>已标为已处理</b> · " : "<b>已跳过</b> · ") + when;
       if (!known) html = head + "<div>" + what + (r.resolved ? "等待的会话已收到「已经处理好了」。" : "等待的会话已收到通知。") + "</div>";
       else if (st === "gone" && !m.delivered) html = head + "<div>" + what + "会话已经结束，不用再通知它。</div>"; // 收尾清理：不催用户去找回
@@ -1092,7 +1124,7 @@
     var m = S.byId[id];
     var marked = false;
     clearTimeout(readTimer);
-    if (m && m.unread && !opts.noRead) {
+    if (m && !opts.noRead) { // 读过的也告诉服务端"打开了"：按时间归档已处理的时，刚看过的不算旧
       if (opts.via === "key") readTimer = setTimeout(function () { if (markRead(id)) { renderRow(id); renderNav(); } }, 800); // j/k 扫过去不算读：停 0.8 秒才算
       else marked = markRead(id);
     }
@@ -1111,12 +1143,14 @@
     }
   }
   var readTimer = null;
-  function markRead(id) { // 乐观更新，再告诉服务端；已经换走了就不算
+  function markRead(id) { // 乐观更新，再告诉服务端；已经换走了就不算。返回是不是刚从未读变成已读
     var m = S.byId[id];
-    if (S.current !== id || !m || !m.unread) return false;
+    if (S.current !== id || !m) return false;
+    var was = m.unread;
     m.unread = false;
-    act({ action: "read", ids: [id] }).catch(function () {});
-    return true;
+    m.last_active = new Date().toISOString();
+    act({ action: "read", ids: [id], opened: true }).catch(function () {});
+    return !!was;
   }
   function cssEsc(s) { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'); }
   // ↑↓：有勾选时只挪光标，不丢勾选、不标已读；extend（Shift）= 从锚点连选到光标
@@ -1174,35 +1208,32 @@
   // ---------------------------------------------------------------- 操作
   function hasOpen(ids) { return ids.some(function (id) { return S.byId[id] && S.byId[id].open; }); }
 
+  // 归档：不问，可以撤销。待决定的一起归档 = 跳过（记一条跳过的回复，不通知会话），撤销时重新打开
   function doArchive(ids, on) {
     if (!ids.length) return;
     if (on == null) on = !ids.every(function (id) { return S.byId[id] && S.byId[id].archived; });
     var unread = ids.filter(isUnread); // 归档会顺手标已读：撤销时把它们改回未读
-    var go = function () {
-      // 先在本地改好、移走选中并重画，再发请求：长轮询比操作的回应先到也不会"看的是 A、键盘操作的是 B"
-      var cur = S.current, leaves = ids.indexOf(cur) >= 0 && (S.view !== "archive" ? on : !on);
-      var next = leaves ? nextAfter(ids) : cur;
-      ids.forEach(function (id) { if (S.byId[id]) S.byId[id].archived = on; });
-      S.multi.clear();
-      moveOn(ids, next);
-      dropUndo();
-      renderAll();
-      refocusList();
-      act({ action: "archive", ids: ids, on: on }).then(function () {
-        return refreshNow(true);
-      }).then(function () {
-        toast((on ? "已归档 " : "已移出归档 ") + ids.length + " 条", { undo: undoArchive(ids, on, unread) });
-      }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
-    };
-    if (on && hasOpen(ids)) {
-      confirmBox("归档还在等你决定的消息？", "等待中的会话会收到「用户跳过了这条决定」，然后继续往下走。", "归档并跳过").then(function (ok) { if (ok) go(); });
-    } else go();
+    var open = on ? ids.filter(function (id) { return S.byId[id] && S.byId[id].open; }) : [];
+    // 先在本地改好、移走选中并重画，再发请求：长轮询比操作的回应先到也不会"看的是 A、键盘操作的是 B"
+    var cur = S.current, leaves = ids.indexOf(cur) >= 0 && (S.view !== "archive" ? on : !on);
+    var next = leaves ? nextAfter(ids) : cur;
+    ids.forEach(function (id) { if (S.byId[id]) S.byId[id].archived = on; });
+    S.multi.clear();
+    moveOn(ids, next);
+    dropUndo();
+    renderAll();
+    refocusList();
+    act({ action: "archive", ids: ids, on: on }).then(function () {
+      return refreshNow(true);
+    }).then(function () {
+      toast((on ? "已归档 " : "已移出归档 ") + ids.length + " 条", { undo: undoArchive(ids, on, unread, open) });
+    }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
   }
 
   function doDelete(ids) {
     if (!ids.length) return;
     var text = "删除后不能恢复，会从收件箱文件里真正移除。" +
-      (hasOpen(ids) ? "\n其中有还在等你决定的消息：等待中的会话会收到「用户跳过了这条决定」。" : "");
+      (hasOpen(ids) ? "\n其中有还在等你决定的消息：删除不会通知会话。" : "");
     var one = ids.length === 1 && S.byId[ids[0]], t = one ? one.title : "";
     if (t.length > 40) t = t.slice(0, 40) + "…";
     confirmBox(ids.length > 1 ? "删除这 " + ids.length + " 条消息？" : one ? "删除「" + t + "」？" : "删除这条消息？", text, "删除", true).then(function (ok) {
@@ -1222,26 +1253,28 @@
     });
   }
 
-  // 标为已处理（R / ✓ / 批量栏 / 右键 / 决定卡片）：待决定的告诉等待的会话"已经处理好了"，其余的标为已读。
+  // 标为已处理（R / ✓ / 批量栏 / 右键 / 决定卡片）：不通知会话（用户多半已经在对话里说过，或者这件事不重要了；叫醒会话要花 token）。
+  // 待决定的记一条"已处理"的回复，其余的标为已读。不问，可以撤销（Z）。
   // 只看未处理时，标完的从列表里走掉（正在看的也一样，和归档一样换到下一条）
   function doResolve(ids) {
     if (!ids.length) return;
-    var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; }).length;
+    var open = ids.filter(function (id) { return S.byId[id] && S.byId[id].open; });
     var unread = ids.filter(isUnread), n = ids.filter(function (id) { return S.byId[id] && (S.byId[id].open || S.byId[id].unread); }).length;
     if (ids.indexOf(S.current) >= 0) clearTimeout(readTimer); // 撤销后停留计时不能再把它标回已读
     dropUndo();
     var next = todoOn() && ids.indexOf(S.current) >= 0 ? nextAfter(ids) : S.current;
+    var drafts = {}; // 决定上写了一半的回复：撤销后还在
+    open.forEach(function (id) { if (S.drafts[id] && !S.drafts[id].fu) drafts[id] = S.drafts[id]; });
     unread.forEach(function (id) { S.byId[id].unread = false; }); // 先在本地改好再发请求（和归档一样）
     S.multi.clear();
     moveOn(ids, next);
     renderAll();
     refocusList();
-    if (!open && !unread.length) return toast(ids.length > 1 ? "选中的都已经处理过了" : "这条已经处理过了");
-    var told = ids.filter(waiting).length; // 会话已经结束的不算"告诉了会话"
+    if (!open.length && !unread.length) return toast(ids.length > 1 ? "选中的都已经处理过了" : "这条已经处理过了");
     act({ action: "resolve", ids: ids }).then(function () {
       return refreshNow(true);
-    }).then(function () { // 已经发给会话的回复收不回来：有待决定的就不给撤销
-      toast("已标为已处理 " + n + " 条" + (told ? "，" + told + " 条待决定已告诉会话" : ""), open ? null : { undo: undoRead(unread, false) });
+    }).then(function () {
+      toast("已标为已处理 " + n + " 条", { undo: undoResolve(open, unread, drafts) });
     }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
   }
 
@@ -1273,11 +1306,22 @@
   function undoRead(ids, read) {
     return function () { act({ action: "read", ids: ids, read: read }).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); }); };
   }
-  function undoArchive(ids, on, unread) {
+  function undoArchive(ids, on, unread, open) { // open：归档时还在等你决定的（跳过了）：重新打开
     return function () {
       act({ action: "archive", ids: ids, on: !on }).then(function () {
+        return open && open.length ? act({ action: "unresolve", ids: open }) : null;
+      }).then(function () {
         return on && unread.length ? act({ action: "read", ids: unread, read: false }) : null;
-      }).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); });
+      }).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
+    };
+  }
+  // 标为已处理的撤销：待决定的重新打开（删掉刚记的那条已处理，它没通知过会话），没读过的改回未读，写了一半的回复放回去
+  function undoResolve(open, unread, drafts) {
+    return function () {
+      (open.length ? act({ action: "unresolve", ids: open }) : Promise.resolve()).then(function () {
+        Object.keys(drafts).forEach(function (id) { if (!S.drafts[id]) S.drafts[id] = drafts[id]; });
+        return unread.length ? act({ action: "read", ids: unread, read: false }) : null;
+      }).then(function () { return refreshNow(true); }).catch(function (e) { toast(e.message, { bad: true }); refreshNow(true); });
     };
   }
   var lastUndo = null; // 最近一个还能撤销的操作 { run, el }：跟着它的提示条，提示条没了就不能撤销了
@@ -1296,17 +1340,6 @@
     u.run();
     toast("已撤销");
   }
-  // R 键：牵涉待决定的会发给等待的会话、不能撤销，所以先确认；没有待决定的直接标（可以撤销）
-  function waiting(id) { var m = S.byId[id]; return !!m && m.open && m.session_state !== "gone"; } // 待决定、发它的会话还在
-  function askResolve(ids) {
-    if (!ids.length) return;
-    var open = ids.filter(waiting).length; // 会话已经结束的待决定：没人在等，标为已处理只是收起来，不用确认
-    if (!open) return doResolve(ids);
-    confirmBox(ids.length > 1 ? "把 " + ids.length + " 条标为已处理？" : "标为已处理？",
-      ids.length > 1 ? "其中 " + open + " 条待决定会告诉等待中的会话「已经处理好了」。" : "等待中的会话会收到「已经处理好了」，然后继续往下走。",
-      "标为已处理").then(function (ok) { if (ok) doResolve(ids); });
-  }
-
   // ---- 复制
   function markdownOf(d) {
     var out = "# " + d.title + "\n\n";
@@ -1705,7 +1738,7 @@
     });
     // 鼠标点的：焦点交给列表（不然之后按 Enter / 空格又按了一次这个按钮）
     $("todoBtn").addEventListener("click", function (e) { setTodo(!S.todo); if (e.detail) $("list").focus(); });
-    $("handledBtn").addEventListener("click", function (e) { archiveHandled(); if (e.detail) $("list").focus(); });
+    $("handledBtn").addEventListener("click", function () { openHandledMenu($("handledBtn")); }); // 焦点进菜单；选完了再交给列表
     $("empty").addEventListener("click", function (e) { if (e.target.closest("#startBtn")) nextDecision(1); });
     $("doneBox").addEventListener("click", function (e) { if (e.target.closest("[data-next]")) nextDecision(1); });
     $("nav").addEventListener("click", function (e) {
@@ -1768,7 +1801,7 @@
       if (!S.multi.has(id)) select(id, { noRead: true });
       var ids = targets(), m = S.byId[id];
       var html = '<button class="menu-item" data-m="read">' + icon(m.unread ? "mailOpen" : "mail") + (m.unread ? "标为已读" : "标为未读") + '<span class="sub">U</span></button>' +
-        (ids.some(function (x) { return S.byId[x] && (S.byId[x].open || S.byId[x].unread); }) ? '<button class="menu-item" data-m="resolve">' + icon("check") + '标为已处理<span class="sub">R</span></button>' : "") +
+        (ids.some(function (x) { return S.byId[x] && (S.byId[x].open || S.byId[x].unread); }) ? '<button class="menu-item" data-m="resolve" title="不通知会话：你已经在对话里说过，或者这件事不重要了">' + icon("check") + '标为已处理<span class="sub">R</span></button>' : "") +
         '<button class="menu-item" data-m="archive">' + icon(m.archived ? "unarchive" : "archive") + (m.archived ? "移出归档" : "归档") + '<span class="sub">E</span></button>' +
         '<div class="menu-sep"></div><button class="menu-item danger" data-m="delete">' + icon("trash") + "删除" + (ids.length > 1 ? " " + ids.length + " 条" : "") + '<span class="sub">Del</span></button>';
       var fake = { getBoundingClientRect: function () { return { left: e.clientX, right: e.clientX + 1, top: e.clientY, bottom: e.clientY }; } };
@@ -1805,14 +1838,14 @@
     $("listMenuBtn").addEventListener("click", function () {
       var scope = scopeLabel() ? "（" + esc(scopeLabel()) + "）" : "";
       var html = '<button class="menu-item" data-l="read_all">' + icon("checks") + "全部标为已读" + scope + "</button>" +
-        '<button class="menu-item" data-l="archive_handled">' + icon("archive") + "归档所有已处理的" + scope + "<span class=\"sub\">已读且不用决定</span></button>" +
+        '<button class="menu-item" data-l="archive_handled">' + icon("archive") + "归档已处理的" + scope + "…<span class=\"sub\">选早于多久</span></button>" +
         '<button class="menu-item" data-l="select_all">' + icon("check") + "全选当前列表<span class=\"sub\">Ctrl+A</span></button>";
       openPopover($("listMenuBtn"), html, "", function (e) {
         var b = e.target.closest("[data-l]");
         if (!b) return;
         closePopover();
         if (b.dataset.l === "select_all") return selectAll();
-        if (b.dataset.l === "archive_handled") return archiveHandled(); // 和搜索框右边的按钮同一条路
+        if (b.dataset.l === "archive_handled") return openHandledMenu($("listMenuBtn")); // 和搜索框右边的按钮同一个菜单
         var req = { action: "read", ids: S.msgs.filter(function (m) { return !m.archived && inScope(m) && m.unread; }).map(function (m) { return m.id; }) };
         dropUndo();
         act(req).then(function (n) {
@@ -1972,7 +2005,7 @@
     if (k === "e" || k === "E") { doArchive(targets()); return; }
     if (k === "Delete" || k === "#") { doDelete(targets()); return; }
     if (k === "u" || k === "U") { doToggleRead(targets()); return; }
-    if (k === "r" || k === "R") { askResolve(targets()); return; }
+    if (k === "r" || k === "R") { doResolve(targets()); return; } // 不问：不通知会话，可以撤销
     if (k === "f" || k === "F") { if (S.view === "archive") toast("归档里不分未处理"); else setTodo(!S.todo); return; }
     if ((k === "x" || k === "X") && S.current) { toggleCheck(S.current, e.shiftKey); return; }
     if (k === "c" || k === "C") { copy("md"); return; }

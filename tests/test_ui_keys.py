@@ -349,10 +349,15 @@ def test_z_and_ctrl_z_undo_archive_and_read(env):
     page.keyboard.press("z")
     page.wait_for_function(f"document.querySelectorAll('.item.unread').length === {len(unread)}")
 
-    # 归档所有已处理的 → Z
+    # 归档已处理的（菜单里选"全部"；正在看的那条不动）→ Z
+    cur = js(page, "deskTest.S.current")
+    handled = [i for i in ids if not store.is_unread(store.msgs[i]) and i != cur]
+    assert handled
     page.click("#listMenuBtn")
     page.click('[data-l="archive_handled"]')
-    page.wait_for_function(f"document.querySelectorAll('.item').length === {len(unread)}")
+    page.click('#popover [data-age="all"]')
+    page.wait_for_function(f"document.querySelectorAll('.item').length === {3 - len(handled)}")
+    assert store.archived == set(handled)
     page.keyboard.press("z")
     page.wait_for_function("document.querySelectorAll('.item').length === 3")
     assert not (set(ids) & store.archived)
@@ -386,7 +391,7 @@ def test_undo_toast_lasts_8s_and_pauses_on_hover(env):
     assert errors == []
 
 
-def test_r_asks_before_resolving(env):
+def test_r_resolves_without_asking_and_z_reopens(env):
     d, store, server, page, errors = env
     a = post(d, kind="decision", title="等你", options=["A", "B"])
     b = post(d, kind="answer", title="一个回答", body="x")
@@ -394,22 +399,23 @@ def test_r_asks_before_resolving(env):
     store.poll()
     start(page, server)
     opened(page, a)
-    page.keyboard.press("r")
-    page.wait_for_selector("#modal:not([hidden])")
-    assert page.inner_text("#modalTitle") == "标为已处理？"
-    assert page.inner_text("#modalText") == "等待中的会话会收到「已经处理好了」，然后继续往下走。"
-    assert page.inner_text("#modalOk") == "标为已处理"
-    page.wait_for_function("document.activeElement.id === 'modalOk'")
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(300)
-    assert resp(d, a) == []
-    page.keyboard.press("r")
-    page.wait_for_function("document.activeElement.id === 'modalOk'")
-    page.keyboard.press("Enter")
-    page.wait_for_function(f"() => !!document.querySelector('.item[data-id=\"{a}\"] .st.done')")
-    assert resp(d, a)[0]["resolved"] is True
+    page.keyboard.press("2")  # 选了一半
+    page.keyboard.press("r")  # 不问：不通知会话，可以撤销
+    page.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent === '已标为已处理 1 条撤销（Z）')")
+    assert js(page, "document.getElementById('modal').hidden")
+    assert resp(d, a)[0]["resolved"] is True and resp(d, a)[0]["silent"] is True
+    page.wait_for_selector("#doneBox:not([hidden])")
+    assert page.inner_text("#doneBox").startswith("已标为已处理 · 没有通知会话 · ")
+    page.keyboard.press("z")  # 决定重新打开，选了一半的还在
+    page.wait_for_selector("#decideFoot:not([hidden])")
+    page.wait_for_selector(f'.item[data-id="{a}"] .st.open')
+    assert resp(d, a) == [] and store.is_open(store.msgs[a]) and page.is_hidden("#doneBox")
+    assert js(page, f"deskTest.S.drafts['{a}'].idx") == 1
+    opened(page, b)
+    opened(page, a)  # 换走再回来：草稿照常恢复
+    assert js(page, "deskTest.S.choiceIdx") == 1
 
-    # 不是待决定的消息：R 不问，直接标为已处理（= 标为已读，可以撤销）
+    # 不是待决定的消息：R 直接标为已处理（= 标为已读，可以撤销）
     opened(page, b)
     page.keyboard.press("u")
     page.wait_for_function(f"() => !!document.querySelector('.item[data-id=\"{b}\"].unread')")

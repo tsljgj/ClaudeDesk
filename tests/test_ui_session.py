@@ -84,12 +84,12 @@ def test_decision_card_states_live_changes_and_list_tag(env):
         with desk.hold_marker(desk.session_marker("O", d), d, exclusive=True):  # 会话挂上 listen：不用重开就变
             wait_text(page, "#decideState", LISTENING)
         wait_text(page, "#decideState", OPEN)
-    # 会话已结束的：标为已处理最自然；完成框说不用再通知它
+    # 会话已结束的：标为已处理最自然；完成框说没有通知会话（标为已处理从来不通知）
     show(page, gone, "结束了的")
     page.focus("#list")
     page.keyboard.press("r")
     page.wait_for_selector("#doneBox:not([hidden])")
-    assert "已标为已处理" in page.inner_text("#doneBox") and "会话已经结束，不用再通知它" in page.inner_text("#doneBox")
+    assert page.inner_text("#doneBox").startswith("已标为已处理 · 没有通知会话 · ")
     page.wait_for_function(f"() => !document.querySelector('.item[data-id=\"{gone}\"] .row2').textContent.includes('会话已结束')")
     assert errors == []
 

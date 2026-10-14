@@ -50,7 +50,7 @@
           <button class="cb" id="checkAll" data-bulk="all" title="全选 / 全不选（Ctrl+A）"></button>
           <span class="bulk-count" id="bulkCount"></span>
           <div class="grow"></div>
-          <button class="primary" data-bulk="resolve" id="bulkResolve" title="待决定的告诉等待中的会话「已经处理好了」，其余的标为已读（R）">标为已处理</button>
+          <button class="primary" data-bulk="resolve" id="bulkResolve" title="不通知会话：待决定的直接关掉，其余的标为已读（R）">标为已处理</button>
           <button class="icon-btn" data-bulk="read" title="标为已读"><i data-icon="mailOpen"></i></button>
           <button class="icon-btn" data-bulk="archive" id="bulkArchive" title="归档"><i data-icon="archive"></i></button>
           <button class="icon-btn danger" data-bulk="delete" title="删除"><i data-icon="trash"></i></button>
@@ -97,7 +97,7 @@
           <div class="decide-foot" id="decideFoot">
             <span class="hint" id="decideHint">1–9 选择　Ctrl+Enter 提交</span>
             <div class="grow"></div>
-            <button class="ghost" id="resolveBtn" title="不选选项，直接告诉会话这件事已经处理好了（R）">标为已处理</button>
+            <button class="ghost" id="resolveBtn" title="不通知会话：你已经在对话里说过，或者这件事不重要了（R）">标为已处理</button>
             <button class="primary" id="submitBtn" disabled>提交</button>
           </div>
           <div class="reply-done" id="doneBox" hidden></div>
