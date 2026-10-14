@@ -107,7 +107,8 @@ def release(handle) -> None:
 
 
 def running_marker(pipe: str):
-    """开一个（不接受连接的）命名管道 \\\\.\\pipe\\<pipe>：desk.py post 靠列出管道名判断程序有没有在跑。"""
+    """开一个（不接受连接的）命名管道 \\\\.\\pipe\\<pipe>：desk.py post 靠列出管道名判断程序有没有在跑。
+    名字用 desk.pipe_name（带数据目录哈希）；同名管道还在（旧进程没退干净）时返回 None。"""
     if not WIN:
         return None
     PIPE_ACCESS_INBOUND, PIPE_REJECT_REMOTE = 0x1, 0x8

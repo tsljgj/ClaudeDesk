@@ -57,7 +57,8 @@ def data_dir(arg: str | None) -> Path:
 
 
 def instance_name(ddir: Path) -> str:
-    """和 desk.pipe_name 一致：默认数据目录用固定名，别的目录加哈希（测试实例可以和正式的同时开）。"""
+    """单实例互斥量的名字：默认数据目录用固定名，别的目录加哈希（测试实例可以和正式的同时开）。
+    这个名字不要改：自动更新时新旧两版靠它互斥。"程序在运行"标记管道用的是 desk.pipe_name（带数据目录哈希）。"""
     base = "ClaudeDesk-" + (os.environ.get("USERNAME") or os.environ.get("USER") or "user")
     if ddir.resolve() == (app_dir() / "data").resolve():
         return base
@@ -99,6 +100,31 @@ def sync_cli() -> None:
             log.info("desk.py updated next to the exe")
     except OSError as e:
         log.warning("could not write desk.py: %s", e)
+
+
+def hold_marker(pipe: str) -> list:
+    """开"程序在运行"标记管道（desk.py post 靠它判断有没有程序在看这个数据目录），返回装着句柄的列表，退出时关掉。
+    更新后旧进程的同名管道可能还没关：开不了就在后台每 0.25 秒重试，最多 15 秒。"""
+    held: list = []
+    if not winapi.WIN:
+        return held
+    h = winapi.running_marker(pipe)
+    if h is not None:
+        held.append(h)
+        return held
+
+    def retry():
+        for _ in range(60):
+            time.sleep(0.25)
+            h = winapi.running_marker(pipe)
+            if h is not None:
+                held.append(h)
+                log.info("marker pipe %s created after retry", pipe)
+                return
+        log.warning("could not create marker pipe %s", pipe)
+
+    threading.Thread(target=retry, name="marker", daemon=True).start()
+    return held
 
 
 # ------------------------------------------------------------------ 单实例交接
@@ -765,6 +791,8 @@ def _poll_loop(store: Store, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
             store.poll()
+            if store.compact_if_due() is False:  # 删掉的消息还在 inbox.jsonl 里（上次没压缩成，或启动时发现）
+                log.warning("inbox compaction failed, will retry later")
         except Exception:  # noqa: BLE001
             log.exception("poll failed")
         stop.wait(1.0)
@@ -805,7 +833,7 @@ def main(argv=None) -> int:
             return 0
         winapi.message_box("ClaudeDesk 已经在运行，但没有响应。\n请在任务管理器里结束 ClaudeDesk.exe 后再打开。")
         return 1
-    marker = winapi.running_marker(name)  # noqa: F841 - 句柄要一直开着
+    markers = hold_marker(desk.pipe_name(ddir))  # 句柄要一直开着
 
     sync_cli()
     if winapi.WIN and FROZEN:
@@ -847,6 +875,8 @@ def main(argv=None) -> int:
         stop.set()
         store.save_state()
         clear_instance(ddir)
+        for h in markers:  # 先关标记管道再放互斥量：更新后的新进程拿到互斥量时就能开同名管道
+            winapi.release(h)
         winapi.release(lock)
     return rc
 

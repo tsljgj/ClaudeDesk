@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -20,6 +21,7 @@ import desk
 KINDS = desk.KINDS
 DISMISS_TEXT = "（用户在 ClaudeDesk 里移除了这条决定，没有作出选择）"
 RESOLVE_TEXT = "（用户在 ClaudeDesk 里把这条标为已解决：已经处理好了，不需要你再按选项做什么）"
+COMPACT_RETRY_FIRST, COMPACT_RETRY_MAX = 5.0, 300.0  # 压缩失败后重试的间隔：5 秒起，每次翻倍，最长 5 分钟
 
 
 def _now() -> dt.datetime:
@@ -106,6 +108,9 @@ class Store:
         self._loaded = False
         self._dirty = False
         self._save_at = 0.0
+        self._save_lock = threading.Lock()  # 几个线程同时存盘：按顺序写，最后落盘的一定是最新的
+        self._compact_fails = 0  # 压缩连续失败次数，决定下次重试的间隔
+        self._compact_at = 0.0  # 不早于这个时刻（monotonic）再试
         self.on_arrived: list[Callable[[list[dict]], None]] = []  # 新到、还没通知过的消息
         self.on_changed: list[Callable[[], None]] = []
 
@@ -119,25 +124,26 @@ class Store:
             return {}
 
     def save_state(self) -> None:
-        with self.lock:
-            if not self._loaded:
-                return
-            present = set(self.msgs)
-            self.state["version"] = 2
-            self.state["read"] = sorted(self.read & present)
-            self.state["notified"] = sorted(self.notified & present)
-            self.state["archived"] = sorted(self.archived & present)
-            self.state["deleted"] = sorted(self.deleted & present)  # 压缩成功后自然清掉
-            self.state["aliases"] = dict(self.aliases)
-            data = json.dumps(self.state, ensure_ascii=False, indent=1)
-            self._dirty = False
-        tmp = self.state_path.with_name(self.state_path.name + ".tmp")
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write(data)
-            _retry(lambda: os.replace(tmp, self.state_path))
-        except OSError:
-            pass
+        with self._save_lock:  # 拍快照和写盘一起排队：不会两个线程同写一个 .tmp，也不会旧快照盖掉新的
+            with self.lock:
+                if not self._loaded:
+                    return
+                present = set(self.msgs)
+                self.state["version"] = 2
+                self.state["read"] = sorted(self.read & present)
+                self.state["notified"] = sorted(self.notified & present)
+                self.state["archived"] = sorted(self.archived & present)
+                self.state["deleted"] = sorted(self.deleted & present)  # 压缩成功后自然清掉
+                self.state["aliases"] = dict(self.aliases)
+                data = json.dumps(self.state, ensure_ascii=False, indent=1)
+                self._dirty = False
+            tmp = self.state_path.with_name(self.state_path.name + ".tmp")
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(data)
+                _retry(lambda: os.replace(tmp, self.state_path))
+            except OSError:
+                pass
 
     def schedule_save(self) -> None:
         self._dirty = True
@@ -184,12 +190,17 @@ class Store:
             st = os.stat(path)
         except FileNotFoundError:
             return [], (None, 0), off != 0
+        except PermissionError:
+            return [], pos, False
         reset = (ino is not None and st.st_ino != ino) or st.st_size < off
         if reset:
             off = 0
         if st.st_size == off:
             return [], (st.st_ino, off), reset
-        recs, off2 = desk.read_jsonl(path, off)
+        try:
+            recs, off2 = desk.read_jsonl(path, off, retry=0.2)
+        except PermissionError:  # 文件正被换掉（压缩）或被别人独占：这一轮当没有新内容，位置不动，下轮再读
+            return [], pos, False
         return recs, (st.st_ino, off2), reset
 
     def poll(self) -> None:
@@ -202,7 +213,10 @@ class Store:
                 self._repos.clear()
                 changed = True
             for r in recs:
-                m = normalize(r)
+                try:
+                    m = normalize(r)
+                except Exception:  # noqa: BLE001 - 格式不对的记录跳过；位置已经往后挪了，不能让它连累后面的
+                    continue
                 if m["id"] in self.msgs:
                     continue
                 self.msgs[m["id"]] = m
@@ -467,41 +481,67 @@ class Store:
 
     def compact(self) -> bool:
         """把已删除的消息从 inbox.jsonl 里真正去掉（在 data/.lock 锁内整份重写）。
-        失败（例如文件正被别的进程打开）没关系：state.json 里的删除标记照样让它们不显示，下次再试。"""
+        失败（例如文件正被别的进程打开）没关系：state.json 里的删除标记照样让它们不显示；
+        轮询线程会用 compact_if_due() 过一阵再试，间隔越拉越长。data/.lock 只拿一小会儿，免得 desk.py post 卡住。"""
         with self.lock:
             dead = set(self.deleted)
         if not dead:
             return True
+        tmp = self.inbox_path.with_name(self.inbox_path.name + ".compact")
+        dropped = 0
         try:
-            with desk.file_lock(self.ddir):
+            with desk.file_lock(self.ddir, timeout=2.0):
                 raw = self.inbox_path.read_bytes() if self.inbox_path.exists() else b""
-                keep, dropped = [], 0
+                keep = []
                 for line in raw.splitlines(keepends=True):
                     s = line.strip()
                     if s:
                         try:
                             rec = json.loads(s.decode("utf-8-sig"))
-                        except (UnicodeDecodeError, json.JSONDecodeError):
-                            rec = None
-                        if isinstance(rec, dict) and normalize(rec)["id"] in dead:
+                            mid = normalize(rec)["id"] if isinstance(rec, dict) else None
+                        except Exception:  # noqa: BLE001 - 坏行、格式不对的记录原样保留
+                            mid = None
+                        if mid in dead:
                             dropped += 1
                             continue
                     keep.append(line if line.endswith(b"\n") else line + b"\n")
-                if not dropped:
-                    return True
-                tmp = self.inbox_path.with_name(self.inbox_path.name + ".compact")
-                with open(tmp, "wb") as f:
-                    f.write(b"".join(keep))
-                    f.flush()
-                    os.fsync(f.fileno())
-                _retry(lambda: os.replace(tmp, self.inbox_path))
+                if dropped:
+                    with open(tmp, "wb") as f:
+                        f.write(b"".join(keep))
+                        f.flush()
+                        os.fsync(f.fileno())
+                    _retry(lambda: os.replace(tmp, self.inbox_path), attempts=5, delay=0.05)
         except (OSError, TimeoutError):
+            with self.lock:
+                self._compact_fails += 1
+                self._compact_at = time.monotonic() + min(COMPACT_RETRY_MAX,
+                                                          COMPACT_RETRY_FIRST * 2 ** (self._compact_fails - 1))
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
             return False
-        self.poll()  # 文件号变了：整份重读，删掉的就不在 msgs 里了
+        with self.lock:
+            self._compact_fails = 0
+            if not dropped:  # 文件里已经没有了（例如别的线程刚压缩完）：内存里也不留，免得 compact_if_due 一直来
+                for mid in dead:
+                    self.msgs.pop(mid, None)
+        if dropped:
+            try:
+                self.poll()  # 文件号变了：整份重读，删掉的就不在 msgs 里了
+            except OSError:
+                pass  # 轮询线程下一轮会读
         return True
 
-    def submit(self, mid: str, choice: str | None, text: str) -> dict:
-        """写回复；已回复过的抛 FileExistsError。"""
+    def compact_if_due(self) -> bool | None:
+        """轮询线程每轮调用：还有删掉了却仍在 inbox.jsonl 里的消息（上次压缩失败，或者启动时发现的），
+        而且到了重试时间，就再压缩一次。没做返回 None。"""
+        with self.lock:
+            due = bool(self.deleted & set(self.msgs)) and time.monotonic() >= self._compact_at
+        return self.compact() if due else None
+
+    def submit(self, mid: str, choice: str | None, text: str, choice_index=None) -> dict:
+        """写回复；已回复过的抛 FileExistsError。
+        choice_index（从 1 开始）是界面上点的第几个选项：有它就按它记（两个选项同名时也不会记错），
+        并且要和 choice 对得上；旧界面只发 choice，就按名字找第一个。"""
         with self.lock:
             m = self.msgs.get(mid)
             if m is None:
@@ -509,8 +549,17 @@ class Store:
             if mid in self.responses:
                 raise FileExistsError("这条已经回复过了")
             extra = {"title": m["title"]}
-            if choice is not None:
-                labels = [o["label"] for o in m["options"]]
+            labels = [o["label"] for o in m["options"]]
+            if choice_index is not None:
+                s = str(choice_index).strip()
+                if isinstance(choice_index, bool) or not s.isdecimal() or not 1 <= int(s) <= len(labels):
+                    raise ValueError(f"没有第 {choice_index} 个选项")
+                idx = int(s)
+                if choice is not None and choice != labels[idx - 1]:
+                    raise ValueError(f"第 {idx} 个选项是「{labels[idx - 1]}」，和提交的「{choice}」对不上，请重新选择")
+                choice = labels[idx - 1]
+                extra["choice_index"] = idx
+            elif choice is not None:
                 if choice not in labels:
                     raise ValueError("没有这个选项")
                 extra["choice_index"] = labels.index(choice) + 1
@@ -522,7 +571,10 @@ class Store:
             self.schedule_save()
             self._bump()
         self._emit_changed()
-        self.poll()
+        try:
+            self.poll()
+        except OSError:  # 回复已经写好了：这里读不到不能让界面以为提交失败
+            pass
         return rec
 
 

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import secrets
 import sys
@@ -30,6 +31,8 @@ SETTINGS = {  # 界面设置：键 -> 允许的值
     "density": ("cozy", "compact"),
 }
 SETTING_DEFAULTS = {"theme": "system", "accent": "ember", "font": "sans", "size": "m", "density": "cozy"}
+GONE = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)  # 客户端自己断开了（长轮询被放弃、页面刷新）
+log = logging.getLogger("claudedesk")
 
 
 def assets_dir() -> Path:
@@ -37,8 +40,28 @@ def assets_dir() -> Path:
     return base / "assets"
 
 
+def asset_index(root: Path) -> dict[str, Path]:
+    """启动时列一遍 assets/ 下的文件：相对路径（/ 分隔）-> 文件。请求只按这张表查，
+    请求里的路径从不直接交给文件系统（否则 /assets/%5C%5Chost%5Cshare 这种 UNC 路径会让 Windows 先去连那台机器的 SMB）。"""
+    try:
+        return {p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}
+    except OSError:
+        return {}
+
+
 class ActionError(Exception):
     pass
+
+
+class _HTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        """默认实现把 traceback 打到 stderr：有控制台时满屏噪音，打包的 exe 里又什么都看不到。
+        客户端断开的不用管；别的错误写进 claudedesk.log。"""
+        if isinstance(sys.exc_info()[1], GONE):
+            return
+        log.exception("http handler error (client %s)", client_address)
 
 
 class DeskServer:
@@ -47,11 +70,11 @@ class DeskServer:
         self.token = secrets.token_urlsafe(24)
         self.extra_actions: dict[str, Callable[[dict], object]] = {}  # 托盘程序注册的动作（导出 PDF、更新…）
         self.meta: dict = {"build": BUILD, "version": __version__, "update": None, "app": False}
-        self.httpd = ThreadingHTTPServer((host, port), self._handler())
-        self.httpd.daemon_threads = True
+        self.httpd = _HTTPServer((host, port), self._handler())
         self.host = host
         self.port = self.httpd.server_address[1]
         self.assets = assets_dir()
+        self.asset_files = asset_index(self.assets)
 
     @property
     def url(self) -> str:
@@ -106,8 +129,9 @@ class DeskServer:
         if name == "delete":
             return st.delete(ids)
         if name == "reply":
-            try:
-                return st.submit(str(body.get("id")), body.get("choice"), str(body.get("text") or ""))
+            try:  # choice_index：界面上点的第几个（从 1 开始）；旧界面不发
+                return st.submit(str(body.get("id")), body.get("choice"), str(body.get("text") or ""),
+                                 body.get("choice_index"))
             except (KeyError, ValueError, FileExistsError) as e:
                 raise ActionError(str(e).strip("'\"")) from None
         if name == "settings":
@@ -127,6 +151,7 @@ class DeskServer:
             protocol_version = "HTTP/1.1"
 
             def _send(self, code: int, body: bytes, ctype: str, cache: bool = False):
+                self._started = True
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
@@ -146,9 +171,8 @@ class DeskServer:
                 return secrets.compare_digest(self.headers.get(TOKEN_HEADER, ""), server.token)
 
             def _static(self, rel: str):
-                root = server.assets.resolve()
-                p = (root / unquote(rel)).resolve()
-                if root not in p.parents or not p.is_file():
+                p = server.asset_files.get(unquote(rel))
+                if p is None:
                     return self._send(404, b"not found", "text/plain")
                 ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
                 if p.suffix == ".woff2":
@@ -159,7 +183,26 @@ class DeskServer:
                     ctype = "text/css; charset=utf-8"
                 self._send(200, p.read_bytes(), ctype, cache="/vendor/" in "/" + rel)
 
+            def _guard(self, fn) -> None:
+                """处理函数出错：写日志，回 500 JSON（界面能显示原因），而不是直接断开连接。"""
+                self._started = False
+                try:
+                    fn()
+                except GONE:
+                    raise  # 交给 _HTTPServer.handle_error 安静地处理
+                except Exception as e:  # noqa: BLE001
+                    log.exception("%s %s failed", self.command, urlsplit(self.path).path)
+                    self.close_connection = True
+                    if not self._started:  # 已经开始回了就不能再回一次
+                        self._json(500, {"ok": False, "error": type(e).__name__, "message": f"{type(e).__name__}: {e}"})
+
             def do_GET(self):
+                self._guard(self._get)
+
+            def do_POST(self):
+                self._guard(self._post)
+
+            def _get(self):
                 if not self._host_ok():
                     return self._send(403, b"bad host", "text/plain")
                 parts = urlsplit(self.path)
@@ -178,8 +221,8 @@ class DeskServer:
                     return self._json(401, {"error": "missing token"})
                 q = parse_qs(parts.query)
                 if path == "/api/state":
-                    since = int((q.get("since") or ["-1"])[0] or -1)
-                    wait = min(float((q.get("wait") or ["0"])[0] or 0), 30.0)
+                    since = _num(q, "since", int, -1)
+                    wait = min(_num(q, "wait", float, 0.0), 30.0)
                     if wait > 0 and since >= 0:
                         server.store.wait_change(since, wait)
                     return self._json(200, server.snapshot())
@@ -190,15 +233,22 @@ class DeskServer:
                     return self._json(200, {"ids": server.store.search((q.get("q") or [""])[0])})
                 self._send(404, b"not found", "text/plain")
 
-            def do_POST(self):
+            def _post(self):
                 if not self._host_ok():
                     return self._send(403, b"bad host", "text/plain")
                 if not self._authed():
                     return self._json(401, {"error": "missing token"})
                 if urlsplit(self.path).path != "/api/action":
                     return self._send(404, b"not found", "text/plain")
-                length = int(self.headers.get("Content-Length") or 0)
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = -1
+                if length < 0:
+                    self.close_connection = True
+                    return self._json(400, {"ok": False, "message": "Content-Length 不对"})
                 if length > MAX_BODY:
+                    self.close_connection = True  # 没读的正文还在连接里：不能再复用
                     return self._json(413, {"ok": False, "message": "请求太大"})
                 try:
                     body = json.loads(self.rfile.read(length) or b"{}")
@@ -215,3 +265,12 @@ class DeskServer:
                 pass
 
         return Handler
+
+
+def _num(q: dict, key: str, cast, default):
+    """查询参数转数字；写错了（since=abc、wait=nan）按默认值。"""
+    try:
+        v = cast((q.get(key) or [""])[0])
+    except ValueError:
+        return default
+    return v if v == v else default  # NaN 不等于自己
