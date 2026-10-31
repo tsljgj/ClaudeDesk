@@ -100,3 +100,26 @@ def discover(dirs: list[Path] | None = None, cache: dict[str, str | None] | None
             if cache[cwd]:
                 names.add(cache[cwd])
     return names
+
+
+def session_repos(sessions, cache: dict[str, str | None] | None = None) -> dict[str, str]:
+    """会话 -> 它开在哪个 git 仓库（按会话记录里的启动目录，见 desk.session_root）。认不出的不放进来。
+    以前的 desk.py 按 Bash 的当前目录认仓库：Agent cd 到别处发的消息会多出一个标签，界面按这个改回会话自己的仓库。
+    cache：会话 -> 仓库名（启动目录不会变，跨次复用）；会话记录还没找到的不记，下次再找。"""
+    cache = {} if cache is None else cache
+    out: dict[str, str] = {}
+    for s in sessions:
+        if s not in cache:
+            root = desk.session_root(s)
+            if not root:
+                continue
+            name = None
+            try:
+                if Path(root).is_dir():
+                    name = desk.detect_repo(root)
+            except OSError:
+                name = None
+            cache[s] = name
+        if cache[s]:
+            out[s] = cache[s]
+    return out

@@ -138,6 +138,7 @@ class Store:
                 self.read_at[str(k)] = t
         self._repos: dict[str, str] = {}  # 消息里见过的仓库名：规范化名 -> 原名
         self._discovered: dict[str, str] = {}  # 从 Claude Code 会话记录里找到的项目名
+        self._session_repos: dict[str, str] = {}  # 会话 -> 它开在哪个仓库（会话记录里的启动目录）：消息按它归类
         self._loaded = False
         self._dirty = False
         self._save_at = 0.0
@@ -450,8 +451,9 @@ class Store:
     def project_info(self, m: dict) -> tuple[str, str, str]:
         """(项目名, 类型, 归类键)。类型 repo = 认得出是哪个仓库；other = 没认出来（旧消息的来源对不上任何仓库）。
         归类键是用户"合并到…"时用的名字（合并前的名字）。"""
-        if m["repo"]:
-            name, kind = m["repo"], "repo"
+        repo = self._session_repos.get(m["session"]) if m["session"] else None
+        if repo or m["repo"]:  # 会话自己的仓库优先：以前的 desk.py 在 Agent cd 到别处时会记成别的名字
+            name, kind = repo or m["repo"], "repo"
         else:
             raw = m["_legacy"]
             hit = self._match_repo(raw)
@@ -469,7 +471,7 @@ class Store:
     def _match_repo(self, raw: str) -> str | None:
         """旧消息的来源名对到已知仓库：完全一样；或来源是"仓库名-后缀"（取最长的那个）；
         或来源是某个仓库名的唯一前缀（acme-data 对 acme-data-pipeline）。"""
-        known = {**self._discovered, **self._repos}
+        known = {**self._discovered, **{norm_name(v): v for v in self._session_repos.values()}, **self._repos}
         n = norm_name(raw)
         if not n:
             return None
@@ -488,6 +490,20 @@ class Store:
             if d == self._discovered:
                 return
             self._discovered = d
+            self._bump()
+        self._emit_changed()
+
+    def sessions(self) -> set[str]:
+        with self.lock:
+            return {m["session"] for m in self.msgs.values() if m["session"]}
+
+    def set_session_repos(self, repos: dict[str, str]) -> None:
+        """后台按会话记录认出来的"会话 -> 仓库"（见 projects.session_repos）。"""
+        d = {str(k): str(v) for k, v in repos.items() if k and v}
+        with self.lock:
+            if d == self._session_repos:
+                return
+            self._session_repos = d
             self._bump()
         self._emit_changed()
 

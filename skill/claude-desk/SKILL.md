@@ -6,7 +6,7 @@ description: 通过桌面程序 ClaudeDesk 和用户沟通。需要用户拍板�
 # ClaudeDesk 速查
 
 命令里的 `desk` = `python C:/path/to/ClaudeDesk/desk.py`（安装时换成真的 Python 3.10+ 和 desk.py 路径）。
-desk.py 自己记下当前会话和仓库，不用给 `--source`。正文用文件或 `--body-from-chat`，不要把多行 Markdown 塞进命令行；不写凭据。
+desk.py 自己记下当前会话和它开在哪个仓库（cd 到别处也不变），不要给 `--source`、`--repo`。正文用文件或 `--body-from-chat`，不要把多行 Markdown 塞进命令行；不写凭据。
 
 ## 什么时候发什么
 - 要用户决定 → `decision`。一律用它，不用 AskUserQuestion。
