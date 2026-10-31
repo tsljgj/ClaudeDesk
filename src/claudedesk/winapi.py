@@ -271,6 +271,57 @@ def message_box(text: str, title: str = "ClaudeDesk", yes_no: bool = False) -> b
     return r == IDYES if yes_no else True
 
 
+def idle_seconds() -> float | None:
+    """离上次动键盘鼠标过了多少秒（手机推送"离开电脑才推"用）。不是 Windows 返回 None（不知道）。"""
+    if not WIN:
+        return None
+    from ctypes import wintypes
+
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    info = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
+    if not _u32.GetLastInputInfo(ctypes.byref(info)):
+        return None
+    now = ctypes.WinDLL("kernel32").GetTickCount() & 0xFFFFFFFF
+    return ((now - info.dwTime) & 0xFFFFFFFF) / 1000.0  # 两个都是 32 位毫秒计数，49 天绕一圈
+
+
+def clipboard_text() -> str:
+    """剪贴板里的文字（界面右键菜单的"粘贴"用：网页里读剪贴板要权限，WebView2 每次都会弹窗问）。没有文字返回空串。"""
+    if not WIN:
+        return ""
+    import time
+    from ctypes import wintypes
+
+    u32, k32 = ctypes.WinDLL("user32", use_last_error=True), ctypes.WinDLL("kernel32", use_last_error=True)
+    u32.OpenClipboard.argtypes = [wintypes.HWND]
+    u32.GetClipboardData.restype = wintypes.HANDLE
+    u32.GetClipboardData.argtypes = [wintypes.UINT]
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    for _ in range(10):  # 别的程序正开着剪贴板：等一下再试
+        if u32.OpenClipboard(None):
+            break
+        time.sleep(0.03)
+    else:
+        raise OSError("剪贴板正被别的程序占用")
+    try:
+        h = u32.GetClipboardData(13)  # CF_UNICODETEXT
+        if not h:
+            return ""
+        p = k32.GlobalLock(h)
+        if not p:
+            return ""
+        try:
+            return ctypes.wstring_at(p)
+        finally:
+            k32.GlobalUnlock(h)
+    finally:
+        u32.CloseClipboard()
+
+
 def open_path(path) -> None:
     p = str(path)
     if WIN:

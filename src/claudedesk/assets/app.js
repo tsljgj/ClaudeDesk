@@ -39,6 +39,12 @@
     eyeOff: '<path d="M10.7 5.1A10.7 10.7 0 0 1 21.9 11.7a1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.2-4.2"/><path d="M17.5 17.5a10.8 10.8 0 0 1-15.4-5.2 1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.4-5.1"/><path d="m2 2 20 20"/>',
     filter: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
     archiveDone: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="m9 14.5 2 2 4-4"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    scissors: '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
+    paste: '<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+    selectAll: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M21 19a2 2 0 0 1-2 2M5 21a2 2 0 0 1-2-2M9 3h1M9 21h1M14 3h1M14 21h1M3 9v1M21 9v1M3 14v1M21 14v1"/>',
+    phone: '<rect width="14" height="20" x="5" y="2" rx="2.5"/><path d="M12 18h.01"/>',
   };
   function icon(name, cls) {
     return '<i data-icon class="' + (cls || "") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg></i>";
@@ -125,7 +131,7 @@
     S.counts = st.counts || {};
     S.meta = st.meta || {};
     S.aliases = st.aliases || {};
-    if (st.settings) applySettings(st.settings);
+    if (st.settings) applySettings(BOOT.remote ? Object.assign({}, st.settings, localPrefs()) : st.settings); // 手机上叠加手机自己的外观
     S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
     if (S.current && !S.byId[S.current]) S.current = null;
     // 缓存瘦身：删掉的消息不留详情；已经有回复的不留决定的草稿（追问的草稿 fu 留着：回复过的决定才能追问）
@@ -133,6 +139,7 @@
     Object.keys(S.drafts).forEach(function (id) { if (!S.allById[id] || (S.allById[id].answered && !S.drafts[id].fu)) delete S.drafts[id]; });
     var arr = first ? null : arrivals(old);
     if (S.query) runSearch(); else renderAll();
+    if (first) setTimeout(openFromHash, 0); // 手机上点推送通知打开的：#m=<id>
     if (!arr) return;
     var hot = arr.hot, L = $("list").getBoundingClientRect(), covered = narrow() && S.current; // 窄窗口在看一条：阅读页盖住了列表
     arr.lit.forEach(function (id) { // 在这个视图里、但滚出了屏幕（或被盖住）：也算没看见
@@ -166,6 +173,13 @@
     return { hot: hot, lit: lit };
   }
 
+  function localPrefs() { try { return JSON.parse(load("prefs", "{}")) || {}; } catch (e) { return {}; } }
+  function openFromHash() {
+    var m = /^#m=([^&]+)/.exec(location.hash || "");
+    if (!m) return;
+    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { /* 老浏览器 */ }
+    window.deskOpen(decodeURIComponent(m[1]));
+  }
   function applySettings(s) {
     S.settings = s;
     var d = document.documentElement;
@@ -871,7 +885,7 @@
     renderEyebrow(S.byId[d.id] || d);
     $("title").textContent = d.title;
     $("question").hidden = !d.question;
-    $("questionText").textContent = d.question || "";
+    $("questionText").innerHTML = MD.linkText(d.question || ""); // 原问题里的网址也能点
     renderBody(d);
     renderDecision(d, newMsg);
     renderFollowup(d, newMsg);
@@ -912,7 +926,7 @@
         '<span class="num">' + (chosen ? icon("check") : i + 1) + "</span>" +
         '<span class="txt"><span class="lab">' + esc(o.label) +
         (d.recommended === i + 1 ? '<span class="rec">推荐</span>' : "") + "</span>" +
-        (o.description ? '<span class="desc">' + esc(o.description) + "</span>" : "") + "</span></button>";
+        (o.description ? '<span class="desc">' + MD.linkText(o.description) + "</span>" : "") + "</span></button>";
     }).join("");
     opts.hidden = !(d.options || []).length;
     var ta = $("replyText");
@@ -952,9 +966,9 @@
       if (!known) html = head + "<div>" + what + (r.resolved ? "等待的会话已收到「已经处理好了」。" : "等待的会话已收到通知。") + "</div>";
       else if (st === "gone" && !m.delivered) html = head + "<div>" + what + "会话已经结束，不用再通知它。</div>"; // 收尾清理：不催用户去找回
       else html = head + " · " + deliv + "<div>" + what + (r.resolved ? "告诉会话「已经处理好了」。" : "告诉会话这条跳过了。") + hint + "</div>";
-    } else if (r.closed_by === "claude") html = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
+    } else if (r.closed_by === "claude") html = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + MD.linkText(r.text) + "</div>" : "");
     else html = "<b>已提交</b> · " + (when ? when + " · " : "") + (known ? deliv : "会话已收到") + // 选了哪项看上面打了 ✓ 的那项，不再重复
-      (known && hint ? '<div class="deliv-hint">' + hint + "</div>" : "") + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
+      (known && hint ? '<div class="deliv-hint">' + hint + "</div>" : "") + (r.text ? '<div class="reply-text">' + MD.linkText(r.text) + "</div>" : "");
     // 还有别的待决定：给个按钮过去，但不自动跳（列表和阅读区不突然变）
     if (queue().some(function (x) { return x.id !== d.id; })) html += '<button class="ghost next-dec" data-next>下一条待决定 →（N）</button>';
     done.className = "reply-done" + (r.dismissed ? " skip" : "");
@@ -1072,7 +1086,7 @@
     // 配不上追问的回应单独一行，按时间插进去
     var rows = (d.followups || []).map(function (f, i) {
       return { ts: f.ts, i: i, html: '<div class="fu-item"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
-        '<div class="fu-q">' + esc(f.text) + "</div>" + (f.reply ? link(f.reply) :
+        '<div class="fu-q">' + MD.linkText(f.text) + "</div>" + (f.reply ? link(f.reply) :
         '<div class="fu-wait" data-fid="' + esc(f.id) + '">' + fuWait(d, f) + "</div>") + "</div>" };
     }).concat((d.replies || []).filter(function (r) { return !r.paired; }).map(function (r, i) { return { ts: r.ts, i: 1e6 + i, html: link(r) }; }));
     rows.sort(function (a, b) { return (new Date(b.ts) - new Date(a.ts)) || b.i - a.i; }); // 同一毫秒的：后来的在上
@@ -1713,6 +1727,11 @@
         '<button class="menu-item" data-app="check_update">' + icon("refresh") + "检查更新<span class=\"sub\">" + (BOOT.build ? "build " + BOOT.build : "源码运行") + "</span></button>" +
         '<button class="menu-item" data-app="open_data">' + icon("folder") + "打开数据目录</button>";
     }
+    var rm = S.meta.remote;
+    if (rm && !BOOT.remote) {
+      h += (BOOT.app ? "" : '<div class="menu-sep"></div>') + '<button class="menu-item" data-app="remote">' + icon("phone") + "手机访问<span class=\"sub\">" +
+        (rm.running ? "已开" + (rm.push ? " · 推送" : "") : rm.on ? "没开成" : "关") + "</span></button>";
+    }
     var al = Object.keys(S.aliases || {});
     if (al.length) {
       h += '<div class="menu-sep"></div><div class="set-row"><div class="menu-label">项目归类（点 × 拆出来）</div></div>' + al.map(function (k) {
@@ -1744,7 +1763,8 @@
         var vals = {}; vals[b.dataset.set] = b.dataset.val;
         var s = Object.assign({}, S.settings, vals);
         applySettings(s);
-        act({ action: "settings", values: vals }).catch(function () {});
+        if (BOOT.remote) save("prefs", JSON.stringify(Object.assign(localPrefs(), vals))); // 手机上改的只管手机
+        else act({ action: "settings", values: vals }).catch(function () {});
         repaintSettings();
         var cd = currentDetail(); // 字号变了，公式重排：只重画正文，选项和没写完的回复不动
         if (cd && shownId() === cd.id) renderBody(cd);
@@ -1758,6 +1778,7 @@
       }
       var a = b.dataset.app;
       if (a === "shortcuts") { closePopover(); return showShortcuts(); }
+      if (a === "remote") { closePopover(); return openRemote(); }
       if (a === "autostart" || a === "auto_update") {
         act({ action: a, on: !S.meta[a] }).then(function (r) {
           S.meta[a] = !!r;
@@ -1774,6 +1795,126 @@
       if (a === "open_data") { act({ action: "open_data" }); closePopover(); }
     });
   }
+  // 大对话框（快捷键表、手机访问）：只有一个"好的 / 完成"按钮
+  function showSheet(title, html, ok, onClose) {
+    $("modalTitle").textContent = title;
+    $("modal").firstElementChild.classList.add("sheet");
+    $("modalText").innerHTML = html;
+    $("modalOk").textContent = ok || "好的";
+    $("modalOk").className = "primary";
+    $("modalCancel").hidden = true;
+    modalBack = document.activeElement;
+    $("modal").hidden = false;
+    setTimeout(function () { $("modalOk").focus(); }, 0);
+    modalResolve = function () { $("modalCancel").hidden = false; if (onClose) onClose(); };
+  }
+
+  // ---- 手机访问：把这里发布成一个网页，手机浏览器打开（见 remote.py）
+  var RP = null, rpLink = 0; // 面板开着时：最新的状态 / 选着的是第几个地址
+  var RP_KIND = { tailscale: "Tailscale", lan: "局域网", other: "其他网络" };
+  var DETAIL = [["full", "标题和摘要"], ["title", "只有标题"], ["none", "不带内容"]];
+  function openRemote() {
+    RP = null; rpLink = 0;
+    showSheet("手机访问", '<div class="remote-panel" id="remotePanel"><p class="rp-note">正在找这台电脑的网络地址…</p></div>', "完成", function () { RP = null; });
+    remoteAct({ op: "status" });
+  }
+  function remoteAct(body) {
+    return act(Object.assign({ action: "remote" }, body)).then(function (st) {
+      if ($("modal").hidden || !$("remotePanel")) return st;
+      RP = st; renderRemote(); return st;
+    }).catch(function (e) { toast(e.message, { bad: true }); if (RP) renderRemote(); });
+  }
+  function rpSwitch(key, on, label, sub) {
+    return '<button class="toggle-row rp-toggle" data-rp="' + key + '" aria-pressed="' + !!on + '"><span>' + label +
+      (sub ? '<span class="rp-sub">' + sub + "</span>" : "") + '</span><span class="switch' + (on ? " on" : "") + '"></span></button>';
+  }
+  function renderRemote() {
+    var box = $("remotePanel");
+    if (!box || !RP) return;
+    var h = rpSwitch("enable", RP.on, "开启手机访问", "手机浏览器打开链接，就是这个收件箱：能看、能回复决定、能追问") +
+      '<p class="rp-note">内容一直在这台电脑上，不经过别的服务器。电脑要开着、ClaudeDesk 要在运行。</p>';
+    if (RP.on && RP.error) h += '<p class="rp-error">' + esc(RP.error) + "</p>";
+    if (RP.running && !RP.links.length) h += '<p class="rp-error">没找到这台电脑的网络地址：连上网络后点"重新查找"。</p>';
+    if (RP.running && RP.links.length) {
+      if (rpLink >= RP.links.length) rpLink = 0;
+      var L = RP.links[rpLink];
+      h += '<div class="seg rp-links">' + RP.links.map(function (x, i) {
+        return '<button data-rp-link="' + i + '" class="' + (i === rpLink ? "on" : "") + '" aria-pressed="' + (i === rpLink) + '">' +
+          esc(RP_KIND[x.kind] || x.kind) + (RP.links.filter(function (y) { return y.kind === x.kind; }).length > 1 ? " · " + esc(x.host) : "") + "</button>";
+      }).join("") + "</div>" +
+        '<div class="rp-link"><div class="rp-qr">' + L.qr + '</div><div class="rp-info">' +
+        '<div class="rp-url" title="手机扫左边的二维码，或者把这个链接发到自己手机上">' + esc(L.url) + "</div>" +
+        '<div class="rp-actions"><button class="ghost" data-rp="copy">' + icon("copy") + "复制链接</button>" +
+        '<button class="ghost" data-rp="refresh">' + icon("refresh") + "重新查找</button></div>" +
+        '<p class="rp-hint">' + (L.kind === "tailscale" ? "手机装了 Tailscale、登录同一个账号：在哪都能打开（4G / 5G 也行），流量是加密的。"
+          : L.kind === "lan" ? "手机和电脑连同一个 Wi-Fi 时能打开。这个地址不加密：只在自己家、信得过的网络里用。"
+          : "这个地址不加密，一般用不上：优先用 Tailscale 或局域网地址。") + "</p></div></div>";
+      if (!RP.tailscale) {
+        h += '<p class="rp-note">在外面也想用：电脑和手机都装上 <a href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Tailscale</a>（免费），' +
+          '登录同一个账号，再点"重新查找"，这里会多出一个 Tailscale 地址。</p>';
+      }
+      h += '<p class="rp-note">扫码打开后，在手机浏览器里"添加到主屏幕"，以后点图标就能看。链接就是钥匙，别发给别人。' +
+        (BOOT.platform === "win32" ? "第一次用时 Windows 防火墙会问要不要让 ClaudeDesk 联网，选允许（专用网络）。" : "") + "</p>" +
+        '<div class="rp-row"><button class="ghost" data-rp="new_key">换一个链接</button><span class="rp-sub">旧链接和已经打开过的手机都会失效</span></div>';
+    }
+    if (RP.on) {
+      h += '<div class="rp-row"><span class="rp-sub">端口</span><input id="rpPort" class="rp-port" inputmode="numeric" value="' + esc(String(RP.port)) +
+        '" aria-label="端口"><button class="ghost" data-rp="port">改端口</button></div>';
+    }
+    var P = RP.push || {};
+    h += '<div class="menu-sep"></div>' + rpSwitch("push", P.on, "新消息推送到手机", "通过 ntfy 推送通知，点开就是那条消息");
+    if (P.on) {
+      h += '<p class="rp-note">手机上装 ntfy（App Store / Google Play 搜 “ntfy”），订阅下面这个主题。主题名就是密码，别外传。</p>' +
+        '<div class="rp-row"><code class="rp-topic">' + esc(P.topic) + '</code><button class="ghost" data-rp="copy_topic">' + icon("copy") + "复制主题</button>" +
+        (P.subscribe ? '<a class="rp-sub" href="' + esc(P.subscribe) + '" target="_blank" rel="noopener noreferrer">网页版</a>' : "") + "</div>" +
+        '<div class="rp-row"><span class="rp-sub">通知里带</span><div class="seg rp-detail">' + DETAIL.map(function (d) {
+          return '<button data-rp-detail="' + d[0] + '" class="' + (P.detail === d[0] ? "on" : "") + '" aria-pressed="' + (P.detail === d[0]) + '">' + d[1] + "</button>";
+        }).join("") + "</div></div>" +
+        '<p class="rp-note">' + (P.detail === "full" ? "标题和正文开头一小段会经过 ntfy 的服务器。" : P.detail === "title" ? "只有标题和项目名经过 ntfy 的服务器，正文不发出去。" : "只说有几条新消息，不带标题和正文。") +
+        (RP.running ? "" : "开了手机访问，点通知才能直接打开那条。") + "</p>" +
+        (P.idle_known ? rpSwitch("away", P.away, "离开电脑 5 分钟以上才推", "人在电脑前时看托盘通知就够了") : "") +
+        '<div class="rp-row"><button class="ghost" data-rp="push_test">发一条测试</button>' + (P.error ? '<span class="rp-error">' + esc(P.error) + "</span>" : "") + "</div>";
+    }
+    var a = document.activeElement, sel = null; // 重画后焦点留在同一个按钮 / 输入框上
+    if (a && box.contains(a)) {
+      sel = a.id ? "#" + a.id : a.dataset.rp ? '[data-rp="' + a.dataset.rp + '"]' : a.dataset.rpLink != null ? '[data-rp-link="' + a.dataset.rpLink + '"]' :
+        a.dataset.rpDetail ? '[data-rp-detail="' + a.dataset.rpDetail + '"]' : null;
+    }
+    box.innerHTML = h;
+    var b = sel && box.querySelector(sel);
+    if (b) b.focus();
+  }
+  function remoteClick(e) {
+    var b = e.target.closest("[data-rp],[data-rp-link],[data-rp-detail]");
+    if (!b || !RP) return;
+    if (b.dataset.rpLink != null) { rpLink = +b.dataset.rpLink; return renderRemote(); }
+    if (b.dataset.rpDetail) return remoteAct({ op: "push", detail: b.dataset.rpDetail });
+    var k = b.dataset.rp, L = RP.links && RP.links[rpLink];
+    if (k === "enable") return remoteAct({ op: "enable", on: !RP.on });
+    if (k === "push") return remoteAct({ op: "push", on: !(RP.push && RP.push.on) });
+    if (k === "away") return remoteAct({ op: "push", away: !RP.push.away });
+    if (k === "refresh") return remoteAct({ op: "status" });
+    if (k === "port") return remoteAct({ op: "port", port: $("rpPort").value.trim() });
+    if (k === "copy" && L) return writeClipboard(L.url).then(function () { toast("已复制链接：发到自己手机上打开"); });
+    if (k === "copy_topic") return writeClipboard(RP.push.topic).then(function () { toast("已复制主题"); });
+    if (k === "push_test") return remoteAct({ op: "push_test" }).then(function (st) { if (st) toast("已发出：手机上应该马上收到"); });
+    if (k === "new_key") {
+      return confirmLayer("换一个链接？", "旧链接、已经打开过的手机都会失效，要用新链接（新二维码）重新打开。", "换一个", function () { remoteAct({ op: "new_key" }); });
+    }
+  }
+  // 面板开着时再问一句：问完回到面板（共用一个对话框）
+  function confirmLayer(title, text, ok, run) {
+    var keep = { title: $("modalTitle").textContent, html: $("modalText").innerHTML };
+    modalResolve = null;
+    $("modalCancel").hidden = false;
+    $("modal").firstElementChild.classList.remove("sheet");
+    confirmBox(title, text, ok, true).then(function (yes) {
+      showSheet(keep.title, keep.html, "完成", function () { RP = null; });
+      renderRemote();
+      if (yes) run();
+    });
+  }
+
   function showShortcuts() { // 分四组、宽时两栏；只列键盘（鼠标操作看悬停提示）
     var groups = [["浏览", [["↑ ↓ / J K", "上一条 / 下一条"], ["N / Shift + N", "下一条 / 上一条待决定"], ["Shift + ↑ ↓", "连续勾选"],
         ["/", "搜索"], ["[ ]", "切换项目"], ["F", "只看未处理（开 / 关）"], ["Esc", "退一层"]]],
@@ -1960,6 +2101,7 @@
       searchFirst();
     });
     $("options").addEventListener("click", function (e) {
+      if (e.target.closest("a[href]")) return; // 选项说明里的链接：打开它，不算选这一项
       var b = e.target.closest(".opt");
       if (b && !b.disabled) pick(+b.dataset.idx);
     });
@@ -1997,6 +2139,8 @@
       act({ action: "install_update" }).then(function (r) { toast(r || "正在更新…"); refreshNow(); })
         .catch(function (e) { toast(e.message, { bad: true }); });
     });
+    $("modalText").addEventListener("click", remoteClick);
+    $("modalText").addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.id === "rpPort") { e.preventDefault(); e.stopPropagation(); remoteAct({ op: "port", port: e.target.value.trim() }); } });
     $("modalOk").addEventListener("click", function () { closeModal(true); });
     $("modalCancel").addEventListener("click", function () { closeModal(false); });
     $("modal").addEventListener("click", function (e) { if (e.target === $("modal")) closeModal(false); });
@@ -2012,6 +2156,21 @@
         setTimeout(function () { b.textContent = "复制"; b.classList.remove("ok"); }, 1400);
       });
     });
+    // 链接一律在系统浏览器里打开。桌面程序里交给本机程序去开（窗口里 target=_blank 靠的是 pywebview，版本不同不一定靠得住）
+    document.addEventListener("click", function (e) {
+      var u = linkOf(e.target);
+      if (!u || e.defaultPrevented || !BOOT.app) return;
+      e.preventDefault();
+      openUrl(u);
+    });
+    document.addEventListener("auxclick", function (e) { // 中键点链接：也是在浏览器里打开
+      var u = e.button === 1 && linkOf(e.target);
+      if (!u || !BOOT.app) return;
+      e.preventDefault();
+      openUrl(u);
+    });
+    document.addEventListener("contextmenu", ctxMenu);
+    window.addEventListener("hashchange", openFromHash); // 页面开着时又点了一条推送通知
     document.addEventListener("mousedown", function (e) {
       var p = $("popover");
       if (!p.hidden && !p.contains(e.target) && !(popOwner && popOwner.contains && popOwner.contains(e.target))) closePopover();
@@ -2022,6 +2181,96 @@
     document.addEventListener("keydown", onKey);
     window.addEventListener("beforeprint", function () { var d = currentDetail(); if (d && !$("printRoot").firstChild) preparePrint(d); });
     window.addEventListener("afterprint", function () { $("printRoot").innerHTML = ""; });
+  }
+
+  // 能在浏览器里打开的链接（网页、邮件）：返回完整网址；别的（本机相对链接已在 markdown.js 里换成文字）返回 null
+  function linkOf(el) {
+    var a = el && el.closest && el.closest("a[href]");
+    return a && /^(https?:|mailto:)/i.test(a.getAttribute("href")) ? a.href : null;
+  }
+  function openUrl(u) {
+    if (!BOOT.app) { window.open(u, "_blank", "noopener"); return; }
+    act({ action: "open_url", url: u }).catch(function (e) { toast("打不开链接：" + e.message, { bad: true }); });
+  }
+
+  // ---- 右键菜单。桌面程序里 WebView2 自带的右键菜单被 pywebview 关掉了（只有调试模式才有），这里补上常用的几项；
+  // 列表行、标签有自己的菜单（它们先 preventDefault）；浏览器、手机里用它们自己的菜单
+  function ctxMenu(e) {
+    if (!BOOT.app || e.defaultPrevented || !e.target.closest) return;
+    var t = e.target, field = t.closest("textarea, input"), sel = window.getSelection(), text = "", rich = "";
+    if (field && !/^(text|search|url|email|)$/i.test(field.getAttribute("type") || "")) field = null;
+    var ss = field ? field.selectionStart || 0 : 0, se = field ? field.selectionEnd || 0 : 0;
+    if (field) text = field.value.slice(ss, se);
+    else if (sel && !sel.isCollapsed && String(sel).trim()) { // 选中的文字连格式一起记下（点菜单时焦点会动）
+      text = String(sel);
+      var div = document.createElement("div");
+      for (var i = 0; i < sel.rangeCount; i++) div.appendChild(sel.getRangeAt(i).cloneContents());
+      div.querySelectorAll(".code-copy").forEach(function (b) { b.remove(); });
+      rich = '<meta charset="utf-8">' + div.innerHTML;
+    }
+    var link = !field && linkOf(t), code = !field && t.closest(".codeblock"), reading = !field && t.closest("#detail") && currentDetail();
+    var it = [];
+    if (field) {
+      it.push(["cut", "scissors", "剪切", "Ctrl+X", !text || field.readOnly], ["copy", "copy", "复制", "Ctrl+C", !text],
+        ["paste", "paste", "粘贴", "Ctrl+V", field.readOnly], ["sep"], ["field_all", "selectAll", "全选", "Ctrl+A", !field.value]);
+    } else {
+      if (link) it.push(["open", "external", "在浏览器中打开"], ["copy_link", "link", "复制链接地址"], ["sep"]);
+      if (text) it.push(["copy", "copy", "复制", "Ctrl+C"]);
+      if (code) it.push(["copy_code", "copy", "复制这段代码"]);
+      if (reading) it.push(["sep"], ["copy_md", "copy", "复制整条（Markdown）", "C"], ["read_all", "selectAll", "全选正文"]);
+    }
+    var tidy = []; // 分隔线不放在头尾、不连着两条
+    it.forEach(function (x) { if (x[0] !== "sep" || (tidy.length && tidy[tidy.length - 1][0] !== "sep")) tidy.push(x); });
+    while (tidy.length && tidy[tidy.length - 1][0] === "sep") tidy.pop();
+    it = tidy;
+    if (!it.length) return;
+    e.preventDefault();
+    var prev = document.activeElement, x = e.clientX, y = e.clientY;
+    if (!x && !y) { var r = t.getBoundingClientRect(); x = r.left + 8; y = r.bottom; } // Shift+F10 / 菜单键：贴着元素
+    var back = function () { // 菜单关掉后焦点回原处；输入框里连选区一起
+      if (field) { field.focus(); field.setSelectionRange(ss, se); }
+      else if (prev && prev !== document.body && prev.focus && document.contains(prev)) prev.focus();
+    };
+    var anchor = { focus: back, getBoundingClientRect: function () { return { left: x, right: x + 1, top: y, bottom: y }; } };
+    var html = it.map(function (x) {
+      return x[0] === "sep" ? '<div class="menu-sep"></div>' : '<button class="menu-item" data-ctx="' + x[0] + '"' + (x[4] ? " disabled" : "") + ">" +
+        icon(x[1]) + x[2] + (x[3] ? '<span class="sub">' + x[3] + "</span>" : "") + "</button>";
+    }).join("");
+    openPopover(anchor, html, "ctx", function (ev) {
+      var b = ev.target.closest("[data-ctx]");
+      if (!b || b.disabled) return;
+      closePopover();
+      ctxDo(b.dataset.ctx, { field: field, ss: ss, se: se, text: text, rich: rich, link: link, code: code });
+    });
+  }
+  function ctxDo(what, c) {
+    var copied = function (p, msg) { p.then(function () { if (msg) toast(msg); }).catch(function (e) { toast("复制失败：" + e.message, { bad: true }); }); };
+    var put = function (s) { // 换掉输入框里选中的部分（能撤销，和自己打字一样触发 input）
+      c.field.focus();
+      c.field.setSelectionRange(c.ss, c.se);
+      if (!document.execCommand("insertText", false, s)) {
+        c.field.setRangeText(s, c.ss, c.se, "end");
+        c.field.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    };
+    if (what === "open") return openUrl(c.link);
+    if (what === "copy_link") return copied(writeClipboard(c.link), "已复制链接");
+    if (what === "copy_code") return copied(writeClipboard(c.code.querySelector("code").innerText), "已复制代码");
+    if (what === "copy_md") return copy("md");
+    if (what === "read_all") {
+      var r = document.createRange(), sel = window.getSelection();
+      r.selectNodeContents($("article"));
+      sel.removeAllRanges(); sel.addRange(r);
+      return;
+    }
+    if (what === "copy") return copied(writeClipboard(c.text, c.rich || null));
+    if (what === "cut") return writeClipboard(c.text).then(function () { put(""); }).catch(function (e) { toast("剪切失败：" + e.message, { bad: true }); });
+    if (what === "field_all") { c.field.focus(); c.field.select(); return; }
+    if (what === "paste") {
+      act({ action: "clipboard_text" }).then(function (s) {
+        if (s) put(String(s)); else { c.field.focus(); toast("剪贴板里没有文字"); }
+      }).catch(function (e) { c.field.focus(); toast("粘贴失败：" + e.message, { bad: true }); });
+    }
   }
 
   function selectAll() {
