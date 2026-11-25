@@ -1,4 +1,4 @@
-"""程序图标（Pillow 画）：渐变圆角方块里一个白色的 "C"，开口处一个圆点——像一条刚到的消息。
+"""程序图标（Pillow 画）：纯色圆角方块里一个粗的白色 "C"，开口处一个圆点——像一条刚到的消息。
 
 托盘图标按状态变化：右下角红底白字的未读数（白边隔开底色）；有待决定但都看过时右上角一个红点；
 需要你马上处理时（未读的待决定 / 紧急消息）底色在橙色和墨黑之间闪。
@@ -11,23 +11,12 @@ import math
 
 from PIL import Image, ImageDraw, ImageFont
 
-ACCENT_A = (255, 138, 61)   # 渐变起点（左上）
-ACCENT_B = (238, 59, 22)    # 渐变终点（右下）
+ACCENT = (242, 84, 27)      # 底色：和界面默认强调色（ember，#F2541B）一样
 INK = (22, 22, 28)
 WHITE = (255, 255, 255)
 BADGE = (232, 17, 35)       # 角标红（Windows 的通知红）
 SS = 4  # 超采样倍数：先画大再缩小，边缘更平滑（小字也是：16px 下直接画的字被 hinting 扭得变形）
 DOT = "•"  # 角标"没有未读但有待决定"
-
-
-def _gradient(size: int, a, b) -> Image.Image:
-    g = Image.new("RGBA", (size, size))
-    px = g.load()
-    for y in range(size):
-        for x in range(size):
-            t = (x + y) / (2 * (size - 1) or 1)
-            px[x, y] = tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3)) + (255,)
-    return g
 
 
 def _font(px: int, bold: bool = False):
@@ -96,25 +85,21 @@ def render(size: int = 64, count: int = 0, alert: bool = False, pending: bool = 
     radius = int(S * (0.24 if size >= 32 else 0.2))
     mask = Image.new("L", (S, S), 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, S - 1, S - 1), radius=radius, fill=255)
-    if alert:
-        base = Image.new("RGBA", (S, S), INK + (255,))
-    else:
-        base = _gradient(64, ACCENT_A, ACCENT_B).resize((S, S), Image.BILINEAR)
-    im.paste(base, (0, 0), mask)
+    im.paste(Image.new("RGBA", (S, S), (INK if alert else ACCENT) + (255,)), (0, 0), mask)
 
     d = ImageDraw.Draw(im)
-    # "C"：开口朝右的粗圆弧
+    # "C"：开口朝右的粗圆弧，和开口处的圆点一起在方块里居中
     shift = S * 0.10 if count > 0 else 0.0
-    cx, cy = S * 0.45 - shift, S * 0.5 - shift
-    r = S * 0.25
-    w = max(2 * SS, int(S * 0.13))
-    d.arc((cx - r, cy - r, cx + r, cy + r), start=55, end=305, fill=WHITE, width=w)
-    for ang in (55, 305):  # 圆头
+    cx, cy = S * 0.44 - shift, S * 0.5 - shift
+    r = S * 0.24
+    w = max(2 * SS, int(S * 0.145))
+    d.arc((cx - r, cy - r, cx + r, cy + r), start=48, end=312, fill=WHITE, width=w)
+    for ang in (48, 312):  # 圆头
         a = math.radians(ang)
         ex, ey = cx + (r - w / 2) * math.cos(a), cy + (r - w / 2) * math.sin(a)
         d.ellipse((ex - w / 2, ey - w / 2, ex + w / 2, ey + w / 2), fill=WHITE)
-    dot = S * 0.075
-    dx = cx + r * 1.02
+    dot = S * 0.088
+    dx = cx + r * 1.08
     d.ellipse((dx - dot, cy - dot, dx + dot, cy + dot), fill=(255, 220, 200) if alert else WHITE)
 
     ring = max(SS, S / 16)
