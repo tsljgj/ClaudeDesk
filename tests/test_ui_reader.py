@@ -6,7 +6,7 @@ import desk
 from test_ui import env, post  # noqa: F401  （env 是 fixture）
 
 # 阅读区里看得见的几块，从上到下
-ORDER = "() => [...document.getElementById('scroller').children].filter(e => !e.hidden).map(e => e.id)"
+ORDER = "() => [...document.getElementById('scroller').children].filter(e => !e.hidden && e.id !== 'jump').map(e => e.id)"  # 回到顶部 / 底部的按钮不是内容
 TOPS = "ids => ids.map(id => document.getElementById(id).getBoundingClientRect().top)"
 HEIGHT = "() => document.getElementById('fuText').getBoundingClientRect().height"
 RULE = "() => getComputedStyle(document.getElementById('article'), '::before').content"

@@ -819,7 +819,9 @@ a.rp-sub { text-decoration: underline; text-underline-offset: 3px; }
 .detail[data-kind="decision"] .article .md h2 { border-bottom: 0; padding-bottom: 0; }
 
 /* 提示块 > [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION] */
-.md blockquote.callout { --c: var(--ink-3); --c-soft: var(--surface-2); color: var(--ink); background: var(--c-soft); border-left-color: var(--c); }
+/* 默认颜色放在低一档的选择器上，后面每种提示块才盖得住 */
+.md .callout { --c: var(--ink-3); --c-soft: var(--surface-2); }
+.md blockquote.callout { color: var(--ink); background: var(--c-soft); border-left-color: var(--c); }
 .md .callout-title { margin: 0 0 .3em; font: 650 .86em/1.5 var(--font-ui); letter-spacing: .02em; color: var(--c); }
 .md .callout-title:last-child { margin-bottom: 0; }
 .md .callout-note { --c: var(--ink-2); }

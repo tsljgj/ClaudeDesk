@@ -499,7 +499,7 @@ def test_menus_and_settings_work_from_the_keyboard(env):
     for s in ["浏览", "整理", "设置", "撤销", "连续勾选", "退一层", "下一条 / 上一条待决定", "打开 / 写补充说明", "标为已处理", "只看未处理（开 / 关）", "Ctrl + A"]:
         assert s in sheet, s
     keys = js(page, "[...document.querySelectorAll('#modalText .kbd-table > span:nth-child(odd)')].map(e => e.textContent)")
-    assert len(keys) == 21 and len(set(keys)) == 21
+    assert len(keys) == 24 and len(set(keys)) == 24
     assert js(page, "[...document.querySelectorAll('#modalText kbd')].some(k => k.textContent === '/')")  # "/" 单独一个键也画成按键
     page.keyboard.press("Enter")
     page.wait_for_selector("#modal", state="hidden")
