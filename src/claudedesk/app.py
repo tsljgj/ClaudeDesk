@@ -32,7 +32,7 @@ import desk  # noqa: E402
 
 from . import __version__, update, winapi  # noqa: E402
 from ._build import BUILD  # noqa: E402
-from .server import TOKEN_HEADER, DeskServer, external_url  # noqa: E402
+from .server import TOKEN_HEADER, ActionError, DeskServer, external_url  # noqa: E402
 from .store import Store, plain_summary  # noqa: E402
 
 APP = "ClaudeDesk"
@@ -239,8 +239,49 @@ class TrayApp:
         ea["check_update"] = lambda body: self.check_updates(manual=True, install=False)
         ea["install_update"] = lambda body: self.check_updates(manual=True, install=True)
         ea["quit"] = lambda body: (threading.Timer(0.2, self.quit).start(), "ok")[1]
+        ea["claude_code"] = self.claude_code
         server.meta.update(app=True, autostart=winapi.autostart_enabled(), auto_update=self.auto_update,
                            notify_sound=self.notify_sound)
+        threading.Thread(target=self._claude_code_status, daemon=True).start()  # 读 ~/.claude/settings.json：别挡启动
+
+    # ------------------------------------------------------------ 接入 Claude Code（skill + 兜底 hooks）
+    def _desk_cli(self) -> tuple[Path, Path | None]:
+        """Claude 会话该调的 desk.py，和要不要带 --data（程序用的不是它旁边的 data/ 时才带）。"""
+        dp = app_dir() / "desk.py" if FROZEN else Path(desk.__file__).resolve()
+        try:
+            same = self.ddir.resolve() == (dp.parent / "data").resolve()
+        except OSError:
+            same = False
+        return dp, None if same else self.ddir
+
+    def _claude_code_status(self, python: str | None = None) -> dict:
+        dp, data = self._desk_cli()
+        st = desk.setup_status()
+        st["desk"] = str(dp).replace("\\", "/")
+        st["manual"] = f"{desk.desk_command(python or 'python', dp, data)} setup"
+        st["current"] = bool(st.get("ok") and st.get("command") and st["desk"] in st["command"])  # 装的指向这份 desk.py
+        self.server.meta["claude_code"] = st
+        return st
+
+    def claude_code(self, body: dict) -> dict:
+        """设置里的"接入 Claude Code"：op = status / install / remove。"""
+        op = str(body.get("op") or "status")
+        if op not in ("status", "install", "remove"):
+            raise ActionError(f"未知操作 {op!r}")
+        py = None
+        if op != "status":
+            dp, data = self._desk_cli()
+            if op == "install":
+                py = desk.find_python()
+                if not py:
+                    raise ActionError("没找到 Python 3.10 以上：先装 Python（安装时勾上 Add to PATH），"
+                                      "或设环境变量 CLAUDEDESK_PYTHON 指向 python.exe，再点一次")
+            try:
+                desk.setup_claude(py or "python", dp, data=data, remove=op == "remove")
+            except desk.SetupError as e:
+                raise ActionError(str(e)) from None
+            log.info("claude code %s (python=%s)", op, py)
+        return self._claude_code_status(py)
 
     # ------------------------------------------------------------ 链接
     def open_url(self, body: dict) -> bool:

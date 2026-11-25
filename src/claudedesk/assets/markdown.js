@@ -200,6 +200,26 @@
     return true;
   }
 
+  // ---------------------------------------------------------------- 提示块：> [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]
+  // GitHub 的写法；agent 常用它标"注意 / 风险"。引用块第一行是标记就整块换成带标题的彩色提示框
+  var CALLOUT = { note: "说明", tip: "提示", important: "重要", warning: "注意", caution: "警告" };
+  var CALLOUT_RE = /^\[!(note|tip|important|warning|caution)\][ \t]*(?:\n|$)/i;
+  function callouts(state) {
+    var t = state.tokens;
+    for (var i = 0; i + 3 < t.length; i++) {
+      if (t[i].type !== "blockquote_open" || t[i + 1].type !== "paragraph_open" || t[i + 2].type !== "inline") continue;
+      var inl = t[i + 2], m = CALLOUT_RE.exec(inl.content);
+      if (!m) continue;
+      t[i].meta = t[i].meta || {};
+      t[i].meta.callout = m[1].toLowerCase();
+      var rest = inl.content.slice(m[0].length);
+      inl.content = rest;
+      inl.children = [];
+      if (rest.trim()) state.md.inline.parse(rest, state.md, state.env, inl.children);
+      else { t[i + 1].hidden = true; t[i + 3].hidden = true; } // 标记单独一行：不留空段落
+    }
+  }
+
   // ---------------------------------------------------------------- 任务列表 [ ] / [x]
   function taskLists(state) {
     var tokens = state.tokens;
@@ -262,6 +282,12 @@
     md.inline.ruler.before("escape", "math_inline", mathInline);
     md.block.ruler.after("blockquote", "math_block", mathBlock, { alt: ["paragraph", "reference", "blockquote", "list"] });
     md.core.ruler.after("inline", "task_lists", taskLists);
+    md.core.ruler.after("inline", "callouts", callouts);
+    md.renderer.rules.blockquote_open = function (tokens, idx, options, env, self) {
+      var c = tokens[idx].meta && tokens[idx].meta.callout;
+      if (!c) return self.renderToken(tokens, idx, options);
+      return '<blockquote class="callout callout-' + c + '"><p class="callout-title">' + CALLOUT[c] + "</p>\n";
+    };
     md.renderer.rules.math_inline = function (tokens, idx) {
       return mathTag(tokens[idx].content, !!(tokens[idx].meta && tokens[idx].meta.display));
     };
@@ -313,7 +339,7 @@
   // 正文里的原始 HTML 不能跳出正文：style 只留排版用的几项（position、z-index、inset、transform 能盖住整个界面），
   // class 只留本文件自己生成的（否则 class="modal-back" 之类会套上界面自己的浮层样式）
   var STYLE_OK = /^(text-align|vertical-align|color|background-color|font-weight|font-style|text-decoration(-[a-z]+)?|white-space|(min-|max-)?(width|height))$/;
-  var CLASS_OK = /^(math|math-inline|math-display|codeblock|code-head|code-lang|hljs|hljs-[\w-]+|language-[\w+#.-]+|[\w-]+_|task|done|task-item|table-wrap)$/;
+  var CLASS_OK = /^(math|math-inline|math-display|codeblock|code-head|code-lang|hljs|hljs-[\w-]+|language-[\w+#.-]+|[\w-]+_|task|done|task-item|table-wrap|callout|callout-(?:note|tip|important|warning|caution|title))$/;
   function cleanAttr(node, data) {
     var kept;
     if (data.attrName === "style") {

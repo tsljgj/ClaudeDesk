@@ -9,6 +9,11 @@
 
   // ---------------------------------------------------------------- 图标（线性，24 网格）
   var ICONS = {
+    plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+    toTop: '<path d="M5 3h14"/><path d="m18 13-6-6-6 6"/><path d="M12 7v14"/>',
+    toBottom: '<path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/>',
+    chevronUp: '<path d="m18 15-6-6-6 6"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
     decide: '<path d="M12 13v8"/><path d="M12 3v3"/><path d="M18 6a2 2 0 0 1 1.4.6l2.3 2.2a1 1 0 0 1 0 1.4l-2.3 2.2A2 2 0 0 1 18 13H6a2 2 0 0 1-1.4-.6L2.3 10.2a1 1 0 0 1 0-1.4L4.6 6.6A2 2 0 0 1 6 6z"/>',
     answer: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 8h8"/><path d="M8 12h5"/>',
     info: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
@@ -631,7 +636,8 @@
   }
   // 按时间归档已处理的（像浏览器的"清除多久以前的记录"）：先选早于多久，每档写出条数，0 条的按不了；记住上次选的那档并高亮。
   // 条数和真正归档的是同一份 id（打开菜单时算好），撤销恰好放回这一批
-  var AGES = [["1h", "早于 1 小时", 3600e3], ["24h", "早于 24 小时", 86400e3], ["7d", "早于 7 天", 7 * 86400e3], ["all", "全部", 0]];
+  var AGES = [["1h", "早于 1 小时", 3600e3], ["6h", "早于 6 小时", 6 * 3600e3], ["12h", "早于 12 小时", 12 * 3600e3], ["24h", "早于 24 小时", 86400e3],
+    ["7d", "早于 7 天", 7 * 86400e3], ["all", "全部", 0]];
   function openHandledMenu(anchor) {
     if (!handledIds().length) return toast("没有已处理的可以归档");
     var last = load("handledAge", ""), sets = {};
@@ -873,10 +879,12 @@
   // 待决定：卡片上已经写了"会话已等 25 分钟"，这里只写日期
   function ebDate(m) { return m.open ? fmtRel(m.ts).split(" · ")[0] : fmtRel(m.ts); }
   function renderEyebrow(m) { // 每段包一层 .eb，分隔点画在后一段前面（CSS），折行时不会挂在行末
-    var bits = ['<span class="eb">' + KIND[m.kind] + "</span>", '<span class="eb"><span class="src"><span class="pdot" style="background:' + pcolor(tabKey(m)) + '"></span>' + esc(m.source) + "</span></span>",
+    var bits = ['<span class="eb"><span class="kind k-' + esc(m.kind || "") + '">' + KIND[m.kind] + "</span></span>", '<span class="eb"><span class="src"><span class="pdot" style="background:' + pcolor(tabKey(m)) + '"></span>' + esc(m.source) + "</span></span>",
       '<span class="eb" title="' + fmtTime(m.ts, true) + '">' + ebDate(m) + "</span>"];
+    if (m.auto) bits.push('<span class="eb" title="会话答了问题却忘了发，一轮结束时 ClaudeDesk 从对话里替它补发的">自动补发</span>');
     if (m.priority === "high") bits.push('<span class="eb"><span class="hot">紧急</span></span>');
     if (m.archived) bits.push('<span class="eb">已归档</span>');
+    $("detail").dataset.kind = m.kind || ""; // 三种消息的排版略有不同（CSS 按它分）
     $("eyebrow").innerHTML = bits.join(""); // 决定卡片就在标题下面，不用再有"去选择"
   }
   // 整块重写 innerHTML 会把焦点丢到 body：键盘停在里面某个按钮上时（长轮询、计时器随时会重画），重画后还给同一个按钮。
@@ -905,10 +913,10 @@
     renderFollowup(d, newMsg);
     renderThreadRef(d);
     syncFollowup(S.byId[d.id] || d); // 缓存里的详情可能比列表旧（期间又追问 / 送达 / 有了回应）
-    if (newMsg) { // 换了一条：回到顶上，先看到要你做的
-      $("scroller").scrollTop = 0;
-      $("toolbar").classList.remove("scrolled");
+    if (newMsg) { // 换了一条：回到上次看到的地方（没看过的从顶上开始，先看到要你做的）
+      $("toolbar").classList.toggle("scrolled", restorePos(d.id) > 4);
     }
+    refind();
   }
   function renderBody(d) { // 设置（字号 / 字体）变了只重画正文，选项和没写完的回复不动
     var body = $("body");
@@ -1353,19 +1361,21 @@
     var one = ids.length === 1 && S.byId[ids[0]], t = one ? one.title : "";
     if (t.length > 40) t = t.slice(0, 40) + "…";
     confirmBox(ids.length > 1 ? "删除这 " + ids.length + " 条消息？" : one ? "删除「" + t + "」？" : "删除这条消息？", text, "删除", true).then(function (ok) {
-      if (!ok) return;
-      // 和归档一样：先在本地删掉、选好下一条并重画，再发请求
-      var cur = S.current, next = ids.indexOf(cur) >= 0 ? nextAfter(ids) : cur;
-      ids.forEach(function (id) { S.gone[id] = 1; delete S.byId[id]; });
-      S.msgs = S.msgs.filter(function (m) { return !S.gone[m.id]; });
-      S.multi.clear();
-      moveOn(ids, next);
-      renderAll();
-      refocusList();
-      act({ action: "delete", ids: ids }).then(function () {
-        return refreshNow(true); // 行已经没了，再弹"已删除"是多余的
-      }).catch(function (e) { ids.forEach(function (id) { delete S.gone[id]; }); toast(e.message, { bad: true }); refreshNow(true); });
+      if (ok) deleteNow(ids);
     });
+  }
+  function deleteNow(ids) { // 已经确认过了。和归档一样：先在本地删掉、选好下一条并重画，再发请求
+    if (!ids.length) return;
+    var cur = S.current, next = ids.indexOf(cur) >= 0 ? nextAfter(ids) : cur;
+    ids.forEach(function (id) { S.gone[id] = 1; delete S.byId[id]; });
+    S.msgs = S.msgs.filter(function (m) { return !S.gone[m.id]; });
+    S.multi.clear();
+    moveOn(ids, next);
+    renderAll();
+    refocusList();
+    act({ action: "delete", ids: ids }).then(function () {
+      return refreshNow(true); // 行已经没了，再弹"已删除"是多余的
+    }).catch(function (e) { ids.forEach(function (id) { delete S.gone[id]; }); toast(e.message, { bad: true }); refreshNow(true); });
   }
 
   // 标为已处理（R / ✓ / 批量栏 / 右键 / 决定卡片）：不通知会话（用户多半已经在对话里说过，或者这件事不重要了；叫醒会话要花 token）。
@@ -1732,14 +1742,18 @@
   }
 
   var modalResolve = null, modalBack = null;
-  function confirmBox(title, text, okLabel, danger) {
+  // cancelFirst：删不掉回不来的批量操作，默认焦点放"取消"，回车不会误删
+  function confirmBox(title, text, okLabel, danger, cancelFirst) {
     $("modalTitle").textContent = title;
     $("modalText").textContent = text;
     $("modalOk").textContent = okLabel || "确定";
     $("modalOk").className = "primary" + (danger ? " danger" : "");
-    modalBack = document.activeElement;
+    $("modal").firstElementChild.classList.remove("sheet");
+    $("modalCancel").hidden = false;
+    if (!$("modal").hidden) modalResolve = null; // 从面板里再弹确认：原面板的回调不用再调
+    else modalBack = document.activeElement;
     $("modal").hidden = false;
-    setTimeout(function () { $("modalOk").focus(); }, 0);
+    setTimeout(function () { $(cancelFirst ? "modalCancel" : "modalOk").focus(); }, 0);
     return new Promise(function (res) { modalResolve = res; });
   }
   function closeModal(v) {
@@ -1786,6 +1800,8 @@
         '<button class="toggle-row" data-app="notify_sound" title="新消息弹窗时放不放系统提示音">提醒时有声音<span class="switch' + (m.notify_sound ? " on" : "") + '"></span></button>' +
         '<button class="toggle-row" data-app="autostart">开机自启<span class="switch' + (m.autostart ? " on" : "") + '"></span></button>' +
         '<button class="toggle-row" data-app="auto_update">自动更新<span class="switch' + (m.auto_update ? " on" : "") + '"></span></button>' +
+        '<button class="menu-item" data-app="claude_code" title="让 Claude Code 会话自动用 ClaudeDesk：装 skill 和兜底 hooks">' + icon("plug") +
+          "接入 Claude Code<span class=\"sub\">" + ccSub(m.claude_code) + "</span></button>" +
         '<button class="menu-item" data-app="check_update">' + icon("refresh") + "检查更新<span class=\"sub\">" + (BOOT.build ? "build " + BOOT.build : "源码运行") + "</span></button>" +
         '<button class="menu-item" data-app="open_data">' + icon("folder") + "打开数据目录</button>";
     }
@@ -1842,6 +1858,7 @@
       var a = b.dataset.app;
       if (a === "shortcuts") { closePopover(); return showShortcuts(); }
       if (a === "remote") { closePopover(); return openRemote(); }
+      if (a === "claude_code") { closePopover(); return openClaudeCode(); }
       if (a === "autostart" || a === "auto_update" || a === "notify_sound") {
         act({ action: a, on: !S.meta[a] }).then(function (r) {
           S.meta[a] = !!r;
@@ -1870,6 +1887,58 @@
     $("modal").hidden = false;
     setTimeout(function () { $("modalOk").focus(); }, 0);
     modalResolve = function () { $("modalCancel").hidden = false; if (onClose) onClose(); };
+  }
+
+  // ---- 接入 Claude Code：一键把 skill（带真实路径）和兜底 hooks 装进 ~/.claude（见 desk.py setup）
+  function ccSub(c) {
+    if (!c) return "";
+    if (c.error) return "设置读不了";
+    return c.current ? "已接入" : c.ok ? "路径变了" : "未接入";
+  }
+  function ccSheet() {
+    showSheet("接入 Claude Code", '<div class="remote-panel" id="ccPanel"><p class="rp-note">正在查看…</p></div>', "完成");
+    renderClaudeCode();
+  }
+  function openClaudeCode() { ccSheet(); ccAct({ op: "status" }); }
+  function ccAct(body) {
+    var busy = body.op !== "status" && $("ccPanel");
+    if (busy) busy.classList.add("busy");
+    return act(Object.assign({ action: "claude_code" }, body)).then(function (st) {
+      S.meta.claude_code = st;
+      if (body.op === "install") toast("已接入：新开的 Claude Code 会话生效");
+      if (body.op === "remove") toast("已卸掉");
+      renderClaudeCode();
+    }).catch(function (e) { toast(e.message, { bad: true }); renderClaudeCode(); });
+  }
+  function renderClaudeCode() {
+    var box = $("ccPanel"), c = S.meta.claude_code;
+    if (!box || !c) return;
+    box.classList.remove("busy");
+    var on = c.ok && c.current;
+    var h = '<p class="rp-note">' + (on ? "已接入。新开的 Claude Code 会话会自动用 ClaudeDesk。" : c.ok ? "装过，但指向的不是这份 ClaudeDesk（挪过目录或换过 Python）：点重新接入。"
+      : "接入后，Claude Code 会话会自动用 ClaudeDesk 发回答和决定，不用每次提醒。") + "</p>" +
+      '<ul class="cc-list"><li><b>skill</b>：用法说明，命令换成这台电脑上的真实路径</li>' +
+      "<li><b>会话开始</b>：提醒规则（上下文压缩后也会再提醒）</li>" +
+      "<li><b>AskUserQuestion</b>：拦下来，改发到这里的待决定</li>" +
+      "<li><b>一轮结束</b>：答了问题忘了发、追问没回，自动补发；有待决定却没在等回复，提醒它</li></ul>";
+    if (c.error) h += '<p class="rp-error">' + esc(c.error) + "</p>";
+    h += '<div class="rp-row"><button class="' + (on ? "ghost" : "primary") + '" data-cc="install">' + icon("plug") + (c.ok ? "重新接入" : "一键接入") + "</button>" +
+      (c.ok || c.skill ? '<button class="ghost" data-cc="remove">卸掉</button>' : "") + "</div>" +
+      '<p class="rp-note">会改 <code>' + esc(c.config || "~/.claude") + '/settings.json</code>（第一次改前备份成 settings.json.claudedesk.bak），只动 ClaudeDesk 自己的那几条。' +
+      "要用 Python 3.10 以上；找不到时，在终端里运行：</p>" +
+      '<div class="rp-row"><code class="rp-topic cc-cmd">' + esc(c.manual || "") + '</code><button class="ghost" data-cc="copy">' + icon("copy") + "复制</button></div>";
+    box.innerHTML = h;
+  }
+  function ccClick(e) {
+    var b = e.target.closest("[data-cc]");
+    if (!b || !$("ccPanel") || $("ccPanel").classList.contains("busy")) return;
+    var k = b.dataset.cc;
+    if (k === "copy") return writeClipboard((S.meta.claude_code || {}).manual || "").then(function () { toast("已复制"); });
+    if (k === "remove") {
+      return confirmBox("卸掉 Claude Code 接入？", "去掉 ClaudeDesk 的 skill 和 hooks，你自己的设置不动。", "卸掉", true)
+        .then(function (ok) { ccSheet(); if (ok) ccAct({ op: "remove" }); });
+    }
+    ccAct({ op: k });
   }
 
   // ---- 手机访问：把这里发布成一个网页，手机浏览器打开（见 remote.py）
@@ -1980,15 +2049,16 @@
 
   function showShortcuts() { // 分四组、宽时两栏；只列键盘（鼠标操作看悬停提示）
     var groups = [["浏览", [["↑ ↓ / J K", "上一条 / 下一条"], ["N / Shift + N", "下一条 / 上一条待决定"], ["Shift + ↑ ↓", "连续勾选"],
-        ["/", "搜索"], ["[ ]", "切换项目"], ["F", "只看未处理（开 / 关）"], ["Esc", "退一层"]]],
+        ["/ 或 Ctrl + Shift + F", "搜索全部消息"], ["Ctrl + F", "在这条里查找"], ["Home / End", "回到顶部 / 底部"],
+        ["[ ]", "切换项目"], ["F", "只看未处理（开 / 关）"], ["Esc", "退一层"]]],
       ["决定", [["1 – 9", "选第 N 项"], ["Ctrl + Enter", "提交 / 发追问"], ["Enter", "打开 / 写补充说明或追问"], ["R", "标为已处理"]]],
       ["整理", [["E", "归档"], ["U", "已读 / 未读"], ["X", "勾选"], ["Ctrl + A", "全选"], ["Delete", "删除"], ["Z", "撤销"]]],
-      ["其他", [["C", "复制 Markdown"], ["Ctrl + P", "导出 PDF"], ["Ctrl + ,", "设置"], ["?", "快捷键"]]]];
+      ["其他", [["C", "复制 Markdown"], ["Ctrl + 滚轮", "缩放文字"], ["Ctrl + = / -", "放大 / 缩小"], ["Ctrl + 0", "还原大小"], ["Ctrl + P", "导出 PDF"], ["Ctrl + ,", "设置"], ["?", "快捷键"]]]];
     $("modalTitle").textContent = "快捷键";
     $("modal").firstElementChild.classList.add("sheet");
     $("modalText").innerHTML = '<div class="kbd-groups">' + groups.map(function (g) {
       return '<div class="kbd-group"><h4>' + g[0] + '</h4><span class="kbd-table">' + g[1].map(function (r) {
-        return "<span>" + r[0].split(" ").map(function (k, i, a) { return a.length > 1 && /^[+/–]$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
+        return "<span>" + r[0].split(" ").map(function (k, i, a) { return a.length > 1 && /^([+/–]|或)$/.test(k) ? k : "<kbd>" + esc(k) + "</kbd>"; }).join(" ") + "</span><span>" + r[1] + "</span>";
       }).join("") + "</span></div>";
     }).join("") + "</div>";
     $("modalOk").textContent = "好的";
@@ -1998,6 +2068,238 @@
     $("modal").hidden = false;
     setTimeout(function () { $("modalOk").focus(); }, 0);
     modalResolve = function () { $("modalCancel").hidden = false; };
+  }
+
+  // ---------------------------------------------------------------- 阅读位置、回到顶部 / 底部
+  // 每条消息记着看到哪儿（滚动位置，存在这台电脑上，最多记 POS_MAX 条），切走再回来接着看。顶上那一小段不记：回来就是从头看
+  var POS_MAX = 300, posTimer = 0;
+  var POS = (function () { try { var v = JSON.parse(load("pos", "{}")); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch (e) { return {}; } })();
+  function notePos() {
+    var id = shownId();
+    if (!id || $("detail").hidden || restoring) return;
+    var y = Math.round($("scroller").scrollTop);
+    if (y < 40) delete POS[id]; else POS[id] = [y, Date.now()];
+    clearTimeout(posTimer);
+    posTimer = setTimeout(function () { // 写盘慢一点：滚动时每帧都写太费
+      var ks = Object.keys(POS);
+      if (ks.length > POS_MAX) {
+        ks.sort(function (a, b) { return POS[a][1] - POS[b][1]; });
+        ks.slice(0, ks.length - POS_MAX).forEach(function (k) { delete POS[k]; });
+      }
+      save("pos", JSON.stringify(POS));
+    }, 300);
+  }
+  var restoring = false;
+  function restorePos(id) {
+    var p = POS[id], sc = $("scroller"), y = p ? p[0] : 0;
+    restoring = true; // 换消息时设的位置不算"用户滚到了这里"
+    sc.scrollTop = y;
+    requestAnimationFrame(function () { // 公式、代码高亮排好以后高度会变：再对一次
+      if (shownId() === id && y) sc.scrollTop = y;
+      restoring = false;
+      syncJump();
+    });
+    return y;
+  }
+  function syncJump() {
+    var sc = $("scroller"), far = Math.max(240, sc.clientHeight * 0.6);
+    $("toTop").classList.toggle("show", sc.scrollTop > far);
+    $("toBottom").classList.toggle("show", sc.scrollHeight - sc.scrollTop - sc.clientHeight > far);
+  }
+  function jump(dir) {
+    var sc = $("scroller");
+    sc.scrollTo({ top: dir < 0 ? 0 : sc.scrollHeight, behavior: reduced() ? "auto" : "smooth" });
+  }
+
+  // ---------------------------------------------------------------- 缩放：Ctrl + 滚轮 / Ctrl + = - 0，列表和正文一起变（存在这台电脑上）
+  var ZOOM_MIN = 0.8, ZOOM_MAX = 1.8;
+  var zoom = (function () { var z = parseFloat(load("zoom", "1")); return z >= ZOOM_MIN && z <= ZOOM_MAX ? z : 1; })(), zoomToast = null;
+  function applyZoom() { document.documentElement.style.setProperty("--zoom", String(zoom)); }
+  function setZoom(z, quiet) {
+    z = Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 10) / 10;
+    if (z === zoom && quiet) return;
+    var sc = $("scroller"), frac = sc.scrollHeight > sc.clientHeight ? sc.scrollTop / (sc.scrollHeight - sc.clientHeight) : 0;
+    zoom = z;
+    applyZoom();
+    save("zoom", String(z));
+    if (frac) sc.scrollTop = frac * (sc.scrollHeight - sc.clientHeight); // 大致还停在刚才读的地方
+    if (zoomToast) zoomToast.remove();
+    zoomToast = quiet ? null : toast("缩放 " + Math.round(z * 100) + "%" + (z === 1 ? "" : "　Ctrl + 0 还原"));
+  }
+  var wheelAcc = 0;
+  function onWheelZoom(e) {
+    if (!e.ctrlKey || !$("modal").hidden) return;
+    e.preventDefault(); // 不要整个窗口一起缩放（WebView2 自己的缩放不记、连标签栏都变）
+    wheelAcc += e.deltaY;
+    if (Math.abs(wheelAcc) < 40) return; // 触控板一下来好多小步：攒够一格再变
+    setZoom(zoom + (wheelAcc < 0 ? 0.1 : -0.1));
+    wheelAcc = 0;
+  }
+
+  // ---------------------------------------------------------------- 页内查找（Ctrl + F）：只在正在看的这条里找，标出全部、跳到第几个
+  // 用 CSS 高亮（不改正文的 DOM）：正文重画、追问来了也不会把标记弄丢，重算一遍就好
+  var FIND = { q: "", ranges: [], i: -1 };
+  var HL = !!(window.CSS && CSS.highlights && window.Highlight);
+  function findOpen() { return !$("findBar").hidden; }
+  function openFind() {
+    if (!S.current || $("detail").hidden) return false;
+    var bar = $("findBar"), inp = $("findText");
+    bar.hidden = false;
+    var sel = String(window.getSelection() || "").trim();
+    if (sel && sel.length < 80 && sel.indexOf("\n") < 0) inp.value = sel; // 选着字按 Ctrl+F：直接找它
+    inp.focus(); inp.select();
+    runFind(true);
+    return true;
+  }
+  function closeFind() {
+    $("findBar").hidden = true;
+    clearFindMarks();
+    FIND = { q: "", ranges: [], i: -1 };
+    if (!narrow() || S.current) $("scroller").focus({ preventScroll: true });
+  }
+  function clearFindMarks() { if (HL) { CSS.highlights.delete("find"); CSS.highlights.delete("find-cur"); } }
+  function findRoots() { return ["threadRef", "head", "decide", "article", "thread"].map($).filter(function (el) { return el && !el.hidden; }); }
+  function runFind(keepPlace) {
+    var q = $("findText").value.trim().toLowerCase();
+    var was = FIND.ranges[FIND.i], ranges = [];
+    clearFindMarks();
+    if (q) {
+      findRoots().forEach(function (root) {
+        var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode: function (n) { return n.parentElement && n.parentElement.closest("[hidden],.code-head,.katex-mathml,textarea") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT; },
+        });
+        for (var n = w.nextNode(); n; n = w.nextNode()) {
+          var t = n.nodeValue.toLowerCase(), at = t.indexOf(q);
+          while (at >= 0) {
+            var r = document.createRange();
+            r.setStart(n, at); r.setEnd(n, at + q.length);
+            ranges.push(r);
+            at = t.indexOf(q, at + q.length);
+          }
+        }
+      });
+    }
+    FIND.q = q; FIND.ranges = ranges;
+    if (!ranges.length) FIND.i = -1;
+    else if (keepPlace && was && FIND.i >= 0 && FIND.i < ranges.length) { /* 重画后还停在第几个 */ }
+    else FIND.i = firstVisibleHit();
+    paintFind(!keepPlace);
+  }
+  function firstVisibleHit() { // 从眼前这一屏往下找第一个
+    var top = $("scroller").getBoundingClientRect().top;
+    for (var i = 0; i < FIND.ranges.length; i++) if (FIND.ranges[i].getBoundingClientRect().bottom >= top) return i;
+    return 0;
+  }
+  function paintFind(scroll) {
+    var n = FIND.ranges.length;
+    $("findCount").textContent = !FIND.q ? "" : n ? (FIND.i + 1) + " / " + n : "无结果";
+    $("findBar").classList.toggle("none", !!FIND.q && !n);
+    $("findPrev").disabled = $("findNext").disabled = n < 2;
+    if (!n) return;
+    if (HL) {
+      var all = new Highlight();
+      FIND.ranges.forEach(function (r) { all.add(r); });
+      CSS.highlights.set("find", all);
+      CSS.highlights.set("find-cur", new Highlight(FIND.ranges[FIND.i]));
+    }
+    if (scroll) {
+      var r = FIND.ranges[FIND.i].getBoundingClientRect(), sc = $("scroller"), box = sc.getBoundingClientRect();
+      if (r.top < box.top + 60 || r.bottom > box.bottom - 60) sc.scrollTop += r.top - box.top - box.height / 3;
+    }
+  }
+  function stepFind(d) {
+    if (!FIND.ranges.length) return;
+    FIND.i = (FIND.i + d + FIND.ranges.length) % FIND.ranges.length;
+    paintFind(true);
+  }
+  var findTimer = 0;
+  function refind() { // 正文重画 / 追问更新以后：位置都变了，重算（停在原来第几个）
+    if (!findOpen()) return;
+    clearTimeout(findTimer);
+    findTimer = setTimeout(function () { runFind(true); }, 80);
+  }
+  function searchAll(q) { // 页内查找的字拿到全部消息里去搜（搜索框本来就搜全部项目和归档）
+    closeFind();
+    if (narrow() && S.current) backToList();
+    var s = $("search");
+    s.value = q || "";
+    s.focus();
+    onSearch();
+  }
+
+  // ---------------------------------------------------------------- 按时间整理（⋯ 菜单）：早于多久的归档 / 删除；待决定全部标为已处理
+  // 范围：当前选的标签，或者全部开着的标签（关掉的标签不动）。正在看的那条不动。删除要确认（不能恢复），默认焦点在"取消"
+  var TIDY_AGES = [["1h", "1 小时", 3600e3], ["6h", "6 小时", 6 * 3600e3], ["12h", "12 小时", 12 * 3600e3], ["24h", "24 小时", 86400e3],
+    ["7d", "7 天", 7 * 86400e3], ["all", "不限", 0]];
+  var TIDY = null;
+  function tidyAge() { return TIDY_AGES.filter(function (a) { return a[0] === TIDY.age; })[0] || TIDY_AGES[0]; }
+  function tidyScoped(m) { return TIDY.scope === "all" || inScope(m); }
+  function tidyIds(arch) { // arch：归档用（已经在归档里的不算）；删除时归档里的也算
+    var a = tidyAge(), cut = Date.now() - a[2];
+    return S.msgs.filter(function (m) {
+      return tidyScoped(m) && m.id !== S.current && (!arch || !m.archived) && (TIDY.open || !m.open) &&
+        (!a[2] || new Date(m.last_active || m.ts) <= cut);
+    }).map(function (m) { return m.id; });
+  }
+  function tidyOpenIds(a) {
+    var cut = Date.now() - (a ? a[2] : 0);
+    return S.msgs.filter(function (m) { return m.open && tidyScoped(m) && (!a || !a[2] || new Date(m.last_active || m.ts) <= cut); }).map(function (m) { return m.id; });
+  }
+  function openTidy(scope) {
+    TIDY = { scope: scope || load("tidyScope", "tab"), age: load("tidyAge", "1h"), open: false };
+    if (!S.projects.size) TIDY.scope = "all";
+    showSheet("按时间整理", '<div class="remote-panel tidy" id="tidyPanel"></div>', "完成", function () { TIDY = null; });
+    renderTidy();
+  }
+  function renderTidy() {
+    var box = $("tidyPanel");
+    if (!box || !TIDY) return;
+    var a = tidyAge(), arch = tidyIds(true), del = tidyIds(false), openAll = tidyOpenIds(), openOld = tidyOpenIds(a);
+    var when = a[2] ? "早于 " + a[1] : "不限时间";
+    var h = '<div class="tidy-row"><span class="rp-sub">范围</span><div class="seg" role="group" aria-label="范围">' +
+      [["tab", scopeLabel() ? "当前：" + scopeLabel() : "当前标签"], ["all", "全部标签"]].map(function (x) {
+        return '<button data-tidy-scope="' + x[0] + '" class="' + (TIDY.scope === x[0] ? "on" : "") + '" aria-pressed="' + (TIDY.scope === x[0]) + '"' +
+          (x[0] === "tab" && !S.projects.size ? " disabled" : "") + ">" + esc(x[1]) + "</button>";
+      }).join("") + "</div></div>" +
+      '<div class="tidy-row"><span class="rp-sub">早于</span><div class="seg tidy-ages" role="group" aria-label="早于多久">' + TIDY_AGES.map(function (x) {
+        return '<button data-tidy-age="' + x[0] + '" class="' + (TIDY.age === x[0] ? "on" : "") + '" aria-pressed="' + (TIDY.age === x[0]) + '">' + x[1] + "</button>";
+      }).join("") + "</div></div>" +
+      '<button class="toggle-row rp-toggle" data-tidy="open" aria-pressed="' + TIDY.open + '"><span>也包括还在等你决定的' +
+      '<span class="rp-sub">' + (openOld.length ? openOld.length + " 条；归档 / 删除都不会通知会话" : "这个范围里没有") + "</span></span>" +
+      '<span class="switch' + (TIDY.open ? " on" : "") + '"></span></button>' +
+      '<div class="rp-row tidy-acts"><button class="primary" data-tidy="archive"' + (arch.length ? "" : " disabled") + ">" + icon("archive") + "归档 " + arch.length + " 条</button>" +
+      '<button class="ghost danger" data-tidy="delete"' + (del.length ? "" : " disabled") + ">" + icon("trash") + "删除 " + del.length + " 条</button></div>" +
+      '<p class="rp-note">' + when + "：按最后一次收到、回复或打开它的时间算。归档能撤销、随时找回；删除不能恢复。正在看的那条不动。</p>" +
+      '<div class="menu-sep"></div>' +
+      '<div class="rp-row tidy-acts"><button class="ghost" data-tidy="resolve"' + (openAll.length ? "" : " disabled") + ">" + icon("checks") +
+      "待决定全部标为已处理（" + openAll.length + "）</button></div>" +
+      '<p class="rp-note">' + (TIDY.scope === "all" ? "全部标签" : "当前标签") + "里所有还在等你决定的，不管多久以前的。不通知会话，可以撤销（Z）。</p>";
+    var f = document.activeElement, sel = f && box.contains(f) ? (f.dataset.tidyScope ? '[data-tidy-scope="' + f.dataset.tidyScope + '"]' :
+      f.dataset.tidyAge ? '[data-tidy-age="' + f.dataset.tidyAge + '"]' : f.dataset.tidy ? '[data-tidy="' + f.dataset.tidy + '"]' : null) : null;
+    box.innerHTML = h;
+    var b = sel && box.querySelector(sel);
+    if (b && !b.disabled) b.focus();
+  }
+  function tidyClick(e) {
+    var b = e.target.closest("[data-tidy],[data-tidy-scope],[data-tidy-age]");
+    if (!b || !TIDY || !$("tidyPanel") || b.disabled) return;
+    if (b.dataset.tidyScope) { TIDY.scope = b.dataset.tidyScope; save("tidyScope", TIDY.scope); return renderTidy(); }
+    if (b.dataset.tidyAge) { TIDY.age = b.dataset.tidyAge; save("tidyAge", TIDY.age); return renderTidy(); }
+    var k = b.dataset.tidy, a = tidyAge(), where = TIDY.scope === "all" ? "全部标签" : "当前标签";
+    if (k === "open") { TIDY.open = !TIDY.open; return renderTidy(); }
+    if (k === "archive") { var ids = tidyIds(true); closeModal(true); return doArchive(ids, true); }
+    if (k === "resolve") { var os = tidyOpenIds(); closeModal(true); return doResolve(os); }
+    if (k === "delete") {
+      var del = tidyIds(false), nOpen = del.filter(function (id) { return S.byId[id] && S.byId[id].open; }).length;
+      confirmBox("删除 " + del.length + " 条消息？", where + (a[2] ? "里早于 " + a[1] + " 的" : "里的") + " " + del.length + " 条（含归档里的）会从收件箱文件里真正移除，不能恢复。" +
+        (nOpen ? "\n其中 " + nOpen + " 条还在等你决定：删除不会通知会话。" : ""), "删除 " + del.length + " 条", true, true).then(function (ok) {
+        if (ok) { deleteNow(del); toast("已删除 " + del.length + " 条"); }
+      });
+    }
+  }
+  // 这个会话（发消息的那个 Claude Code 会话）还在等你决定的
+  function sessionOpenIds(m) {
+    return m && m.session ? S.msgs.filter(function (x) { return x.open && x.session === m.session; }).map(function (x) { return x.id; }) : [];
   }
 
   // ---------------------------------------------------------------- 事件
@@ -2103,10 +2405,12 @@
       e.preventDefault();
       var id = it.dataset.id;
       if (!S.multi.has(id)) select(id, { noRead: true });
-      var ids = targets(), m = S.byId[id];
+      var ids = targets(), m = S.byId[id], sess = sessionOpenIds(m);
       var html = '<button class="menu-item" data-m="read">' + icon(m.unread ? "mailOpen" : "mail") + (m.unread ? "标为已读" : "标为未读") + '<span class="sub">U</span></button>' +
         (ids.some(function (x) { return S.byId[x] && (S.byId[x].open || S.byId[x].unread); }) ? '<button class="menu-item" data-m="resolve" title="不通知会话：你已经在对话里说过，或者这件事不重要了">' + icon("check") + '标为已处理<span class="sub">R</span></button>' : "") +
         '<button class="menu-item" data-m="archive">' + icon(m.archived ? "unarchive" : "archive") + (m.archived ? "移出归档" : "归档") + '<span class="sub">E</span></button>' +
+        (sess.length > 1 || (sess.length === 1 && !m.open) ? '<button class="menu-item" data-m="resolve_session" title="发这条消息的那个 Claude Code 会话还在等你决定的，全部标为已处理（不通知会话）">' +
+          icon("checks") + "这个会话的待决定都标为已处理<span class=\"sub\">" + sess.length + "</span></button>" : "") +
         '<div class="menu-sep"></div><button class="menu-item danger" data-m="delete">' + icon("trash") + "删除" + (ids.length > 1 ? " " + ids.length + " 条" : "") + '<span class="sub">Del</span></button>';
       var fake = { getBoundingClientRect: function () { return { left: e.clientX, right: e.clientX + 1, top: e.clientY, bottom: e.clientY }; } };
       openPopover(fake, html, "", function (ev) {
@@ -2117,6 +2421,7 @@
         if (b.dataset.m === "resolve") doResolve(ids);
         if (b.dataset.m === "archive") doArchive(ids);
         if (b.dataset.m === "delete") doDelete(ids);
+        if (b.dataset.m === "resolve_session") doResolve(sess);
       });
     });
     $("bulkbar").addEventListener("click", function (e) {
@@ -2143,6 +2448,7 @@
       var scope = scopeLabel() ? "（" + esc(scopeLabel()) + "）" : "";
       var html = '<button class="menu-item" data-l="read_all">' + icon("checks") + "全部标为已读" + scope + "</button>" +
         '<button class="menu-item" data-l="archive_handled">' + icon("archive") + "归档已处理的" + scope + "…<span class=\"sub\">选早于多久</span></button>" +
+        '<button class="menu-item" data-l="tidy">' + icon("clock") + "按时间整理…<span class=\"sub\">归档 / 删除 / 处理待决定</span></button>" +
         '<button class="menu-item" data-l="select_all">' + icon("check") + "全选当前列表<span class=\"sub\">Ctrl+A</span></button>";
       openPopover($("listMenuBtn"), html, "", function (e) {
         var b = e.target.closest("[data-l]");
@@ -2150,6 +2456,7 @@
         closePopover();
         if (b.dataset.l === "select_all") return selectAll();
         if (b.dataset.l === "archive_handled") return openHandledMenu($("listMenuBtn")); // 和搜索框右边的按钮同一个菜单
+        if (b.dataset.l === "tidy") return openTidy();
         var req = { action: "read", ids: S.msgs.filter(function (m) { return !m.archived && inScope(m) && m.unread; }).map(function (m) { return m.id; }) };
         dropUndo();
         act(req).then(function (n) {
@@ -2208,13 +2515,33 @@
         .catch(function (e) { toast(e.message, { bad: true }); });
     });
     $("modalText").addEventListener("click", remoteClick);
+    $("modalText").addEventListener("click", ccClick);
+    $("modalText").addEventListener("click", tidyClick);
     $("modalText").addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.id === "rpPort") { e.preventDefault(); e.stopPropagation(); remoteAct({ op: "port", port: e.target.value.trim() }); } });
     $("modalOk").addEventListener("click", function () { closeModal(true); });
     $("modalCancel").addEventListener("click", function () { closeModal(false); });
     $("modal").addEventListener("click", function (e) { if (e.target === $("modal")) closeModal(false); });
     $("scroller").addEventListener("scroll", function () {
       $("toolbar").classList.toggle("scrolled", $("scroller").scrollTop > 4);
+      notePos();
+      syncJump();
+    }, { passive: true });
+    $("toTop").addEventListener("click", function () { jump(-1); });
+    $("toBottom").addEventListener("click", function () { jump(1); });
+    document.addEventListener("wheel", onWheelZoom, { passive: false });
+    $("findBtn").addEventListener("click", function () { if (findOpen()) closeFind(); else openFind(); });
+    $("findText").addEventListener("input", function () { runFind(false); });
+    $("findText").addEventListener("keydown", function (e) {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); stepFind(e.shiftKey ? -1 : 1); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); }
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") { e.preventDefault(); e.stopPropagation(); $("findText").select(); }
     });
+    $("findPrev").addEventListener("click", function () { stepFind(-1); });
+    $("findNext").addEventListener("click", function () { stepFind(1); });
+    $("findClose").addEventListener("click", closeFind);
+    $("findAll").addEventListener("click", function () { searchAll($("findText").value.trim()); });
+    if (window.MutationObserver) new MutationObserver(refind).observe($("scroller"), { childList: true, subtree: true, characterData: true });
     $("scroller").addEventListener("click", function (e) { // 正文和追问记录里的回答都有代码块
       var b = e.target.closest(".code-copy");
       if (!b) return;
@@ -2356,6 +2683,7 @@
   // Esc 一次只退一层：菜单 → 窄窗口的阅读页 → 搜索 → 勾选（项目选择不归 Esc 管：没有"全部项目"可退）
   function escLayer() {
     if (!$("popover").hidden) return closePopover();
+    if (findOpen()) return closeFind();
     if (narrow() && S.current) return backToList();
     if (S.query || $("search").value) return clearSearch();
     if (S.multi.size) { S.multi.clear(); return renderList(); }
@@ -2382,7 +2710,17 @@
     var typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName);
     var k = e.key;
     if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "p") { e.preventDefault(); pdf(); return; }
-    if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "f") { e.preventDefault(); findBox(); $("search").select(); return; }
+    if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "f") { // 正在看一条：在它里面找；Ctrl+Shift+F / 没在看：搜全部消息
+      e.preventDefault();
+      if (e.shiftKey || !openFind()) { findBox(); $("search").select(); }
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (k === "=" || k === "+" || k === "-" || k === "_" || k === "0")) { // 缩放
+      e.preventDefault();
+      setZoom(k === "0" ? 1 : zoom + (k === "-" || k === "_" ? -0.1 : 0.1));
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !typing && (k === "Home" || k === "End") && S.current && $("popover").hidden) { e.preventDefault(); jump(k === "Home" ? -1 : 1); return; }
     if ((e.ctrlKey || e.metaKey) && k === ",") { e.preventDefault(); openSettings(); return; }
     if ((e.ctrlKey || e.metaKey) && k === "Enter") { // 决定还没回复：焦点在哪都能提交；别的（含回复过的决定）：发追问
       var dd = currentDetail();
@@ -2399,6 +2737,9 @@
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && k.toLowerCase() === "z") { e.preventDefault(); undoLast(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (k === "Escape") { escLayer(); return; }
+    if ((k === "Home" || k === "End") && S.current && $("popover").hidden && !(document.activeElement && document.activeElement.closest && document.activeElement.closest("#list"))) {
+      e.preventDefault(); jump(k === "Home" ? -1 : 1); return; // 列表有焦点时 Home / End 归列表（浏览器默认）
+    }
     if (k === "Backspace" && narrow() && S.current) { e.preventDefault(); backToList(); return; }
     if (k === "z" || k === "Z") { undoLast(); return; }
     if (k === "ArrowDown" || k === "j" || k === "J") { e.preventDefault(); move(1, e.shiftKey); return; }
@@ -2426,6 +2767,7 @@
 
   // ---------------------------------------------------------------- 启动
   if (!VIEWS.some(function (v) { return v.id === S.view; })) S.view = "all";
+  applyZoom();
   bind();
   renderNav();
   renderFoot();
@@ -2446,5 +2788,6 @@
     };
     if (!go()) refreshNow().then(go);
   };
-  window.deskTest = { setProject: setProject, S: S, select: select, setView: setView, pick: pick, submit: submit, copy: copy, markdownOf: markdownOf, itemHtml: itemHtml };
+  window.deskTest = { setProject: setProject, S: S, select: select, setView: setView, pick: pick, submit: submit, copy: copy, markdownOf: markdownOf, itemHtml: itemHtml,
+    zoom: function () { return zoom; }, find: function () { return { q: FIND.q, n: FIND.ranges.length, i: FIND.i }; }, openTidy: openTidy };
 })();

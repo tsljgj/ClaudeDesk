@@ -760,6 +760,123 @@ a.rp-sub { text-decoration: underline; text-underline-offset: 3px; }
   #fuText { transition-duration: 0s; } /* 不动画，收起照样晚一点 */
 }
 
+/* ------------------------------------------------------------------ 手感：悬停、按下、焦点
+   悬停换底色要有一点过渡（不是"啪"一下），按下时稍微往里收一下、底色深一档，松开就回来：点没点上一眼就知道 */
+.icon-btn, .primary, .ghost, .tab, .ptab, .ptab-closed, .menu-item, .toggle-row, .todo-btn, .seg button, .queue,
+.jump-btn, .find-all, .toast button, .md .code-copy, .search-more, .group-label .gmerge, .fu-a, .tr-link, .list-more, .swatch {
+  transition: background-color .14s ease, color .14s ease, border-color .14s ease, box-shadow .14s ease, transform .09s ease, opacity .14s ease;
+}
+.item { transition: background-color .12s ease; }
+.icon-btn:active:not(:disabled), .jump-btn:active { transform: scale(.9); background: var(--press); color: var(--ink); }
+.primary:active:not(:disabled), .ghost:active:not(:disabled), .todo-btn:active, .find-all:active, .toast button:active, .md .code-copy:active { transform: scale(.97); }
+.ghost:active:not(:disabled), .menu-item:active:not(:disabled), .toggle-row:active, .tab:active, .ptab-closed:active, .search-more:active, .list-more:active { background: var(--press); }
+.item:active:not(.selected) { background: var(--press); }
+.opt:active:not(:disabled) { transform: scale(.995); background: var(--surface-2); }
+.opt { transition: border-color .12s ease, background-color .12s ease, box-shadow .12s ease, transform .09s ease; }
+.opt:hover:not(:disabled):not(.checked) { background: var(--surface-2); }
+.primary { box-shadow: var(--shadow-sm); }
+.primary:hover:not(:disabled) { box-shadow: var(--shadow); }
+.primary:disabled { box-shadow: none; }
+.primary, .ghost { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.primary i[data-icon], .ghost i[data-icon] { width: 15px; height: 15px; }
+.ghost.danger { color: var(--danger); }
+.ghost.danger:hover:not(:disabled) { background: var(--danger-soft); }
+.ghost:disabled { color: var(--ink-5); cursor: default; background: none; }
+.seg button:hover:not(.on):not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--bg) 50%, transparent); }
+.seg button:disabled { color: var(--ink-5); }
+.switch.on::after, .switch::after { box-shadow: var(--shadow-sm); }
+/* 键盘焦点环：只在键盘操作时出现，带一点外圈，按钮上更清楚 */
+.primary:focus-visible, .ghost:focus-visible, .icon-btn:focus-visible, .jump-btn:focus-visible, .find-all:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn, .primary, .ghost, .opt, .jump-btn, .find-all, .todo-btn, .toast button, .md .code-copy { transform: none !important; transition-duration: 0s; }
+}
+
+/* ------------------------------------------------------------------ 字体和紧凑度：标题小一点、段距收一点，长回答一屏多看几行 */
+.title { font-size: 24px; margin-bottom: 18px; line-height: 1.32; }
+:root[data-font="serif"] .title { font-size: 26px; }
+.head { padding-top: 18px; }
+.eyebrow { margin-bottom: 8px; }
+.md { line-height: 1.72; }
+.md p, .md ul, .md ol, .md blockquote, .md .table-wrap, .md .codeblock, .md details, .md .math-display { margin-bottom: .95em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 1.65em 0 .55em; }
+.md li { margin: .22em 0; }
+.md li > p { margin: .22em 0; }
+.md pre code { font-size: 12.75px; }
+.md code { font-size: .85em; }
+.md table { font-size: .9em; }
+.md th, .md td { padding: 7px 12px; }
+.md blockquote { color: var(--ink-2); background: var(--surface-2); border-radius: 0 8px 8px 0; padding: .55em 1em .55em 14px; }
+.md hr { margin: 1.8em 0; }
+.article { padding-bottom: 32px; }
+
+/* 三种消息：标题上面那行的类型是一个小胶囊；决定用强调色（等你处理），回答 / 通知是中性色 */
+.eyebrow .kind { display: inline-block; padding: 0 7px; border-radius: 5px; line-height: 20px; font-size: 11.5px; font-weight: 650; letter-spacing: .02em; background: var(--sunken); color: var(--ink-2); }
+.eyebrow .kind.k-decision { background: var(--accent-soft); color: var(--accent-ink); }
+.eyebrow .kind.k-info { background: transparent; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink-3); }
+/* 通知通常一两段：正文略小、行距紧一点，和回答分得开 */
+.detail[data-kind="info"] .md { font-size: calc(var(--read-size) - .5px); line-height: 1.66; }
+/* 决定的背景说明：小标题不用分割线，读起来像一张卡片的说明 */
+.detail[data-kind="decision"] .article .md h2 { border-bottom: 0; padding-bottom: 0; }
+
+/* 提示块 > [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION] */
+.md blockquote.callout { --c: var(--ink-3); --c-soft: var(--surface-2); color: var(--ink); background: var(--c-soft); border-left-color: var(--c); }
+.md .callout-title { margin: 0 0 .3em; font: 650 .86em/1.5 var(--font-ui); letter-spacing: .02em; color: var(--c); }
+.md .callout-title:last-child { margin-bottom: 0; }
+.md .callout-note { --c: var(--ink-2); }
+.md .callout-tip { --c: var(--ok-ink); --c-soft: color-mix(in srgb, var(--ok-soft) 70%, var(--bg)); }
+.md .callout-important { --c: var(--accent-ink); --c-soft: color-mix(in srgb, var(--accent-soft) 80%, var(--bg)); }
+.md .callout-warning { --c: color-mix(in srgb, var(--warn) 55%, var(--ink)); --c-soft: color-mix(in srgb, var(--warn) 10%, var(--bg)); }
+.md .callout-caution { --c: var(--danger); --c-soft: color-mix(in srgb, var(--danger-soft) 75%, var(--bg)); }
+
+/* ------------------------------------------------------------------ 缩放（Ctrl + 滚轮 / Ctrl + = - 0）：列表和阅读区一起放大缩小，顶栏和工具栏不变 */
+.scroller > :not(.jump), #list > *, .fu-compose, .list-head { zoom: var(--zoom, 1); }
+
+/* ------------------------------------------------------------------ 回到顶部 / 到底部：读长消息时右下角两个小圆钮，不在顶上 / 底下时才出现 */
+.jump { position: sticky; bottom: 0; height: 0; display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end; gap: 6px; padding-right: 18px; pointer-events: none; z-index: 5; }
+.jump-btn {
+  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+  background: var(--surface); color: var(--ink-3); border: 1px solid var(--line-2); box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; pointer-events: none;
+}
+.jump-btn i[data-icon] { width: 16px; height: 16px; }
+.jump-btn.show { opacity: 1; visibility: visible; pointer-events: auto; }
+.jump-btn:hover { color: var(--ink); border-color: var(--ink-4); }
+.jump-btn:last-child { margin-bottom: 14px; } /* 0 高的条往上长：最下面那颗离底边留一点 */
+
+/* ------------------------------------------------------------------ 页内查找（Ctrl+F）：工具栏下面一条，命中的字高亮，当前那个更深 */
+.findbar {
+  flex: none; display: flex; align-items: center; gap: 2px; margin: 0 12px 6px; padding: 3px 4px 3px 10px; height: 38px;
+  border-radius: 9px; background: var(--sunken); border: 1px solid transparent; color: var(--ink-4);
+}
+.findbar:focus-within { background: var(--bg); border-color: var(--ink-3); }
+.findbar > i[data-icon] { width: 15px; height: 15px; }
+.findbar input { flex: 1; min-width: 60px; height: 100%; padding: 0 6px; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 13.5px; }
+.findbar input::-webkit-search-cancel-button { display: none; }
+.findbar .icon-btn { width: 28px; height: 28px; }
+.findbar .icon-btn i[data-icon] { width: 15px; height: 15px; }
+.find-count { flex: none; padding: 0 6px; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.find-count:empty { display: none; }
+.findbar.none .find-count { color: var(--danger); }
+.find-all { flex: none; height: 26px; margin: 0 2px; padding: 0 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line-2); white-space: nowrap; }
+.find-all:hover { color: var(--ink); background: var(--hover); }
+::highlight(find) { background-color: color-mix(in srgb, var(--warn) 32%, transparent); color: inherit; }
+::highlight(find-cur) { background-color: var(--warn); color: var(--qr-ink); }
+
+/* ------------------------------------------------------------------ 按时间整理 / 接入 Claude Code 面板 */
+.tidy-row { display: grid; grid-template-columns: 40px 1fr; align-items: center; gap: 10px; }
+.tidy-row .rp-sub { font-size: 12.5px; font-weight: 550; }
+.tidy-ages button { padding: 0 4px; font-variant-numeric: tabular-nums; }
+.tidy-acts { gap: 8px; }
+.tidy-acts .primary, .tidy-acts .ghost { height: 32px; padding: 0 14px; font-size: 13px; }
+.tidy-acts .ghost { border: 1px solid var(--line-2); }
+.tidy-acts .ghost.danger { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.tidy-acts .ghost:disabled { border-color: var(--line); }
+.tidy .menu-sep { margin: 4px 0; }
+.cc-list { margin: 0; padding-left: 1.2em; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+.cc-list li { margin: 2px 0; }
+.cc-cmd { flex: 1; min-width: 0; }
+#ccPanel.busy, #tidyPanel.busy { opacity: .6; pointer-events: none; }
+
 /* ------------------------------------------------------------------ 打印 / 导出 PDF */
 .print-root { display: none; }
 @media print {
