@@ -35,9 +35,10 @@ ClaudeDesk is a small Windows tray app that gives Claude Code sessions a place t
 ## Features
 
 - **Decisions with a reply box.** Options with descriptions and a recommended pick, plus a free-text note on every decision. The waiting session gets your choice as one line of JSON.
-- **Answers and follow-ups.** Answers keep your original question. Ask a follow-up on any answer, notice or handled decision from the box at the top of the page; a session that is listening answers it and the reply is linked back, newest first.
+- **Answers and follow-ups.** Answers keep your original question. Ask a follow-up on any answer, notice or handled decision from the box docked at the bottom of the page, like a chat; a session that is listening answers it and the answer shows right under your question.
 - **Knows where each session is.** Every message remembers the Claude Code session that posted it. Cards say whether that session is waiting, still open but not listening, or ended, and when your reply reached it. One background listener per session brings replies and follow-ups back in a single batch.
-- **One tab per repo.** Messages are grouped by the git repo the session runs in. Tabs can be closed and reopened; a closed tab comes back by itself when that repo posts again.
+- **On your phone too.** Turn on 手机访问 (phone access) and the inbox is also a web page your phone can open: read, answer decisions and ask follow-ups away from your desk. It works on the same Wi-Fi, or anywhere through Tailscale, and nothing leaves your PC. Optional push notifications through [ntfy](https://ntfy.sh).
+- **One tab per repo.** Messages are grouped by the git repo the session was started in, wherever it `cd`s later. Tabs can be closed and reopened; a closed tab comes back by itself when that repo posts again.
 - **Built for triage.** A waiting-decisions strip with `N` to jump to the next one, an "unhandled only" filter (`F`), mark handled (`R`) for any selection without waking the session, archive what you handled more than an hour, a day or a week ago, undo (`Z`), keyboard multi-select.
 - **Full Markdown.** Tables, highlighted code and LaTeX math (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`), rendered offline with bundled fonts. Copy any message as Markdown, rich text or plain text, or export it to PDF.
 - **Hard to miss, easy to ignore.** Windows notifications, a tray badge and a taskbar badge with the unread count; urgent decisions keep flashing until you look.
@@ -99,11 +100,12 @@ Every time a background command finishes, Claude Code wakes the session, and eac
 | Tray icon | Red number = unread messages; red dot = nothing unread but a decision is still open; flashing = a decision or urgent message you haven't seen |
 | Taskbar button | While the window is open or minimized it carries the same red badge. When a message arrives with the window in the tray, a minimized button appears with the badge and flashes: decisions and urgent messages until you look or they are handled elsewhere, others three times |
 
-New messages also raise a Windows notification; clicking it opens that message.
+New messages also raise a Windows notification; clicking it opens that message. Notifications are silent unless you turn on **提醒时有声音** (notification sound) in Settings or the tray menu.
 
 ### Repo tabs
 
-- The tabs across the top are one per repo, sorted by name. There is no mixed all-repos view: you always look at one repo, or at the few you pick. The repo comes from `desk.py post`, which records the git repo of the directory it runs in (the origin URL's name; worktrees resolve to their repo; outside git, the folder name; `--repo` overrides).
+- The tabs across the top are one per repo, sorted by name. There is no mixed all-repos view: you always look at one repo, or at the few you pick.
+- The repo comes from `desk.py post`: it is the git repo the Claude Code session was **started in**, read from the session's transcript (the origin URL's name; worktrees resolve to their repo). A session that `cd`s into a nested clone, a temp folder or another repo still posts to its own tab, and a `--repo` passed from inside such a session is ignored with a note. Outside a session, or when the session wasn't started in a git repo, it is the git repo of the current directory, else the session's (or current) folder name, and `--repo` applies. Messages that older versions filed under the wrong folder move back to their session's repo by themselves.
 - Click a tab to see that repo; `Ctrl`/`Shift`-click to pick several (the last one can't be deselected); `[` / `]` step through the open tabs. With several repos in view the list is grouped by repo. View counts, "mark all read" and "archive handled" follow the selection.
 - On start the window shows the repos you had selected last time; failing that, the repo with the longest-waiting decision; failing that, the repo with the newest message. Opening a message from the tray, a notification or a notice switches to its repo.
 - **Close a tab** with its × or a middle click: its messages are hidden and stop counting (it asks first if decisions are still waiting there, and `Z` undoes it). Closing the selected tab moves to its neighbour. The tab comes back by itself when that repo posts a new message. **已关闭 N** at the right end of the tab bar, and Settings, list the closed tabs to reopen; with every tab closed, the list offers **找回标签…**.
@@ -116,6 +118,7 @@ New messages also raise a Windows notification; clicking it opens that message.
 - **Waiting-decisions strip:** while decisions are waiting, a strip under the search box reads "N 条待决定 · M 条紧急 · 最久已等 X". Click it or press `N` for the next waiting decision in the selected repos (urgent first, then the longest-waiting; `Shift+N` goes back); when none are left there, `N` switches to the repo with the longest-waiting decision and opens it. Waiting rows show how long the session has been waiting instead of a clock time. When a new decision or urgent message arrives somewhere you can't see, a notice at the bottom of the list says so and `N` opens it.
 - **只看未处理** (unhandled only, `F`) next to the search box hides everything except waiting decisions and unread messages. The message you are reading stays until you move on. The setting is remembered.
 - **Archive handled** (the box icon next to it) archives what in the selected repos is read and no longer needs a decision, like clearing browser history: pick **早于 1 小时 / 早于 24 小时 / 早于 7 天 / 全部** (older than 1 hour / 24 hours / 7 days / all), each with its count. Age counts from the message's last activity: when it arrived, when you replied, or when you last opened it. The message you are reading is never archived, the last choice is remembered, and `Z` undoes exactly that batch. The "⋯" menu has the same plus "mark all read".
+- **Auto-archive** (Settings → **自动归档已处理的**): 关 / 1 小时后 / 1 天后 / 7 天后 (off / after 1 hour (default) / 1 day / 7 days). Once a minute the app archives what is read, isn't a waiting decision, has no follow-up still waiting for an answer and hasn't had any activity for that long. Nothing is deleted; it is all in **归档**.
 - Marks: a solid dot is unread; an orange dot is a decision you haven't opened; an orange ring is a decision you've seen but not answered; an extra outer ring marks an urgent decision. The second line shows the status (待决定, ✓ your choice, ✓ 已处理, 已跳过, 已追问 · 等回答). Moving through the list with `↑`/`↓` marks a message read only after it stays open for 0.8 s.
 - Hover a row for its own actions (read/unread, mark handled, archive, delete) and a checkbox. Right-click works too.
 - **Select several:** tick checkboxes (`Shift` for a range), `Ctrl`-click, `X` for the current message, `Shift+↑↓`, `Ctrl+A`. The batch bar offers select all, mark handled, read, archive and delete.
@@ -142,22 +145,39 @@ New messages also raise a Windows notification; clicking it opens that message.
 
 ### Follow-up questions
 
-- Answers, notices and decisions that already have a reply (picked, handled, skipped or closed in chat) have a **追问** (follow-up) box right under the title. It is one line until you click into it. `Enter` jumps into it and `Ctrl+Enter` sends.
-- Every page reads newest first: the box (or an open decision's card) at the top, then your follow-ups with their answers, newest first, then your reply to the decision, and the original question and body at the bottom.
-- The line under the follow-up box says where the session that posted the message is, as on decisions:
+- Answers, notices and decisions that already have a reply (picked, handled, skipped or closed in chat) have a **追问** (follow-up) box docked at the bottom of the reader, like the Claude chat box. It stays put while you scroll, so you can read and type at the same time, and typing never scrolls the page back to it. It grows with what you write. `Enter` jumps into it and `Ctrl+Enter` sends.
+- Every page reads top to bottom like a conversation: the title, an open decision's card (or your reply to it), the original question and body, then your follow-ups in the order you sent them, each with the session's answer shown in full right under it. The answer's title opens it on its own page.
+- The line in the follow-up box says where the session that posted the message is, as on decisions:
   - **会话在等，发出后马上收到。** Its `listen` is running; the follow-up is delivered at once.
   - **会话还开着，但现在没在听：追问会存着，它下次查看时收到。** It gets the follow-up the next time it starts `listen`.
   - **会话收到了你的追问，正在回答。** It has just taken your follow-up and is writing the answer.
   - **这个会话已经结束：追问会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回，也可以复制下来粘到对话里。**
-- Each follow-up waiting for an answer shows **等待回答… · 已送达会话 · HH:MM**, or **等待回答… · 还没送达** with the reason. The session's answer is linked under your question and shows in the list as "回应追问", with a link back to the original.
+- Each follow-up waiting for an answer shows **等待回答… · 已送达会话 · HH:MM**, or **等待回答… · 还没送达** with the reason. The session's answer appears under your question and also shows in the list as "回应追问", with a link back to the original.
 - While the session isn't listening, **复制追问** copies the waiting follow-ups, with the original title and message id, for pasting into the Claude chat. The row shows "已追问 · 等回答" until an answer arrives.
 - Older messages that don't record their session keep the old wording: the box says the session is online while a `desk.py wait --followups` for that source is running.
 
 ### Reading, copying and settings
 
-- The reader toolbar copies the message as Markdown (`C`; the arrow offers rich text or plain text) and exports it to PDF (`Ctrl+P`). Code blocks have their own copy button.
+- The reader toolbar copies the message as Markdown (`C`; the arrow offers rich text or plain text) and exports it to PDF (`Ctrl+P`). Code blocks have a header with their language and a copy button.
+- **Links** open in your default browser. Web addresses are clickable everywhere: in the body (also inside `` `code` `` and right next to Chinese text, where the address ends at the first Chinese character or full-width punctuation), in option descriptions, follow-ups, replies and the original question. Links are in the accent color with a small ↗; hover a `[text](url)` link to see where it goes.
+- **Right-click** in the window: copy the selection (with formatting), open or copy a link, copy a code block, copy the whole message or select its text; in the reply and follow-up boxes, cut, copy, paste and select all. List rows and tabs keep their own menus.
 - Narrow windows (720 px or less) show the list and the reader one at a time: `↑`/`↓` move a cursor in the list, `Enter` opens, `Esc` or `Backspace` goes back.
-- **Settings** (slider icon, top right, or `Ctrl+,`): theme (system, light, dark), accent color, reading font (sans: Inter + Noto Sans SC; serif: Source Serif + Noto Serif SC), text size, **正文宽度** (reading width: 适中 720 px, 宽 920 px (default), 铺满 full width), list density, start with Windows, auto-update, check for updates, open the data folder, repo filing and closed tabs.
+- **Settings** (slider icon, top right, or `Ctrl+,`): theme (system, light, dark), accent color, reading font (sans: Inter + Noto Sans SC; serif: Source Serif + Noto Serif SC), text size, **正文宽度** (reading width: 适中 720 px, 宽 920 px (default), 铺满 full width), list density, auto-archive, notification sound, start with Windows, auto-update, check for updates, open the data folder, repo filing and closed tabs.
+
+### On your phone
+
+Settings → **手机访问** (phone access) publishes the inbox as a web page on your network. Your phone's browser opens the same inbox: the list, every message, decisions to answer, follow-ups to ask. Your PC has to be on with ClaudeDesk running; the messages never leave it.
+
+1. Turn on **开启手机访问**. The panel shows a link and a QR code for each address of this PC.
+2. Scan the QR code with your phone (or copy the link to it). The first visit stores the key in a cookie and drops it from the address bar; add the page to your home screen to open it like an app.
+3. Pick the address that fits:
+   - **局域网** (LAN): works while the phone is on the same Wi-Fi. Plain HTTP, so use it only on networks you trust.
+   - **Tailscale**: install [Tailscale](https://tailscale.com/download) (free) on the PC and the phone and sign in with the same account, then press **重新查找** (find again). This address works from anywhere, on mobile data too, and the traffic is encrypted. No router setup.
+4. The first time, Windows Firewall asks whether ClaudeDesk may use the network: allow it (private networks).
+
+The link is the key. **换一个链接** (new link) makes a new one: the old link and every phone that opened it stop working. The phone page can read, reply, ask follow-ups, mark handled, archive and delete; it cannot change the PC's settings, open files or update the app. Its look (theme, text size…) is set on the phone and only applies there. The port is 47821 by default and can be changed in the panel.
+
+**Push notifications (optional).** Turn on **新消息推送到手机** (push new messages to my phone), install the [ntfy](https://ntfy.sh) app on the phone and subscribe to the topic shown in the panel (the topic name works like a password). New messages then raise a notification; tapping it opens that message on the phone page. By default only the title and repo go through the ntfy server (**只有标题**); **标题和摘要** adds the start of the body, **不带内容** sends only "N new messages". On Windows, pushes are sent only after you've been away from the PC for 5 minutes, which you can turn off. You can point it at your own ntfy server. **发一条测试** sends a test notification.
 
 ## Keyboard shortcuts
 
@@ -191,7 +211,7 @@ PY=python
 DESK=C:/path/to/ClaudeDesk/desk.py
 
 # Post a decision; prints the new message id. The body is a UTF-8 Markdown file.
-# The calling Claude Code session and the git repo are recorded automatically.
+# The calling Claude Code session and the git repo it was started in are recorded automatically (no --source / --repo).
 "$PY" "$DESK" post --kind decision --title "Run the full regression suite before releasing?" \
     --body-file plan.md --option "Full regression::about 25 minutes, safest" \
     --option "Release now::CI already ran the unit tests" --option "Smoke test only::about 5 minutes" \
@@ -233,7 +253,7 @@ The older protocol (one background `wait` per decision, one follow-up listener p
 
 | Command | Options | Exit codes |
 |---|---|---|
-| `post` | `--kind {decision,answer,info}` and `--title` (required); `--source NAME` (display name only; default: the repo name, else the folder name); `--body TEXT` / `--body -` (stdin) / `--body-file FILE` / `--body-from-chat`; `--question` / `--question-file` / `--question-from-chat` (answers); `--option "label::description"` (repeatable), `--recommended N` (1-based), `--priority {normal,high}` (decisions); `--reply-to ID`; `--repo NAME`; `--session ID`; `--no-launch`; `--allow-text` (no longer needed, kept for compatibility) | 0 posted, prints the id; 1 invalid input, unknown `--reply-to`, or `--body-from-chat` / `--question-from-chat` found no text |
+| `post` | `--kind {decision,answer,info}` and `--title` (required); `--source NAME` (display name only; default: the repo name, else the folder name); `--body TEXT` / `--body -` (stdin) / `--body-file FILE` / `--body-from-chat`; `--question` / `--question-file` / `--question-from-chat` (answers); `--option "label::description"` (repeatable), `--recommended N` (1-based), `--priority {normal,high}` (decisions); `--reply-to ID`; `--repo NAME` (ignored from inside a session that was started in a git repo); `--session ID`; `--no-launch`; `--allow-text` (no longer needed, kept for compatibility) | 0 posted, prints the id; 1 invalid input, unknown `--reply-to`, or `--body-from-chat` / `--question-from-chat` found no text |
 | `listen` | `--session ID`; `--timeout SECONDS` (0 = forever, the default) | 0 events printed; 2 timeout; 4 the session's process is gone (prints nothing); 5 this session already has a listener; 1 no session |
 | `close` | `--id ID` or `--mine` (one of the two); `--text NOTE`; `--session ID` (with `--mine`) | 0 closed; 3 the user already replied in ClaudeDesk (that reply is printed); 1 unknown id, or no session for `--mine` |
 | `inbox` | `--repo NAME` (default: the current repo); `--adopt`; `--session ID` | 0; 1 `--adopt` without a session |
@@ -321,7 +341,7 @@ Everything lives in `data\` next to `ClaudeDesk.exe` and `desk.py`.
 | `responses.jsonl` | The app (your replies) and `desk.py close`; append-only | One reply per line |
 | `followups.jsonl` | The app (your follow-ups); append-only | One follow-up per line. Older versions also wrote "delivered" records here; they are still read |
 | `deliveries.jsonl` | `desk.py listen`, `wait`, `close` and `inbox --adopt`; append-only, never rewritten | What was delivered to which session and when, adopted sessions, and new PIDs of resumed sessions |
-| `state.json` | The app | Read / notified / archived / deleted ids, when you last opened each message, repo filing, closed tabs, settings, window position |
+| `state.json` | The app | Read / notified / archived / deleted ids, when you last opened each message, repo filing, closed tabs, settings, window position, and the phone access settings (on/off, port, link key, push topic) |
 | `instance.json` | The app | Port and token of the running instance, so a second launch hands over to it |
 | `claudedesk.log` | The app | Log (start, update, errors), rotated at 1 MB |
 | `.lock` | Both | Cross-process lock file |
@@ -336,7 +356,7 @@ A message (one line of `inbox.jsonl`):
 ```
 
 - `kind` is `decision`, `answer` or `info`. Answers may carry `question`; answers to follow-ups carry `reply_to` (and `followup_id`).
-- `repo` is the git repo the message was posted from; tabs are built from it. It is missing when `desk.py` ran outside a repo and had no folder name to use.
+- `repo` is the git repo the posting session was started in (outside a session: the repo of the current directory); tabs are built from it. It is missing when `desk.py` ran outside a repo and had no folder name to use.
 - `session` is the Claude Code session that posted the message (`$CLAUDE_CODE_SESSION_ID`), `session_pid` the PID of its `claude.exe` (`$CLAUDE_PID`) and `session_pid_start` that process's start time (Windows FILETIME), so a reused PID isn't mistaken for the session. Messages from older versions have none of these; they keep the older protocol and the old wording in the app.
 - Replies (`responses.jsonl`) and follow-ups (`followups.jsonl`) carry the message's `session` as well, so they still reach the session after the message is deleted.
 - `priority` is `normal` or `high`. Messages whose `source` starts with `selftest` are hidden unless the app runs with `--show-selftest`.
@@ -366,8 +386,11 @@ A message (one line of `inbox.jsonl`):
 ## Security and privacy
 
 - The UI server binds to `127.0.0.1` only, rejects unknown `Host` headers (against DNS rebinding) and requires a random per-launch token on every API call (against other web pages).
+- **Phone access** is off by default. When on, a second port listens on all network interfaces. It serves the page only to a request carrying the link's key (192 random bits, kept as an `HttpOnly` cookie after the first visit), API calls need the key as a header, and only reading and replying actions are allowed there: no settings, file opening, updates or quitting. **换一个链接** revokes every phone at once. The LAN address is plain HTTP; use the Tailscale address outside networks you trust.
+- **Push notifications** (off by default) send the title and repo of new messages to the ntfy server you choose (`ntfy.sh` unless you change it), never the key or, unless you choose 标题和摘要, the body.
+- Links in messages open only `http`, `https` and `mailto` addresses, in your default browser.
 - Message bodies are Markdown rendered through DOMPurify; raw HTML in a body cannot run script or cover the app.
-- The only network requests go to the GitHub Releases API and release downloads, for updates. There is no telemetry. Your messages stay in `data\`.
+- The only network requests go to the GitHub Releases API and release downloads, for updates, plus ntfy if you turn on push notifications. There is no telemetry. Your messages stay in `data\`.
 - `desk.py post --body-from-chat` / `--question-from-chat` read the calling session's own transcript (and its subagents') under `~/.claude/projects` (or `CLAUDE_CONFIG_DIR`) on your machine, only to copy the answer and the question into the message.
 - See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
 

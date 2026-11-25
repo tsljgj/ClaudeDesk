@@ -32,13 +32,14 @@ import desk  # noqa: E402
 
 from . import __version__, update, winapi  # noqa: E402
 from ._build import BUILD  # noqa: E402
-from .server import TOKEN_HEADER, DeskServer  # noqa: E402
+from .server import TOKEN_HEADER, DeskServer, external_url  # noqa: E402
 from .store import Store, plain_summary  # noqa: E402
 
 APP = "ClaudeDesk"
 log = logging.getLogger("claudedesk")
 WIN_W, WIN_H, MIN_W, MIN_H = 1240, 800, 380, 420
 UPDATE_EVERY = 6 * 3600
+NIIF_NOSOUND = 0x10  # 托盘气泡 / Toast 不放提示音（NOTIFYICONDATAW.dwInfoFlags）
 
 
 def app_dir() -> Path:
@@ -199,6 +200,7 @@ class TrayApp:
                  visible=winapi.WIN and FROZEN),
             Item("自动更新", self._toggle_auto_update, checked=lambda _: self.auto_update,
                  visible=update.is_packaged()),
+            Item("提醒时有声音", self._toggle_notify_sound, checked=lambda _: self.notify_sound),
             Item(lambda _: f"检查更新（build {BUILD}）", lambda: threading.Thread(
                 target=self.check_updates, args=(True,), daemon=True).start(), visible=update.is_packaged()),
             Item("打开数据目录", lambda: winapi.open_path(ddir)),
@@ -229,12 +231,26 @@ class TrayApp:
         ea["export_pdf"] = self.export_pdf
         ea["open_path"] = lambda body: winapi.open_path(Path(str(body.get("path"))))
         ea["open_data"] = lambda body: winapi.open_path(ddir)
+        ea["open_url"] = self.open_url
+        ea["clipboard_text"] = lambda body: winapi.clipboard_text()
         ea["autostart"] = lambda body: self._set_autostart(bool(body.get("on")))
         ea["auto_update"] = lambda body: self._set_auto_update(bool(body.get("on")))
+        ea["notify_sound"] = lambda body: self._set_notify_sound(bool(body.get("on")))
         ea["check_update"] = lambda body: self.check_updates(manual=True, install=False)
         ea["install_update"] = lambda body: self.check_updates(manual=True, install=True)
         ea["quit"] = lambda body: (threading.Timer(0.2, self.quit).start(), "ok")[1]
-        server.meta.update(app=True, autostart=winapi.autostart_enabled(), auto_update=self.auto_update)
+        server.meta.update(app=True, autostart=winapi.autostart_enabled(), auto_update=self.auto_update,
+                           notify_sound=self.notify_sound)
+
+    # ------------------------------------------------------------ 链接
+    def open_url(self, body: dict) -> bool:
+        """界面上点了链接：用系统默认浏览器打开（只认网页 / 邮件链接）。"""
+        import webbrowser
+
+        url = external_url(body.get("url"))
+        if not url:
+            raise ValueError("只能打开网页链接（http / https / mailto）")
+        return bool(webbrowser.open(url))
 
     # ------------------------------------------------------------ 设置
     @property
@@ -248,6 +264,36 @@ class TrayApp:
         self.server.meta["auto_update"] = on
         self.icon.update_menu()
         return on
+
+    @property
+    def notify_sound(self) -> bool:
+        """弹窗提醒带不带系统提示音。默认不带：消息多的时候一直响很打扰（设置里可以打开）。"""
+        return bool(self.store.state.get("app", {}).get("notify_sound", False))
+
+    def _set_notify_sound(self, on: bool) -> bool:
+        with self.store.lock:
+            self.store.state.setdefault("app", {})["notify_sound"] = on
+            self.store.schedule_save()
+        self.server.meta["notify_sound"] = on
+        self.icon.update_menu()
+        return on
+
+    def _toggle_notify_sound(self, *_):
+        self._set_notify_sound(not self.notify_sound)
+
+    def _balloon(self, text: str, title: str) -> None:
+        """托盘弹窗。静音时直接发 NIM_MODIFY 并带上 NIIF_NOSOUND（pystray 的 notify 不给这个开关）；
+        拿不到 pystray 的内部方法就退回普通的 notify（会有提示音，但至少弹得出来）。"""
+        if not self.notify_sound:
+            message = getattr(self.icon, "_message", None)
+            win32 = sys.modules.get("pystray._util.win32")
+            if message is not None and win32 is not None:
+                try:
+                    message(win32.NIM_MODIFY, win32.NIF_INFO, szInfo=text, szInfoTitle=title, dwInfoFlags=NIIF_NOSOUND)
+                    return
+                except Exception:  # noqa: BLE001
+                    log.warning("silent notify failed, falling back", exc_info=True)
+        self.icon.notify(text, title)
 
     def _toggle_auto_update(self, *_):
         self._set_auto_update(not self.auto_update)
@@ -386,15 +432,15 @@ class TrayApp:
             m = msgs[0]
             head = "追问有回答了" if m.get("reply_to") else {"decision": "需要你决定", "answer": "新回答", "info": "通知"}[m["kind"]]
             title = f"{head}：{m['title']}"
-            text = f"[{m.get('repo') or m['source']}] " + (plain_summary(m["question"], 60) + " → " if m["question"] else "") \
+            text = f"[{self.store.project_info(m)[0]}] " + (plain_summary(m["question"], 60) + " → " if m["question"] else "") \
                 + plain_summary(m["body"], 100)
         else:
             nd = sum(1 for m in msgs if m["kind"] == "decision")
             title = f"{len(msgs)} 条新消息" + (f"（{nd} 条待决定）" if nd else "")
-            text = "\n".join(f"· [{m['source']}] {m['title']}" for m in msgs[-4:])
+            text = "\n".join(f"· [{self.store.project_info(m)[0]}] {m['title']}" for m in msgs[-4:])
         if getattr(self.icon, "HAS_NOTIFICATION", False):
             try:
-                self.icon.notify(text[:250] or " ", title[:63])
+                self._balloon(text[:250] or " ", title[:63])
             except Exception:  # noqa: BLE001
                 log.exception("notify failed")
         if self.hwnd and not winapi.is_foreground(self.hwnd):
@@ -629,7 +675,7 @@ class TrayApp:
 
     def _toast(self, text: str) -> None:
         try:
-            self.icon.notify(text, APP)
+            self._balloon(text, APP)
         except Exception:  # noqa: BLE001
             pass
 
@@ -729,6 +775,9 @@ def self_test(ddir: Path) -> int:
         from .icon import render
 
         res["icon"] = render(64, count=3).size == (64, 64)
+        from . import qr, remote  # noqa: F401 - 手机访问：打包时别漏了这两个模块
+
+        res["remote"] = qr.svg("http://100.64.0.1:47821/?k=" + remote.new_key()).startswith("<svg")
         store = Store(tmp, show_selftest=True)
         server = DeskServer(store).start_background()
         server.meta["app"] = True
@@ -764,7 +813,7 @@ def self_test(ddir: Path) -> int:
         res["delete"] = call("api/action", {"action": "delete", "ids": [mid]}).get("result") == 1 and \
             not any(m.get("id") == mid for m in desk.read_all(tmp / desk.INBOX))
         res["bundled_cli"] = (not FROZEN) or (Path(getattr(sys, "_MEIPASS", "")) / "bundled" / "desk.py").exists()
-        checks = [v for k, v in res.items() if k in ("pystray", "icon", "page", "auth", "state", "reply", "archive",
+        checks = [v for k, v in res.items() if k in ("pystray", "icon", "remote", "page", "auth", "state", "reply", "archive",
                                                      "delete", "bundled_cli")] + list(res["assets"].values())
         res["ok"] = all(v is True for v in checks)
     except Exception as e:  # noqa: BLE001 - 没有控制台，出错也要写进结果
@@ -784,19 +833,27 @@ def self_test(ddir: Path) -> int:
 
 # ------------------------------------------------------------------ main
 def _discover_loop(store: Store, stop: threading.Event) -> None:
-    """每 10 分钟从 Claude Code 的会话记录里重新找一遍项目名，用来认旧消息属于哪个仓库。"""
+    """每 10 分钟从 Claude Code 的会话记录里重新找一遍项目名，用来认旧消息属于哪个仓库；每分钟认一遍新会话开在哪个仓库。"""
     from . import projects
 
     cache: dict = {}
+    scache: dict = {}
     stop.wait(2)
+    n = 0
     while not stop.is_set():
-        try:
-            names = projects.discover(cache=cache)
-            store.set_known_projects(names)
-            log.info("known projects: %s", ", ".join(sorted(names)) or "-")
+        if n % 10 == 0:
+            try:
+                names = projects.discover(cache=cache)
+                store.set_known_projects(names)
+                log.info("known projects: %s", ", ".join(sorted(names)) or "-")
+            except Exception:  # noqa: BLE001
+                log.exception("project discovery failed")
+        try:  # 每分钟看一次有没有新会话：它的消息按它开在哪个仓库归类
+            store.set_session_repos(projects.session_repos(store.sessions(), scache))
         except Exception:  # noqa: BLE001
-            log.exception("project discovery failed")
-        stop.wait(600)
+            log.exception("session repo lookup failed")
+        n += 1
+        stop.wait(60)
 
 
 def _poll_loop(store: Store, stop: threading.Event) -> None:
@@ -804,6 +861,8 @@ def _poll_loop(store: Store, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
             store.poll()
+            if store.auto_archive_if_due():
+                log.info("auto-archived handled messages")
             if store.compact_if_due() is False:  # 删掉的消息还在 inbox.jsonl 里（上次没压缩成，或启动时发现）
                 log.warning("inbox compaction failed, will retry later")
         except Exception:  # noqa: BLE001
@@ -860,12 +919,20 @@ def main(argv=None) -> int:
     store = Store(ddir, show_selftest=args.show_selftest)
     server = DeskServer(store, port=args.port if args.serve else 0).start_background()
     write_instance(ddir, server.port, server.token)
+    from .remote import Remote
+
+    remote = Remote(store, server)  # 手机访问（设置里打开）：另开一个端口给手机浏览器；新消息推送到手机
+    server.extra_actions["remote"] = remote.action
+    store.on_arrived.append(remote.notify)
+    threading.Thread(target=remote.start, name="remote-start", daemon=True).start()
     stop = threading.Event()
     threading.Thread(target=_poll_loop, args=(store, stop), name="poll", daemon=True).start()
     threading.Thread(target=_discover_loop, args=(store, stop), name="discover", daemon=True).start()
 
     if args.serve:
         print(f"ClaudeDesk 在 {server.url}  （Ctrl-C 退出）", flush=True)
+        if remote.cfg()["on"]:
+            print(f"手机访问开着：端口 {remote.cfg()['port']}，链接在设置 → 手机访问里", flush=True)
         server.extra_actions["show"] = lambda body: "ok"
         try:
             while True:

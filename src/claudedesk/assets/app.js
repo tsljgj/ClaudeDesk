@@ -39,6 +39,12 @@
     eyeOff: '<path d="M10.7 5.1A10.7 10.7 0 0 1 21.9 11.7a1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.4 2.5"/><path d="M14.1 14.2a3 3 0 0 1-4.2-4.2"/><path d="M17.5 17.5a10.8 10.8 0 0 1-15.4-5.2 1 1 0 0 1 0-.7 10.8 10.8 0 0 1 4.4-5.1"/><path d="m2 2 20 20"/>',
     filter: '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
     archiveDone: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="m9 14.5 2 2 4-4"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    scissors: '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
+    paste: '<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+    selectAll: '<path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M21 19a2 2 0 0 1-2 2M5 21a2 2 0 0 1-2-2M9 3h1M9 21h1M14 3h1M14 21h1M3 9v1M21 9v1M3 14v1M21 14v1"/>',
+    phone: '<rect width="14" height="20" x="5" y="2" rx="2.5"/><path d="M12 18h.01"/>',
   };
   function icon(name, cls) {
     return '<i data-icon class="' + (cls || "") + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg></i>";
@@ -125,7 +131,7 @@
     S.counts = st.counts || {};
     S.meta = st.meta || {};
     S.aliases = st.aliases || {};
-    if (st.settings) applySettings(st.settings);
+    if (st.settings) applySettings(BOOT.remote ? Object.assign({}, st.settings, localPrefs()) : st.settings); // 手机上叠加手机自己的外观
     S.multi.forEach(function (id) { if (!S.byId[id]) S.multi.delete(id); });
     if (S.current && !S.byId[S.current]) S.current = null;
     // 缓存瘦身：删掉的消息不留详情；已经有回复的不留决定的草稿（追问的草稿 fu 留着：回复过的决定才能追问）
@@ -133,6 +139,7 @@
     Object.keys(S.drafts).forEach(function (id) { if (!S.allById[id] || (S.allById[id].answered && !S.drafts[id].fu)) delete S.drafts[id]; });
     var arr = first ? null : arrivals(old);
     if (S.query) runSearch(); else renderAll();
+    if (first) setTimeout(openFromHash, 0); // 手机上点推送通知打开的：#m=<id>
     if (!arr) return;
     var hot = arr.hot, L = $("list").getBoundingClientRect(), covered = narrow() && S.current; // 窄窗口在看一条：阅读页盖住了列表
     arr.lit.forEach(function (id) { // 在这个视图里、但滚出了屏幕（或被盖住）：也算没看见
@@ -166,6 +173,13 @@
     return { hot: hot, lit: lit };
   }
 
+  function localPrefs() { try { return JSON.parse(load("prefs", "{}")) || {}; } catch (e) { return {}; } }
+  function openFromHash() {
+    var m = /^#m=([^&]+)/.exec(location.hash || "");
+    if (!m) return;
+    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { /* 老浏览器 */ }
+    window.deskOpen(decodeURIComponent(m[1]));
+  }
   function applySettings(s) {
     S.settings = s;
     var d = document.documentElement;
@@ -690,10 +704,19 @@
     });
   }
 
+  // 列表只画前面一段（LIST_PAGE 条），滑到底再接着画：历史上千条时不用每次都把整张表写进页面（又慢又占内存）。
+  // 换了视图 / 项目 / 搜索就回到第一段；选中的、键盘光标所在的那条总在画出来的这段里
+  var LIST_PAGE = 150, listLimit = LIST_PAGE, listKey = null;
   function renderList() {
     var v = VIEWS.filter(function (x) { return x.id === S.view; })[0] || VIEWS[0];
-    var items = viewItems();
-    S.visible = items.map(function (m) { return m.id; });
+    var all = viewItems(), items = all;
+    S.visible = all.map(function (m) { return m.id; });
+    var key = [S.view, Array.from(S.projects).join(","), S.query, todoOn(), grouped()].join("|");
+    if (key !== listKey) { listKey = key; listLimit = LIST_PAGE; }
+    [S.current, S.cursor].forEach(function (id) { var i = id ? S.visible.indexOf(id) : -1; if (i >= listLimit) listLimit = i + 40; });
+    var rest = Math.max(0, all.length - listLimit);
+    if (rest) items = all.slice(0, listLimit);
+    var tail = rest ? '<button class="list-more" data-load-more>还有 ' + rest + " 条 · 往下滑继续显示</button>" : "";
     var vis = new Set(S.visible); // 勾选只留看得见的（在别处归档了、被搜索筛掉的不留）：批量操作只作用在眼前这些
     S.multi.forEach(function (id) { if (!vis.has(id)) S.multi.delete(id); });
     var more = searchMore(); // 搜索命中但被视图 / 项目挡住的："另有 N 条…"、"其他项目：…"，和列表一起写
@@ -718,9 +741,9 @@
         }
         html += itemHtml(m);
       });
-      setList(html + more);
+      setList(html + tail + more);
     } else {
-      setList(items.map(itemHtml).join("") + more);
+      setList(items.map(itemHtml).join("") + tail + more);
     }
     renderBulk();
   }
@@ -730,6 +753,11 @@
     if (html === lastListHtml) return;
     $("list").innerHTML = html;
     lastListHtml = html;
+  }
+  function loadMoreRows() { // 滑到列表底部 / 点"还有 N 条"：再画一段
+    if (!$("list").querySelector("[data-load-more]")) return;
+    listLimit += LIST_PAGE;
+    renderList();
   }
   function rowEl(id) { return id ? $("list").querySelector('.item[data-id="' + cssEsc(id) + '"]') : null; }
   function renderRow(id) { // 只重画一行（选中 / 已读变了）；DOM 和上次整份写的不一样了，下次整份重画不能跳过
@@ -832,13 +860,13 @@
     }, function () { if (detailLoading === key) detailLoading = null; });
   }
   var detailLoading = null; // 正在拿详情的那条（id|answered）
-  // 详情缓存：最近用过的排在最后，最多留 60 条；有了"已回复"版就丢掉旧的"未回复"版
+  // 详情缓存：最近用过的排在最后，最多留 30 条；有了"已回复"版就丢掉旧的"未回复"版
   function keepDetail(key, d) {
     delete S.details[key];
     S.details[key] = d;
     if (/\|true$/.test(key)) delete S.details[key.replace(/\|true$/, "|false")];
     var ks = Object.keys(S.details);
-    for (var i = 0; i < ks.length - 60; i++) delete S.details[ks[i]];
+    for (var i = 0; i < ks.length - 30; i++) delete S.details[ks[i]];
     return d;
   }
 
@@ -871,7 +899,7 @@
     renderEyebrow(S.byId[d.id] || d);
     $("title").textContent = d.title;
     $("question").hidden = !d.question;
-    $("questionText").textContent = d.question || "";
+    $("questionText").innerHTML = MD.linkText(d.question || ""); // 原问题里的网址也能点
     renderBody(d);
     renderDecision(d, newMsg);
     renderFollowup(d, newMsg);
@@ -912,7 +940,7 @@
         '<span class="num">' + (chosen ? icon("check") : i + 1) + "</span>" +
         '<span class="txt"><span class="lab">' + esc(o.label) +
         (d.recommended === i + 1 ? '<span class="rec">推荐</span>' : "") + "</span>" +
-        (o.description ? '<span class="desc">' + esc(o.description) + "</span>" : "") + "</span></button>";
+        (o.description ? '<span class="desc">' + MD.linkText(o.description) + "</span>" : "") + "</span></button>";
     }).join("");
     opts.hidden = !(d.options || []).length;
     var ta = $("replyText");
@@ -952,9 +980,9 @@
       if (!known) html = head + "<div>" + what + (r.resolved ? "等待的会话已收到「已经处理好了」。" : "等待的会话已收到通知。") + "</div>";
       else if (st === "gone" && !m.delivered) html = head + "<div>" + what + "会话已经结束，不用再通知它。</div>"; // 收尾清理：不催用户去找回
       else html = head + " · " + deliv + "<div>" + what + (r.resolved ? "告诉会话「已经处理好了」。" : "告诉会话这条跳过了。") + hint + "</div>";
-    } else if (r.closed_by === "claude") html = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
+    } else if (r.closed_by === "claude") html = "<b>已在对话中处理</b> · " + when + (r.text ? '<div class="reply-text">' + MD.linkText(r.text) + "</div>" : "");
     else html = "<b>已提交</b> · " + (when ? when + " · " : "") + (known ? deliv : "会话已收到") + // 选了哪项看上面打了 ✓ 的那项，不再重复
-      (known && hint ? '<div class="deliv-hint">' + hint + "</div>" : "") + (r.text ? '<div class="reply-text">' + esc(r.text) + "</div>" : "");
+      (known && hint ? '<div class="deliv-hint">' + hint + "</div>" : "") + (r.text ? '<div class="reply-text">' + MD.linkText(r.text) + "</div>" : "");
     // 还有别的待决定：给个按钮过去，但不自动跳（列表和阅读区不突然变）
     if (queue().some(function (x) { return x.id !== d.id; })) html += '<button class="ghost next-dec" data-next>下一条待决定 →（N）</button>';
     done.className = "reply-done" + (r.dismissed ? " skip" : "");
@@ -1063,23 +1091,66 @@
     return "等待回答… · " + (f.delivered ? "已送达会话 · " + hhmm(f.delivered) : "还没送达 · " + notYet(sessOf(d)));
   }
   function fuStored(d) { return (d.followups || []).filter(function (f) { return !f.reply && !fuAnswering(f); }); } // 可以复制到对话里的
+  // 回答的正文按 id 记住渲染好的节点：长轮询重画追问记录时直接搬回去，不重新解析 Markdown / 公式（也不会闪、不会跳）
+  var ansNodes = {}, fuSent = {};
+  function ansNode(r) {
+    var n = ansNodes[r.id];
+    if (n && n._src === (r.body || "")) return n;
+    n = document.createElement("div");
+    n.className = "fu-ans md";
+    n._src = r.body || "";
+    if (n._src.trim()) { n.innerHTML = MD.toHtml(n._src); MD.hydrate(n); }
+    else n.innerHTML = '<p class="no-body">（没有正文）</p>';
+    ansNodes[r.id] = n;
+    return n;
+  }
+  function nearBottom() { var s = $("scroller"); return s.scrollHeight - s.scrollTop - s.clientHeight < 48; }
+  // 往来记录按时间从上往下，像对话：你的追问（右边的气泡）→ Claude 的回答（正文直接显示，标题点了单独打开）；
+  // 还没回答就"等待回答…"。配不上追问的回应单独一条，按时间插进去。追问框在底部，不在这里
   function renderFollowup(d, reset) {
-    var box = $("followup");
-    if (!canFollow(d)) { box.hidden = true; return; }
+    var box = $("followup"), list = $("fuList");
+    if (!canFollow(d)) { box.hidden = true; $("thread").hidden = true; list.hidden = true; return; }
     box.hidden = false;
-    var busy = !!fuSending[d.id], link = function (r) { return '<button class="fu-a" data-open="' + esc(r.id) + '">Claude 的回答：' + esc(r.title) + " →</button>"; };
-    // 往来记录新的在上（紧挨着追问框，刚发的一眼看得到）：每条追问下面是回应它的那条回答（点了打开），还没有就"等待回答…"；
-    // 配不上追问的回应单独一行，按时间插进去
+    var busy = !!fuSending[d.id], reps = {};
+    (d.replies || []).forEach(function (r) { reps[r.id] = r; });
+    var ans = function (r) {
+      return '<div class="fu-reply"><button class="fu-a" data-open="' + esc(r.id) + '" title="单独打开这条回答">Claude 的回答：' + esc(r.title) + " →</button>" +
+        '<div data-ans="' + esc(r.id) + '"></div></div>';
+    };
     var rows = (d.followups || []).map(function (f, i) {
-      return { ts: f.ts, i: i, html: '<div class="fu-item"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
-        '<div class="fu-q">' + esc(f.text) + "</div>" + (f.reply ? link(f.reply) :
+      var r = f.reply && (reps[f.reply.id] || f.reply);
+      return { ts: f.ts, i: i, html: '<div class="fu-item"><div class="fu-me"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
+        '<div class="fu-q">' + MD.linkText(f.text) + "</div></div>" + (r ? ans(r) :
         '<div class="fu-wait" data-fid="' + esc(f.id) + '">' + fuWait(d, f) + "</div>") + "</div>" };
-    }).concat((d.replies || []).filter(function (r) { return !r.paired; }).map(function (r, i) { return { ts: r.ts, i: 1e6 + i, html: link(r) }; }));
-    rows.sort(function (a, b) { return (new Date(b.ts) - new Date(a.ts)) || b.i - a.i; }); // 同一毫秒的：后来的在上
+    }).concat((d.replies || []).filter(function (r) { return !r.paired; }).map(function (r, i) {
+      return { ts: r.ts, i: 1e6 + i, html: '<div class="fu-loose">' + ans(r) + "</div>" };
+    }));
+    rows.sort(function (a, b) { return (new Date(a.ts) - new Date(b.ts)) || a.i - b.i; }); // 旧的在上，新的在下（挨着底部的追问框）
     var html = rows.map(function (x) { return x.html; }).join("");
+    var stick = !reset && !list.hidden && nearBottom(), before = list.querySelectorAll("[data-ans]").length; // 正读到底：新回答来了跟着往下；在上面读就不动
+    if (list.dataset.html !== html || list.dataset.id !== d.id) {
+      list.innerHTML = html;
+      list.dataset.html = html;
+      list.dataset.id = d.id;
+      var keep = {};
+      list.querySelectorAll("[data-ans]").forEach(function (ph) {
+        var r = reps[ph.dataset.ans] || { id: ph.dataset.ans, body: "" };
+        var n = ansNode(r);
+        keep[r.id] = n;
+        ph.parentNode.replaceChild(n, ph);
+      });
+      ansNodes = keep; // 只留眼前这条的：换一条就放掉，内存不越攒越多
+    }
+    $("thread").hidden = list.hidden = !html;
+    if (fuSent[d.id] != null && (d.followups || []).length > fuSent[d.id]) {
+      delete fuSent[d.id];
+      var sc = $("scroller");
+      sc.scrollTo({ top: sc.scrollHeight, behavior: reduced() ? "auto" : "smooth" });
+    } else if (stick && list.querySelectorAll(".fu-ans").length > before) {
+      var all = list.querySelectorAll(".fu-reply");
+      if (all.length) all[all.length - 1].scrollIntoView({ block: "start", behavior: reduced() ? "auto" : "smooth" });
+    }
     var ta = $("fuText"), dr = S.drafts[d.id];
-    $("fuList").innerHTML = html;
-    $("fuList").hidden = !html;
     if (reset || ta.dataset.id !== d.id) ta.value = dr && dr.fu ? dr.text : ""; // 每条各记各的草稿（决定没回复时写的补充说明不算）；决定刚回复、卡片刚出现时也换成它自己的
     ta.dataset.id = d.id;
     ta.readOnly = busy;
@@ -1129,6 +1200,7 @@
       var cd = currentDetail();
       if (cd && cd.id === d.id) { $("fuText").value = ""; renderFollowup(cd, false); }
       else toast("已追问「" + d.title + "」");
+      fuSent[d.id] = (d.followups || []).length; // 刚发的那条出现在记录最下面时滚过去看一眼（只这一次，之后往上翻不会被拽回来）
       return refreshNow(true);
     }).catch(function (e) {
       delete fuSending[d.id];
@@ -1204,7 +1276,7 @@
     if (!ids.length) return;
     if (narrow() && !S.current && !extend) { // 窄窗口列表页：↑↓ 只挪光标，不打开（Enter 才打开）
       var c = ids.indexOf(S.cursor), k = c < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, c + delta)), prev = S.cursor;
-      S.cursor = ids[k]; renderRow(prev); renderRow(S.cursor);
+      S.cursor = ids[k]; renderRow(prev); if (rowEl(S.cursor)) renderRow(S.cursor); else renderList();
       var ce = rowEl(S.cursor); if (ce) ce.scrollIntoView({ block: "nearest" });
       return;
     }
@@ -1705,13 +1777,22 @@
       '<div class="set-row"><div class="menu-label">字号</div>' + seg("size", [["s", "小"], ["m", "中"], ["l", "大"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">正文宽度</div>' + seg("width", [["m", "适中"], ["l", "宽"], ["full", "铺满"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">列表密度</div>' + seg("density", [["cozy", "舒展"], ["compact", "紧凑"]]) + "</div>";
+    // 自动归档：已读、不用再处理的消息多久没动静就收进"归档"（随时能找回）。存在电脑上，手机上不显示
+    if (!BOOT.remote) h += '<div class="set-row"><div class="menu-label">自动归档已处理的</div>' +
+      seg("auto_archive", [["off", "关"], ["1h", "1 小时后"], ["1d", "1 天后"], ["7d", "7 天后"]]) + "</div>";
     if (BOOT.app) {
       var m = S.meta;
       h += '<div class="menu-sep"></div>' +
+        '<button class="toggle-row" data-app="notify_sound" title="新消息弹窗时放不放系统提示音">提醒时有声音<span class="switch' + (m.notify_sound ? " on" : "") + '"></span></button>' +
         '<button class="toggle-row" data-app="autostart">开机自启<span class="switch' + (m.autostart ? " on" : "") + '"></span></button>' +
         '<button class="toggle-row" data-app="auto_update">自动更新<span class="switch' + (m.auto_update ? " on" : "") + '"></span></button>' +
         '<button class="menu-item" data-app="check_update">' + icon("refresh") + "检查更新<span class=\"sub\">" + (BOOT.build ? "build " + BOOT.build : "源码运行") + "</span></button>" +
         '<button class="menu-item" data-app="open_data">' + icon("folder") + "打开数据目录</button>";
+    }
+    var rm = S.meta.remote;
+    if (rm && !BOOT.remote) {
+      h += (BOOT.app ? "" : '<div class="menu-sep"></div>') + '<button class="menu-item" data-app="remote">' + icon("phone") + "手机访问<span class=\"sub\">" +
+        (rm.running ? "已开" + (rm.push ? " · 推送" : "") : rm.on ? "没开成" : "关") + "</span></button>";
     }
     var al = Object.keys(S.aliases || {});
     if (al.length) {
@@ -1744,7 +1825,9 @@
         var vals = {}; vals[b.dataset.set] = b.dataset.val;
         var s = Object.assign({}, S.settings, vals);
         applySettings(s);
-        act({ action: "settings", values: vals }).catch(function () {});
+        if (b.dataset.set === "auto_archive") { act({ action: "settings", values: vals }).then(function () { return refreshNow(); }).catch(function () {}); repaintSettings(); return; }
+        if (BOOT.remote) save("prefs", JSON.stringify(Object.assign(localPrefs(), vals))); // 手机上改的只管手机
+        else act({ action: "settings", values: vals }).catch(function () {});
         repaintSettings();
         var cd = currentDetail(); // 字号变了，公式重排：只重画正文，选项和没写完的回复不动
         if (cd && shownId() === cd.id) renderBody(cd);
@@ -1758,7 +1841,8 @@
       }
       var a = b.dataset.app;
       if (a === "shortcuts") { closePopover(); return showShortcuts(); }
-      if (a === "autostart" || a === "auto_update") {
+      if (a === "remote") { closePopover(); return openRemote(); }
+      if (a === "autostart" || a === "auto_update" || a === "notify_sound") {
         act({ action: a, on: !S.meta[a] }).then(function (r) {
           S.meta[a] = !!r;
           repaintSettings();
@@ -1774,6 +1858,126 @@
       if (a === "open_data") { act({ action: "open_data" }); closePopover(); }
     });
   }
+  // 大对话框（快捷键表、手机访问）：只有一个"好的 / 完成"按钮
+  function showSheet(title, html, ok, onClose) {
+    $("modalTitle").textContent = title;
+    $("modal").firstElementChild.classList.add("sheet");
+    $("modalText").innerHTML = html;
+    $("modalOk").textContent = ok || "好的";
+    $("modalOk").className = "primary";
+    $("modalCancel").hidden = true;
+    modalBack = document.activeElement;
+    $("modal").hidden = false;
+    setTimeout(function () { $("modalOk").focus(); }, 0);
+    modalResolve = function () { $("modalCancel").hidden = false; if (onClose) onClose(); };
+  }
+
+  // ---- 手机访问：把这里发布成一个网页，手机浏览器打开（见 remote.py）
+  var RP = null, rpLink = 0; // 面板开着时：最新的状态 / 选着的是第几个地址
+  var RP_KIND = { tailscale: "Tailscale", lan: "局域网", other: "其他网络" };
+  var DETAIL = [["full", "标题和摘要"], ["title", "只有标题"], ["none", "不带内容"]];
+  function openRemote() {
+    RP = null; rpLink = 0;
+    showSheet("手机访问", '<div class="remote-panel" id="remotePanel"><p class="rp-note">正在找这台电脑的网络地址…</p></div>', "完成", function () { RP = null; });
+    remoteAct({ op: "status" });
+  }
+  function remoteAct(body) {
+    return act(Object.assign({ action: "remote" }, body)).then(function (st) {
+      if ($("modal").hidden || !$("remotePanel")) return st;
+      RP = st; renderRemote(); return st;
+    }).catch(function (e) { toast(e.message, { bad: true }); if (RP) renderRemote(); });
+  }
+  function rpSwitch(key, on, label, sub) {
+    return '<button class="toggle-row rp-toggle" data-rp="' + key + '" aria-pressed="' + !!on + '"><span>' + label +
+      (sub ? '<span class="rp-sub">' + sub + "</span>" : "") + '</span><span class="switch' + (on ? " on" : "") + '"></span></button>';
+  }
+  function renderRemote() {
+    var box = $("remotePanel");
+    if (!box || !RP) return;
+    var h = rpSwitch("enable", RP.on, "开启手机访问", "手机浏览器打开链接，就是这个收件箱：能看、能回复决定、能追问") +
+      '<p class="rp-note">内容一直在这台电脑上，不经过别的服务器。电脑要开着、ClaudeDesk 要在运行。</p>';
+    if (RP.on && RP.error) h += '<p class="rp-error">' + esc(RP.error) + "</p>";
+    if (RP.running && !RP.links.length) h += '<p class="rp-error">没找到这台电脑的网络地址：连上网络后点"重新查找"。</p>';
+    if (RP.running && RP.links.length) {
+      if (rpLink >= RP.links.length) rpLink = 0;
+      var L = RP.links[rpLink];
+      h += '<div class="seg rp-links">' + RP.links.map(function (x, i) {
+        return '<button data-rp-link="' + i + '" class="' + (i === rpLink ? "on" : "") + '" aria-pressed="' + (i === rpLink) + '">' +
+          esc(RP_KIND[x.kind] || x.kind) + (RP.links.filter(function (y) { return y.kind === x.kind; }).length > 1 ? " · " + esc(x.host) : "") + "</button>";
+      }).join("") + "</div>" +
+        '<div class="rp-link"><div class="rp-qr">' + L.qr + '</div><div class="rp-info">' +
+        '<div class="rp-url" title="手机扫左边的二维码，或者把这个链接发到自己手机上">' + esc(L.url) + "</div>" +
+        '<div class="rp-actions"><button class="ghost" data-rp="copy">' + icon("copy") + "复制链接</button>" +
+        '<button class="ghost" data-rp="refresh">' + icon("refresh") + "重新查找</button></div>" +
+        '<p class="rp-hint">' + (L.kind === "tailscale" ? "手机装了 Tailscale、登录同一个账号：在哪都能打开（4G / 5G 也行），流量是加密的。"
+          : L.kind === "lan" ? "手机和电脑连同一个 Wi-Fi 时能打开。这个地址不加密：只在自己家、信得过的网络里用。"
+          : "这个地址不加密，一般用不上：优先用 Tailscale 或局域网地址。") + "</p></div></div>";
+      if (!RP.tailscale) {
+        h += '<p class="rp-note">在外面也想用：电脑和手机都装上 <a href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Tailscale</a>（免费），' +
+          '登录同一个账号，再点"重新查找"，这里会多出一个 Tailscale 地址。</p>';
+      }
+      h += '<p class="rp-note">扫码打开后，在手机浏览器里"添加到主屏幕"，以后点图标就能看。链接就是钥匙，别发给别人。' +
+        (BOOT.platform === "win32" ? "第一次用时 Windows 防火墙会问要不要让 ClaudeDesk 联网，选允许（专用网络）。" : "") + "</p>" +
+        '<div class="rp-row"><button class="ghost" data-rp="new_key">换一个链接</button><span class="rp-sub">旧链接和已经打开过的手机都会失效</span></div>';
+    }
+    if (RP.on) {
+      h += '<div class="rp-row"><span class="rp-sub">端口</span><input id="rpPort" class="rp-port" inputmode="numeric" value="' + esc(String(RP.port)) +
+        '" aria-label="端口"><button class="ghost" data-rp="port">改端口</button></div>';
+    }
+    var P = RP.push || {};
+    h += '<div class="menu-sep"></div>' + rpSwitch("push", P.on, "新消息推送到手机", "通过 ntfy 推送通知，点开就是那条消息");
+    if (P.on) {
+      h += '<p class="rp-note">手机上装 ntfy（App Store / Google Play 搜 “ntfy”），订阅下面这个主题。主题名就是密码，别外传。</p>' +
+        '<div class="rp-row"><code class="rp-topic">' + esc(P.topic) + '</code><button class="ghost" data-rp="copy_topic">' + icon("copy") + "复制主题</button>" +
+        (P.subscribe ? '<a class="rp-sub" href="' + esc(P.subscribe) + '" target="_blank" rel="noopener noreferrer">网页版</a>' : "") + "</div>" +
+        '<div class="rp-row"><span class="rp-sub">通知里带</span><div class="seg rp-detail">' + DETAIL.map(function (d) {
+          return '<button data-rp-detail="' + d[0] + '" class="' + (P.detail === d[0] ? "on" : "") + '" aria-pressed="' + (P.detail === d[0]) + '">' + d[1] + "</button>";
+        }).join("") + "</div></div>" +
+        '<p class="rp-note">' + (P.detail === "full" ? "标题和正文开头一小段会经过 ntfy 的服务器。" : P.detail === "title" ? "只有标题和项目名经过 ntfy 的服务器，正文不发出去。" : "只说有几条新消息，不带标题和正文。") +
+        (RP.running ? "" : "开了手机访问，点通知才能直接打开那条。") + "</p>" +
+        (P.idle_known ? rpSwitch("away", P.away, "离开电脑 5 分钟以上才推", "人在电脑前时看托盘通知就够了") : "") +
+        '<div class="rp-row"><button class="ghost" data-rp="push_test">发一条测试</button>' + (P.error ? '<span class="rp-error">' + esc(P.error) + "</span>" : "") + "</div>";
+    }
+    var a = document.activeElement, sel = null; // 重画后焦点留在同一个按钮 / 输入框上
+    if (a && box.contains(a)) {
+      sel = a.id ? "#" + a.id : a.dataset.rp ? '[data-rp="' + a.dataset.rp + '"]' : a.dataset.rpLink != null ? '[data-rp-link="' + a.dataset.rpLink + '"]' :
+        a.dataset.rpDetail ? '[data-rp-detail="' + a.dataset.rpDetail + '"]' : null;
+    }
+    box.innerHTML = h;
+    var b = sel && box.querySelector(sel);
+    if (b) b.focus();
+  }
+  function remoteClick(e) {
+    var b = e.target.closest("[data-rp],[data-rp-link],[data-rp-detail]");
+    if (!b || !RP) return;
+    if (b.dataset.rpLink != null) { rpLink = +b.dataset.rpLink; return renderRemote(); }
+    if (b.dataset.rpDetail) return remoteAct({ op: "push", detail: b.dataset.rpDetail });
+    var k = b.dataset.rp, L = RP.links && RP.links[rpLink];
+    if (k === "enable") return remoteAct({ op: "enable", on: !RP.on });
+    if (k === "push") return remoteAct({ op: "push", on: !(RP.push && RP.push.on) });
+    if (k === "away") return remoteAct({ op: "push", away: !RP.push.away });
+    if (k === "refresh") return remoteAct({ op: "status" });
+    if (k === "port") return remoteAct({ op: "port", port: $("rpPort").value.trim() });
+    if (k === "copy" && L) return writeClipboard(L.url).then(function () { toast("已复制链接：发到自己手机上打开"); });
+    if (k === "copy_topic") return writeClipboard(RP.push.topic).then(function () { toast("已复制主题"); });
+    if (k === "push_test") return remoteAct({ op: "push_test" }).then(function (st) { if (st) toast("已发出：手机上应该马上收到"); });
+    if (k === "new_key") {
+      return confirmLayer("换一个链接？", "旧链接、已经打开过的手机都会失效，要用新链接（新二维码）重新打开。", "换一个", function () { remoteAct({ op: "new_key" }); });
+    }
+  }
+  // 面板开着时再问一句：问完回到面板（共用一个对话框）
+  function confirmLayer(title, text, ok, run) {
+    var keep = { title: $("modalTitle").textContent, html: $("modalText").innerHTML };
+    modalResolve = null;
+    $("modalCancel").hidden = false;
+    $("modal").firstElementChild.classList.remove("sheet");
+    confirmBox(title, text, ok, true).then(function (yes) {
+      showSheet(keep.title, keep.html, "完成", function () { RP = null; });
+      renderRemote();
+      if (yes) run();
+    });
+  }
+
   function showShortcuts() { // 分四组、宽时两栏；只列键盘（鼠标操作看悬停提示）
     var groups = [["浏览", [["↑ ↓ / J K", "上一条 / 下一条"], ["N / Shift + N", "下一条 / 上一条待决定"], ["Shift + ↑ ↓", "连续勾选"],
         ["/", "搜索"], ["[ ]", "切换项目"], ["F", "只看未处理（开 / 关）"], ["Esc", "退一层"]]],
@@ -1836,7 +2040,12 @@
       var b = e.target.closest(".tab");
       if (b) setView(b.dataset.view);
     });
+    $("list").addEventListener("scroll", function () {
+      var l = $("list");
+      if (l.scrollHeight - l.scrollTop - l.clientHeight < 600) loadMoreRows();
+    }, { passive: true });
     $("list").addEventListener("click", function (e) {
+      if (e.target.closest("[data-load-more]")) { loadMoreRows(); return; }
       var more = e.target.closest("[data-more]"); // "另有 N 条在其他视图里"：项目不动，只换视图
       if (more) {
         if (more.dataset.more === "all" && S.todo) { S.todo = false; save("todo", ""); } // 查看全部结果：已处理的也要露出来
@@ -1960,6 +2169,7 @@
       searchFirst();
     });
     $("options").addEventListener("click", function (e) {
+      if (e.target.closest("a[href]")) return; // 选项说明里的链接：打开它，不算选这一项
       var b = e.target.closest(".opt");
       if (b && !b.disabled) pick(+b.dataset.idx);
     });
@@ -1973,7 +2183,7 @@
     });
     $("fuSend").addEventListener("click", sendFollowup);
     $("fuCopy").addEventListener("click", copyFollowup);
-    [$("followup"), $("threadRef")].forEach(function (box) { // "Claude 的回答 →" / "原回答（原决定…）"：打开那一条
+    [$("thread"), $("threadRef")].forEach(function (box) { // "Claude 的回答 →" / "原回答（原决定…）"：打开那一条
       box.addEventListener("click", function (e) { // 点的按钮跟着换掉 / 藏起来：焦点交给列表，不留在看不见的按钮上
         var b = e.target.closest("[data-open]");
         if (b) { window.deskOpen(b.dataset.open); $("list").focus(); }
@@ -1997,13 +2207,15 @@
       act({ action: "install_update" }).then(function (r) { toast(r || "正在更新…"); refreshNow(); })
         .catch(function (e) { toast(e.message, { bad: true }); });
     });
+    $("modalText").addEventListener("click", remoteClick);
+    $("modalText").addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.id === "rpPort") { e.preventDefault(); e.stopPropagation(); remoteAct({ op: "port", port: e.target.value.trim() }); } });
     $("modalOk").addEventListener("click", function () { closeModal(true); });
     $("modalCancel").addEventListener("click", function () { closeModal(false); });
     $("modal").addEventListener("click", function (e) { if (e.target === $("modal")) closeModal(false); });
     $("scroller").addEventListener("scroll", function () {
       $("toolbar").classList.toggle("scrolled", $("scroller").scrollTop > 4);
     });
-    $("body").addEventListener("click", function (e) {
+    $("scroller").addEventListener("click", function (e) { // 正文和追问记录里的回答都有代码块
       var b = e.target.closest(".code-copy");
       if (!b) return;
       var code = b.closest(".codeblock").querySelector("code").innerText;
@@ -2012,6 +2224,21 @@
         setTimeout(function () { b.textContent = "复制"; b.classList.remove("ok"); }, 1400);
       });
     });
+    // 链接一律在系统浏览器里打开。桌面程序里交给本机程序去开（窗口里 target=_blank 靠的是 pywebview，版本不同不一定靠得住）
+    document.addEventListener("click", function (e) {
+      var u = linkOf(e.target);
+      if (!u || e.defaultPrevented || !BOOT.app) return;
+      e.preventDefault();
+      openUrl(u);
+    });
+    document.addEventListener("auxclick", function (e) { // 中键点链接：也是在浏览器里打开
+      var u = e.button === 1 && linkOf(e.target);
+      if (!u || !BOOT.app) return;
+      e.preventDefault();
+      openUrl(u);
+    });
+    document.addEventListener("contextmenu", ctxMenu);
+    window.addEventListener("hashchange", openFromHash); // 页面开着时又点了一条推送通知
     document.addEventListener("mousedown", function (e) {
       var p = $("popover");
       if (!p.hidden && !p.contains(e.target) && !(popOwner && popOwner.contains && popOwner.contains(e.target))) closePopover();
@@ -2022,6 +2249,96 @@
     document.addEventListener("keydown", onKey);
     window.addEventListener("beforeprint", function () { var d = currentDetail(); if (d && !$("printRoot").firstChild) preparePrint(d); });
     window.addEventListener("afterprint", function () { $("printRoot").innerHTML = ""; });
+  }
+
+  // 能在浏览器里打开的链接（网页、邮件）：返回完整网址；别的（本机相对链接已在 markdown.js 里换成文字）返回 null
+  function linkOf(el) {
+    var a = el && el.closest && el.closest("a[href]");
+    return a && /^(https?:|mailto:)/i.test(a.getAttribute("href")) ? a.href : null;
+  }
+  function openUrl(u) {
+    if (!BOOT.app) { window.open(u, "_blank", "noopener"); return; }
+    act({ action: "open_url", url: u }).catch(function (e) { toast("打不开链接：" + e.message, { bad: true }); });
+  }
+
+  // ---- 右键菜单。桌面程序里 WebView2 自带的右键菜单被 pywebview 关掉了（只有调试模式才有），这里补上常用的几项；
+  // 列表行、标签有自己的菜单（它们先 preventDefault）；浏览器、手机里用它们自己的菜单
+  function ctxMenu(e) {
+    if (!BOOT.app || e.defaultPrevented || !e.target.closest) return;
+    var t = e.target, field = t.closest("textarea, input"), sel = window.getSelection(), text = "", rich = "";
+    if (field && !/^(text|search|url|email|)$/i.test(field.getAttribute("type") || "")) field = null;
+    var ss = field ? field.selectionStart || 0 : 0, se = field ? field.selectionEnd || 0 : 0;
+    if (field) text = field.value.slice(ss, se);
+    else if (sel && !sel.isCollapsed && String(sel).trim()) { // 选中的文字连格式一起记下（点菜单时焦点会动）
+      text = String(sel);
+      var div = document.createElement("div");
+      for (var i = 0; i < sel.rangeCount; i++) div.appendChild(sel.getRangeAt(i).cloneContents());
+      div.querySelectorAll(".code-copy").forEach(function (b) { b.remove(); });
+      rich = '<meta charset="utf-8">' + div.innerHTML;
+    }
+    var link = !field && linkOf(t), code = !field && t.closest(".codeblock"), reading = !field && t.closest("#detail") && currentDetail();
+    var it = [];
+    if (field) {
+      it.push(["cut", "scissors", "剪切", "Ctrl+X", !text || field.readOnly], ["copy", "copy", "复制", "Ctrl+C", !text],
+        ["paste", "paste", "粘贴", "Ctrl+V", field.readOnly], ["sep"], ["field_all", "selectAll", "全选", "Ctrl+A", !field.value]);
+    } else {
+      if (link) it.push(["open", "external", "在浏览器中打开"], ["copy_link", "link", "复制链接地址"], ["sep"]);
+      if (text) it.push(["copy", "copy", "复制", "Ctrl+C"]);
+      if (code) it.push(["copy_code", "copy", "复制这段代码"]);
+      if (reading) it.push(["sep"], ["copy_md", "copy", "复制整条（Markdown）", "C"], ["read_all", "selectAll", "全选正文"]);
+    }
+    var tidy = []; // 分隔线不放在头尾、不连着两条
+    it.forEach(function (x) { if (x[0] !== "sep" || (tidy.length && tidy[tidy.length - 1][0] !== "sep")) tidy.push(x); });
+    while (tidy.length && tidy[tidy.length - 1][0] === "sep") tidy.pop();
+    it = tidy;
+    if (!it.length) return;
+    e.preventDefault();
+    var prev = document.activeElement, x = e.clientX, y = e.clientY;
+    if (!x && !y) { var r = t.getBoundingClientRect(); x = r.left + 8; y = r.bottom; } // Shift+F10 / 菜单键：贴着元素
+    var back = function () { // 菜单关掉后焦点回原处；输入框里连选区一起
+      if (field) { field.focus(); field.setSelectionRange(ss, se); }
+      else if (prev && prev !== document.body && prev.focus && document.contains(prev)) prev.focus();
+    };
+    var anchor = { focus: back, getBoundingClientRect: function () { return { left: x, right: x + 1, top: y, bottom: y }; } };
+    var html = it.map(function (x) {
+      return x[0] === "sep" ? '<div class="menu-sep"></div>' : '<button class="menu-item" data-ctx="' + x[0] + '"' + (x[4] ? " disabled" : "") + ">" +
+        icon(x[1]) + x[2] + (x[3] ? '<span class="sub">' + x[3] + "</span>" : "") + "</button>";
+    }).join("");
+    openPopover(anchor, html, "ctx", function (ev) {
+      var b = ev.target.closest("[data-ctx]");
+      if (!b || b.disabled) return;
+      closePopover();
+      ctxDo(b.dataset.ctx, { field: field, ss: ss, se: se, text: text, rich: rich, link: link, code: code });
+    });
+  }
+  function ctxDo(what, c) {
+    var copied = function (p, msg) { p.then(function () { if (msg) toast(msg); }).catch(function (e) { toast("复制失败：" + e.message, { bad: true }); }); };
+    var put = function (s) { // 换掉输入框里选中的部分（能撤销，和自己打字一样触发 input）
+      c.field.focus();
+      c.field.setSelectionRange(c.ss, c.se);
+      if (!document.execCommand("insertText", false, s)) {
+        c.field.setRangeText(s, c.ss, c.se, "end");
+        c.field.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    };
+    if (what === "open") return openUrl(c.link);
+    if (what === "copy_link") return copied(writeClipboard(c.link), "已复制链接");
+    if (what === "copy_code") return copied(writeClipboard(c.code.querySelector("code").innerText), "已复制代码");
+    if (what === "copy_md") return copy("md");
+    if (what === "read_all") {
+      var r = document.createRange(), sel = window.getSelection();
+      r.selectNodeContents($("article"));
+      sel.removeAllRanges(); sel.addRange(r);
+      return;
+    }
+    if (what === "copy") return copied(writeClipboard(c.text, c.rich || null));
+    if (what === "cut") return writeClipboard(c.text).then(function () { put(""); }).catch(function (e) { toast("剪切失败：" + e.message, { bad: true }); });
+    if (what === "field_all") { c.field.focus(); c.field.select(); return; }
+    if (what === "paste") {
+      act({ action: "clipboard_text" }).then(function (s) {
+        if (s) put(String(s)); else { c.field.focus(); toast("剪贴板里没有文字"); }
+      }).catch(function (e) { c.field.focus(); toast("粘贴失败：" + e.message, { bad: true }); });
+    }
   }
 
   function selectAll() {

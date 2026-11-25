@@ -165,11 +165,12 @@ def test_following_a_thread_link_does_not_leave_focus_on_a_hidden_button(env):
     assert errors == []
 
 
-def test_followup_box_stays_put_and_new_ones_land_on_top(env):
-    """长回答上接连发三个追问：追问框在标题下面不动、焦点留在框里；发出的那条出现在列表最上面，紧挨着框（不用滚就看得见）。"""
+def test_followup_box_stays_put_and_new_ones_land_at_the_bottom(env):
+    """长回答上接连发三个追问：追问框固定在底部不动、焦点留在框里；发出的那条出现在记录最下面，自动滚过去看得见。"""
     d, store, server, page, errors = env
     a = post(d, kind="answer", title="长回答", body="\n\n".join(f"第 {i} 段" for i in range(60)))
     store.poll()
+    page.emulate_media(reduced_motion="reduce")
     start(page, server)
     page.click(f'.item[data-id="{a}"]')
     shown(page, a)
@@ -182,13 +183,13 @@ def test_followup_box_stays_put_and_new_ones_land_on_top(env):
         page.keyboard.press("Control+Enter")
         page.wait_for_function(f"() => document.querySelectorAll('#fuList .fu-item').length === {i + 1}")
         assert page.evaluate("document.activeElement.id") == "fuText"
-        assert page.evaluate(top) == t0 and page.evaluate("document.getElementById('scroller').scrollTop") == 0
-        first = page.locator("#fuList .fu-item").first
-        assert f"第 {i} 个追问" in first.inner_text()
-        fb, sb = first.bounding_box(), page.locator("#scroller").bounding_box()
-        assert fb["y"] + fb["height"] <= sb["y"] + sb["height"]  # 刚发的那条在屏幕上
+        assert page.evaluate(top) == t0
+        last = page.locator("#fuList .fu-item").last
+        assert f"第 {i} 个追问" in last.inner_text()
+        page.wait_for_function("""() => { const r = document.querySelector('#fuList .fu-item:last-child').getBoundingClientRect(),
+            s = document.getElementById('scroller').getBoundingClientRect(); return r.top >= s.top && r.bottom <= s.bottom + 1; }""")  # 刚发的那条在屏幕上
     assert [f["text"] for f in desk.read_followups(d)[0]] == ["第 0 个追问", "第 1 个追问", "第 2 个追问"]
-    assert page.evaluate("[...document.querySelectorAll('#fuList .fu-q')].map(e => e.textContent)") == ["第 2 个追问", "第 1 个追问", "第 0 个追问"]
+    assert page.evaluate("[...document.querySelectorAll('#fuList .fu-q')].map(e => e.textContent)") == ["第 0 个追问", "第 1 个追问", "第 2 个追问"]
     assert errors == []
 
 

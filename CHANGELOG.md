@@ -4,6 +4,28 @@ All notable changes to ClaudeDesk are listed here. The format is based on [Keep 
 
 The version is the one shown in the window footer (`v2.2.0 · build N`). Every green build on `main` is also published as a release tagged `build-<N>`; installed copies update to the newest build, so one version usually spans several builds.
 
+## [2.3.0] - 2026-11-25
+
+### Added
+
+- **Phone access (手机访问).** Settings → 手机访问 publishes the inbox as a web page your phone can open, with a link and a QR code per address of the PC. On the same Wi-Fi use the LAN address; from anywhere, install Tailscale on the PC and the phone and use the Tailscale address (encrypted, no router setup). The phone sees the same inbox and can reply to decisions, ask follow-ups, mark handled, archive and delete. The link carries a key that becomes an `HttpOnly` cookie on first visit; **换一个链接** revokes it for every phone. The phone port never allows settings, opening files, updates or quitting, and the desktop port is unchanged (`127.0.0.1` only). The phone page can be added to the home screen, sets its own theme and text size, and hides keyboard hints. Off by default; port 47821.
+- **Push notifications through ntfy (optional).** New messages raise a notification on the phone that opens the message when tapped (`#m=<id>`). Choose what goes through the ntfy server: title and repo (default), title and the start of the body, or only "N new messages". On Windows pushes wait until you've been away from the PC for 5 minutes (can be turned off). Works with ntfy.sh or your own server; **发一条测试** sends a test.
+- **Right-click menu in the window**: copy the selection (with formatting), open or copy a link, copy a code block, copy the whole message, select its text; cut, copy, paste and select all in the reply and follow-up boxes. Pywebview turns WebView2's own menu off, so the window had no right-click menu at all.
+- **Auto-archive (自动归档已处理的).** Settings → 关 / 1 小时后 / 1 天后 / 7 天后, default 1 hour. Once a minute the app archives what is read, isn't a waiting decision, has no follow-up still waiting for an answer and has had no activity for that long. Nothing is deleted.
+- **Notification sound setting (提醒时有声音).** Tray balloons are now silent by default; turn the sound on in Settings or the tray menu.
+
+### Changed
+
+- **Follow-up box docked at the bottom.** The 追问 box sits at the bottom of the reader like the Claude chat box and stays there while you scroll, so you can read and type at once; typing never scrolls the page back to it. It grows with what you write.
+- **Follow-ups read like a conversation.** Below the original come your follow-ups in the order you sent them, each with the session's full answer right under it, instead of newest first with one-line links. A follow-up you send scrolls into view; a new answer only scrolls if you were already at the bottom.
+- **Answer typography.** Steadier line height and spacing, headings with clear rhythm, tables with borders and zebra rows, code blocks with a header showing the language and an always-visible copy button. Links are in the accent color with a small ↗ and say on hover that a click opens them in the browser.
+
+### Fixed
+
+- **Lag with long histories.** The list draws 150 rows at a time and adds more as you scroll; the server computes the message list once per change instead of for every request; fewer pages are kept in memory.
+- **Stray repo tabs.** `desk.py post` now files a message under the git repo the Claude Code session was started in (the first `cwd` in its transcript) instead of the shell's current directory, so a session that `cd`s into a nested clone, a temp folder or another repo no longer creates a new tab, and a `--repo` passed from inside such a session is ignored with a note. `inbox` and `status` use the same repo. The app moves messages older versions filed under the wrong folder back to their session's repo.
+- **Links that couldn't be clicked.** Addresses right next to Chinese text (`见https://…查看`) are linked and end at the first Chinese character or full-width punctuation instead of swallowing it; addresses inside `` `code` ``, option descriptions, follow-ups, replies and the original question are linked too. Every link opens in the default browser through the app (`http`, `https` and `mailto` only), and `[text](url)` links show their address on hover.
+
 ## [2.2.0] - 2026-10-14
 
 ### Added
@@ -108,6 +130,7 @@ The version is the one shown in the window footer (`v2.2.0 · build N`). Every g
 - A cross-process byte lock around every append; each decision can be answered once.
 - The Claude Code skill, a PyInstaller build script (`build.cmd -Install` adds a Startup shortcut) and English and Chinese READMEs. MIT licensed.
 
-[2.2.0]: https://github.com/tsljgj/ClaudeDesk/compare/build-29...main
+[2.3.0]: https://github.com/tsljgj/ClaudeDesk/compare/build-31...main
+[2.2.0]: https://github.com/tsljgj/ClaudeDesk/compare/build-29...build-31
 [2.1.0]: https://github.com/tsljgj/ClaudeDesk/compare/build-23...build-29
 [2.0.0]: https://github.com/tsljgj/ClaudeDesk/releases/tag/build-23

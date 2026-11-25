@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClaudeDesk</title>
 <link rel="icon" href="favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="assets/vendor/fonts.css">
 <link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="assets/app.css">
@@ -14,6 +18,10 @@
   (function () {
     var s = (window.BOOT && BOOT.settings) || {};
     var d = document.documentElement;
+    if (window.BOOT && BOOT.remote) { // 手机访问：外观用手机自己记的（app.js 里也是这样叠加）
+      d.classList.add("remote");
+      try { var p = JSON.parse(localStorage.getItem("desk.prefs") || "{}") || {}; for (var k in p) s[k] = p[k]; } catch (e) { /* 隐私模式 */ }
+    }
     d.dataset.theme = s.theme || "system";
     d.dataset.accent = s.accent || "ember";
     d.dataset.font = s.font || "sans";
@@ -86,18 +94,6 @@
           <div class="eyebrow" id="eyebrow"></div>
           <h1 class="title" id="title"></h1>
         </header>
-        <section class="followup" id="followup" hidden>
-          <div class="fu-compose">
-            <textarea id="fuText" rows="1" placeholder="追问 Claude…（Ctrl+Enter 发送）" aria-label="追问"></textarea>
-            <div class="fu-bar">
-              <p class="fu-state" id="fuState"></p>
-              <span class="hint" id="fuHint"></span>
-              <button class="ghost" id="fuCopy" hidden title="复制追问（带上原消息的标题），粘到 Claude 对话里">复制追问</button>
-              <button class="primary" id="fuSend" disabled>发送</button>
-            </div>
-          </div>
-          <div class="fu-list" id="fuList" hidden></div>
-        </section>
         <section class="decide" id="decide" hidden>
           <div class="decide-card">
           <div class="decide-head">
@@ -119,7 +115,23 @@
           <blockquote class="question" id="question" hidden><div class="q-text" id="questionText"></div></blockquote>
           <div class="md" id="body"></div>
         </article>
+        <!-- 往来记录：按时间从上往下（像对话），每条追问下面直接是 Claude 的回答 -->
+        <section class="thread" id="thread" hidden>
+          <div class="fu-list" id="fuList" hidden></div>
+        </section>
       </div>
+      <!-- 追问框固定在底部（不在滚动区里）：往上翻着读，随时能在下面写；打字时也不会把你拽回框那里 -->
+      <footer class="followup" id="followup" hidden>
+        <div class="fu-compose"><div class="fu-box">
+          <textarea id="fuText" rows="1" placeholder="追问 Claude…（Ctrl+Enter 发送）" aria-label="追问"></textarea>
+          <div class="fu-bar">
+            <p class="fu-state" id="fuState"></p>
+            <span class="hint" id="fuHint"></span>
+            <button class="ghost" id="fuCopy" hidden title="复制追问（带上原消息的标题），粘到 Claude 对话里">复制追问</button>
+            <button class="primary" id="fuSend" disabled title="发送（Ctrl+Enter）">发送</button>
+          </div>
+        </div></div>
+      </footer>
     </div>
   </main>
 </div>
@@ -128,7 +140,7 @@
 <div class="modal-back" id="modal" hidden>
   <div class="modal" role="dialog" aria-modal="true">
     <h3 id="modalTitle"></h3>
-    <p id="modalText"></p>
+    <div id="modalText" class="modal-text"></div>
     <div class="modal-foot">
       <button class="ghost" id="modalCancel">取消</button>
       <button class="primary" id="modalOk">确定</button>

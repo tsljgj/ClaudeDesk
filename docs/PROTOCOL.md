@@ -26,6 +26,14 @@ process with that PID **and** that creation time exists, so PID reuse is not mis
 
 `--source` is optional and only a display label (default: detected repo name, else the folder name). Routing never uses it.
 
+**Repo.** `repo` (tabs, `inbox`, `status`) is the git repo the session was started in: the first `cwd` in the session's
+main transcript (`projects/*/<session>.jsonl`), resolved with `detect_repo` (origin URL name, else the main worktree's
+folder). The shell's current directory does not matter, so a session that `cd`s into a nested clone or a temp folder
+keeps its own repo, and `--repo` is ignored (with a note on stderr) when it disagrees. Fallbacks, in order: the current
+directory's git repo; the session root's folder name; the current folder name. Without a session (or without its
+transcript) `--repo` applies as before. The app also maps each message's `session` to that repo (`projects.session_repos`,
+once a minute), so messages older `desk.py` versions filed under the wrong folder are shown under their session's repo.
+
 ## 2. Files (all in the data dir, all JSONL, appended under `data/.lock`)
 
 | file | written by | records |

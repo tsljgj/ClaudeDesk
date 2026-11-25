@@ -252,6 +252,59 @@ def detect_repo(cwd: str | os.PathLike | None = None, folder_fallback: bool = Fa
     return Path(top).name if top else None
 
 
+def session_root(session: str | None) -> str | None:
+    """会话是在哪个目录里开的：主会话记录里第一条带 cwd 的记录。Agent 在 Bash 里 cd 到别处不影响它。"""
+    if not session:
+        return None
+    for p in [x for x in find_transcripts(session) if x.name == f"{session}.jsonl"][:2]:
+        try:
+            with open(p, "rb") as f:
+                for i, raw in enumerate(f):
+                    if i >= 400:
+                        break
+                    if b'"cwd"' not in raw:
+                        continue
+                    try:
+                        cwd = json.loads(raw.decode("utf-8", "replace")).get("cwd")
+                    except (ValueError, AttributeError):
+                        continue
+                    if isinstance(cwd, str) and cwd.strip():
+                        return cwd.strip()
+        except OSError:
+            continue
+    return None
+
+
+def _folder_name(path) -> str | None:
+    """不在 git 仓库里时拿目录名当项目名；家目录、盘符根目录不算。"""
+    try:
+        here = Path(path).resolve()
+        if not here.is_dir() or here == Path.home().resolve() or here.parent == here or not here.name:
+            return None
+    except OSError:
+        return None
+    return here.name
+
+
+def home_repo(session: str | None, cwd: str | os.PathLike | None = None) -> tuple[str | None, bool]:
+    """消息归哪个仓库：(名字, 是不是会话自己的 git 仓库)。
+    先看会话是在哪个仓库里开的（会话记录里的启动目录）：Agent cd 到子目录里的另一个仓库、临时目录、别的仓库，
+    都还算这个会话的仓库，不会冒出新标签。认不出（不在会话里、启动目录不是 git 仓库）才看当前目录。"""
+    root = session_root(session)
+    if root and os.path.isdir(root):
+        name = detect_repo(root)
+        if name:
+            return name, True
+    name = detect_repo(cwd)
+    if name:
+        return name, False
+    for p in (root, cwd or os.getcwd()):
+        name = _folder_name(p) if p else None
+        if name:
+            return name, False
+    return None, False
+
+
 def make_message(kind, source, title, body="", question=None, options=None,
                  recommended=None, allow_text=False, priority="normal", repo=None,
                  reply_to=None, followup_id=None, session=None, session_pid=None, session_pid_start=None) -> dict:
@@ -1099,8 +1152,14 @@ def cmd_post(a) -> int:
             print(f"错误：--reply-to {a.reply_to} 既不是消息 id 也不是追问 id（用 wait --followups 输出里的 \"msg\"）",
                   file=sys.stderr)
             return 1
+    repo, own = home_repo(session)
+    if a.repo is not None:  # 会话自己在 git 仓库里时不听 --repo：Agent 随手起的名字会在界面上多出一个标签
+        if own and a.repo.strip().lower() != repo.lower():
+            print(f"提示：没用 --repo {a.repo!r}：这个会话开在仓库 {repo!r} 里，消息归到它下面（不用给 --repo）",
+                  file=sys.stderr)
+        elif not own:
+            repo = a.repo
     try:
-        repo = a.repo if a.repo is not None else detect_repo(folder_fallback=True)
         source = a.source or repo or Path.cwd().name or "unknown"  # 只是显示用的名字；送回复按会话
         msg = make_message(a.kind, source, a.title, body, question, a.option,
                            a.recommended, a.allow_text, a.priority, repo=repo or None,
@@ -1328,7 +1387,7 @@ def cmd_inbox(a) -> int:
     if a.adopt and not me:
         print("错误：--adopt 要知道当前会话（没有 $CLAUDE_CODE_SESSION_ID，也没给 --session）", file=sys.stderr)
         return 1
-    repo = a.repo if a.repo is not None else detect_repo(folder_fallback=True)
+    repo = a.repo if a.repo is not None else home_repo(me)[0]
     norm = lambda s: str(s or "").strip().lower()  # noqa: E731
     msgs = read_all(d / INBOX)
     led = read_ledger(d)
@@ -1367,7 +1426,7 @@ def cmd_status(a) -> int:
     n_open = sum(1 for m in msgs if m.get("kind") == "decision" and str(m.get("id")) not in answered
                  and owner_of(m.get("session"), led["adopt"], m.get("repo")) == me)
     evs = pending_events(d)
-    repo = (detect_repo(folder_fallback=True) or "").lower()
+    repo = (home_repo(me)[0] or "").lower()
     others = [e for e in evs if e["session"] != me and str(e["repo"]).lower() == repo
               and not (e["ev"]["ev"] == "reply" and (e["ev"].get("resolved") or e["ev"].get("dismissed")))]
     gone = _gone_sessions(d, {e["session"] for e in others}, msgs, led)

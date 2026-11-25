@@ -19,6 +19,63 @@
 
   var PIPE = "\uE000"; // 表格行里公式中的 |，先换成占位符，免得把单元格切开
 
+  // ---------------------------------------------------------------- 网址
+  // 中文里网址常常紧挨着汉字、全角标点（"见https://x.com/a查看。"）：网址到这些字符为止
+  var CJK = "\u2018-\u201f\u2026\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef";
+  var CJK_RE = new RegExp("[" + CJK + "]");
+  var URL_RE = new RegExp("(?:https?:\\/\\/|www\\.)[^\\s<>\"'`" + CJK + "]+", "gi");
+  var PAIRS = { ")": "(", "]": "[", "}": "{" };
+  function tidyUrl(u) { // 句末的标点、没配对的右括号不算网址（"(见 https://x.com/a)。"）
+    for (;;) {
+      var c = u.charAt(u.length - 1);
+      if (/[.,;:!?*'"]/.test(c) || (PAIRS[c] && u.split(c).length > u.split(PAIRS[c]).length)) u = u.slice(0, -1);
+      else return u;
+    }
+  }
+  function okUrl(u) { return /^(https?:\/\/[^\/?#\s.]+[^\/?#\s]*|www\.[^\/?#\s.]+\.[^\/?#\s]+)/i.test(u); } // 至少有个主机名
+  function hrefOf(u) { return /^www\./i.test(u) ? "http://" + u : u; }
+  // 纯文本（选项说明、追问、回复、原问题）转义后把网址变成链接
+  function linkText(s) {
+    s = String(s == null ? "" : s);
+    var out = "", last = 0, m;
+    URL_RE.lastIndex = 0;
+    while ((m = URL_RE.exec(s))) {
+      var u = tidyUrl(m[0]);
+      if (!okUrl(u)) continue;
+      out += escapeHtml(s.slice(last, m.index)) + '<a href="' + escapeHtml(hrefOf(u)) + '" target="_blank" rel="noopener noreferrer" title="点击在浏览器中打开">' +
+        escapeHtml(u) + "</a>";
+      last = m.index + u.length;
+      URL_RE.lastIndex = last;
+    }
+    return out + escapeHtml(s.slice(last));
+  }
+  // markdown-it 的自动链接会把紧跟着的汉字也算进网址：截到第一个汉字 / 全角标点为止
+  function trimMatch(m) {
+    if (!m) return m;
+    var i = m.raw.search(CJK_RE), raw = tidyUrl(i < 0 ? m.raw : m.raw.slice(0, i)), cut = m.raw.length - raw.length;
+    if (!cut) return m;
+    if (!/^mailto:/i.test(raw) && !okUrl(raw)) return null;
+    m.raw = m.text = raw;
+    m.url = m.url.slice(0, m.url.length - cut);
+    m.lastIndex -= cut;
+    return m;
+  }
+  // 解析器没变成链接的网址（行内代码里的、贴着汉字的）：在 DOM 上补。代码块里的不动（拖着选代码时不会变成拖链接）
+  function autolink(root) {
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), hits = [], n;
+    while ((n = w.nextNode())) {
+      if (/https?:\/\/|www\./i.test(n.nodeValue) && !n.parentNode.closest("a, pre, .math, .katex, button, textarea")) hits.push(n);
+    }
+    hits.forEach(function (t) {
+      var html = linkText(t.nodeValue);
+      if (html.indexOf("<a ") < 0) return;
+      var box = document.createElement("span"), frag = document.createDocumentFragment();
+      box.innerHTML = html;
+      while (box.firstChild) frag.appendChild(box.firstChild);
+      t.parentNode.replaceChild(frag, t);
+    });
+  }
+
   function mathTag(tex, display, block) {
     tex = tex.split(PIPE).join("|");
     var tag = block ? "div" : "span";
@@ -191,10 +248,17 @@
     // 中文粗体："**结论：**建议" 这类结尾 ** 紧挨全角标点、后面跟汉字的，CommonMark 原规则闭合不了
     if (global.markdownitCjkFriendly) md.use(global.markdownitCjkFriendly);
     // 只把 http(s):// / www. / mailto: 开头的变成链接：server.py、README.md 的后缀也是顶级域名，不能当网址
-    var match = md.linkify.match.bind(md.linkify);
+    var match = md.linkify.match.bind(md.linkify), LINKISH = /^(https?:\/\/|ftp:\/\/|mailto:|www\.)/i;
     md.linkify.match = function (text) {
-      return (match(text) || []).filter(function (m) { return /^(https?:\/\/|ftp:\/\/|mailto:|www\.)/i.test(m.raw); });
+      return (match(text) || []).map(trimMatch).filter(function (m) { return m && LINKISH.test(m.raw); });
     };
+    if (md.linkify.matchAtStart) { // "见https://…"：紧跟在汉字后面的网址走的是这条路
+      var atStart = md.linkify.matchAtStart.bind(md.linkify);
+      md.linkify.matchAtStart = function (text) {
+        var m = trimMatch(atStart(text));
+        return m && LINKISH.test(m.raw) ? m : null;
+      };
+    }
     md.inline.ruler.before("escape", "math_inline", mathInline);
     md.block.ruler.after("blockquote", "math_block", mathBlock, { alt: ["paragraph", "reference", "blockquote", "list"] });
     md.core.ruler.after("inline", "task_lists", taskLists);
@@ -307,6 +371,7 @@
       b.textContent = "复制";
       h.appendChild(b);
     });
+    autolink(root);
     root.querySelectorAll("a[href]").forEach(function (a) {
       if (a.origin === location.origin) { // [app.js](src/…) 这类相对链接指向本机服务器，打开只会 404：换成文字，悬停看路径
         var s = document.createElement("span");
@@ -317,8 +382,10 @@
       }
       a.setAttribute("target", "_blank");
       a.setAttribute("rel", "noopener noreferrer");
+      // 程序窗口没有状态栏：[文字](网址) 悬停时看得到会打开哪里
+      if (!a.title) a.title = a.textContent.trim() !== a.getAttribute("href") ? a.href : "点击在浏览器中打开";
     });
   }
 
-  global.DeskMarkdown = { toHtml: toHtml, hydrate: hydrate, escapeHtml: escapeHtml };
+  global.DeskMarkdown = { toHtml: toHtml, hydrate: hydrate, escapeHtml: escapeHtml, linkText: linkText };
 })(typeof window !== "undefined" ? window : globalThis);

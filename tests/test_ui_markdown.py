@@ -59,7 +59,22 @@ CASES = [
      {"count": {"a": 0}, "attrs": {"span[title]": [{"title": "src/claudedesk/assets/app.js", "text": "app.js"},
                                                    {"title": "#x", "text": "上文"}, {"title": "/api/state", "text": "接口"}]}}),
     ("F10 外链照常", "[外链](https://example.com/x)",
-     {"attrs": {"a": [{"href": "https://example.com/x", "target": "_blank", "rel": "noopener noreferrer"}]}}),
+     {"attrs": {"a": [{"href": "https://example.com/x", "target": "_blank", "rel": "noopener noreferrer",
+                       "title": "https://example.com/x"}]}}),
+    # 网址贴着汉字、全角标点：网址到汉字为止，前面紧挨汉字也认
+    ("F10 网址贴着汉字", "见https://example.com/a查看，或者 https://example.com/b。然后www.example.org/x结束",
+     {"attrs": {"a": [{"href": "https://example.com/a", "text": "https://example.com/a", "target": "_blank"},
+                      {"href": "https://example.com/b", "text": "https://example.com/b"},
+                      {"href": "http://www.example.org/x", "text": "www.example.org/x", "target": "_blank"}]},
+      "text": "见https://example.com/a查看，或者 https://example.com/b。然后www.example.org/x结束"}),
+    ("F10 行内代码里的网址", "PR 在 `https://example.com/pr/12` 和 **`https://example.com/pr/13`**",
+     {"attrs": {"code a": [{"href": "https://example.com/pr/12", "target": "_blank", "rel": "noopener noreferrer"},
+                           {"href": "https://example.com/pr/13"}]}, "count": {"code": 2}}),
+    ("F10 代码块里不变成链接", "```bash\ncurl https://example.com/x\n```", {"count": {"a": 0}}),
+    ("F10 括号和句末标点", "(见 https://example.com/a_(b))。还有 https://example.com/c. 和 `https://example.com/d)`",
+     {"attrs": {"a": [{"href": "https://example.com/a_(b)"}, {"href": "https://example.com/c"},
+                      {"href": "https://example.com/d"}]}}),
+    ("F10 只有协议不算", "以 https:// 开头的、`http://` 和 www. 都不是", {"count": {"a": 0}}),
 
     # F15d：原始 HTML 不能跳出正文
     ("F15d 浮层 style", '<div style="position:fixed;inset:0;z-index:99;background:red;color:blue;text-align:center">盖住</div>',
@@ -173,10 +188,13 @@ def test_body_html_stays_inside_reader(env):
     page.wait_for_selector(f'.item[data-id="{a}"]')
     page.click(f'.item[data-id="{a}"]')
     page.wait_for_function("() => document.querySelector('#body').textContent.includes('拷来的 HTML')")
-    box = page.locator(f'.item[data-id="{b}"]').bounding_box()
-    hit = page.evaluate("([x, y]) => !!document.elementFromPoint(x, y).closest('.item')",
-                        [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2])
-    assert hit  # 列表上露出来的还是列表项，不是正文里的浮层
+    # 列表上露出来的还是列表项，不是正文里的浮层。位置和命中在页面里一次算完：列表随时可能重画，分两步拿会拿到已经换掉的行
+    page.wait_for_function("""id => {
+      const el = document.querySelector('.item[data-id="' + id + '"]');
+      if (!el) return false;
+      const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return r.width > 0 && !!hit && !!hit.closest('.item');
+    }""", arg=b, timeout=5000)
     assert page.locator("#body a").count() == 0
     assert "desk.py wait <id>" in page.locator("#body").inner_text()
     page.click(f'.item[data-id="{b}"]', timeout=3000)

@@ -40,7 +40,8 @@ Outside a Claude Code session there is no `CLAUDE_CODE_SESSION_ID`, so pass `--s
 python -m pytest -q
 ```
 
-- `tests/test_store.py`, `test_desk.py`, `test_followups.py`, `test_protocol.py`, `test_round4_backend.py`, `test_server.py` and `test_icon.py` are plain Python.
+- `tests/test_store.py`, `test_desk.py`, `test_followups.py`, `test_protocol.py`, `test_round4_backend.py`, `test_server.py`, `test_repo_tabs.py`, `test_remote.py`, `test_qr.py` and `test_icon.py` are plain Python.
+- `tests/test_remote.py` covers phone access (the second port, its key and cookie, the allowed actions, ntfy pushes with a fake sender); `tests/test_qr.py` checks the QR encoder module by module against the `qrcode` package.
 - `tests/test_protocol.py` covers session protocol v2: it runs real `desk.py` subprocesses (`post`, `listen`, `close --mine`, `status`, `inbox --adopt`, legacy `wait`) and checks batching, exactly-once delivery and the app's session states. `--body-from-chat` / `--question-from-chat` are tested against synthetic transcripts, never your real ones.
 - `tests/conftest.py` removes `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID` and `CLAUDE_CONFIG_DIR` from the environment for every test, so the suite behaves the same when you run it from inside a Claude Code session (otherwise every test message would be recorded as that session's). Tests that need a session set these variables themselves.
 - `tests/test_ui*.py` and `test_round4_integration.py` start a real `Store` and local server and drive the UI in Chromium through Playwright. They are skipped when Playwright isn't installed.

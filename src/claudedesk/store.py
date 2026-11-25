@@ -26,6 +26,12 @@ OTHER_TAB = "__other__"  # 界面上"未归类"标签的键：没认出属于哪
 LISTEN_EVERY = 2.0  # 隔几秒看一次哪些会话在听追问（列一次命名管道）
 
 
+# 自动归档已处理的：设置里的档 -> 多久没动静就归档（秒）。默认 1 小时；只动已读、不用再处理的，归档的随时能在"归档"里找回
+AUTO_ARCHIVE = {"off": None, "1h": 3600, "1d": 86400, "7d": 7 * 86400}
+AUTO_ARCHIVE_DEFAULT = "1h"
+AUTO_ARCHIVE_EVERY = 60.0  # 多久看一次（秒）
+
+
 def _now() -> dt.datetime:
     return dt.datetime.now().astimezone()
 
@@ -98,6 +104,7 @@ class Store:
         self.lock = threading.RLock()
         self.cond = threading.Condition(self.lock)
         self.version = 0
+        self._auto_at = 0.0  # 下次自动归档的时间（monotonic）
         self.msgs: dict[str, dict] = {}
         self.responses: dict[str, dict] = {}
         self.fu_path = self.ddir / desk.FOLLOWUPS
@@ -138,6 +145,7 @@ class Store:
                 self.read_at[str(k)] = t
         self._repos: dict[str, str] = {}  # 消息里见过的仓库名：规范化名 -> 原名
         self._discovered: dict[str, str] = {}  # 从 Claude Code 会话记录里找到的项目名
+        self._session_repos: dict[str, str] = {}  # 会话 -> 它开在哪个仓库（会话记录里的启动目录）：消息按它归类
         self._loaded = False
         self._dirty = False
         self._save_at = 0.0
@@ -450,8 +458,9 @@ class Store:
     def project_info(self, m: dict) -> tuple[str, str, str]:
         """(项目名, 类型, 归类键)。类型 repo = 认得出是哪个仓库；other = 没认出来（旧消息的来源对不上任何仓库）。
         归类键是用户"合并到…"时用的名字（合并前的名字）。"""
-        if m["repo"]:
-            name, kind = m["repo"], "repo"
+        repo = self._session_repos.get(m["session"]) if m["session"] else None
+        if repo or m["repo"]:  # 会话自己的仓库优先：以前的 desk.py 在 Agent cd 到别处时会记成别的名字
+            name, kind = repo or m["repo"], "repo"
         else:
             raw = m["_legacy"]
             hit = self._match_repo(raw)
@@ -469,7 +478,7 @@ class Store:
     def _match_repo(self, raw: str) -> str | None:
         """旧消息的来源名对到已知仓库：完全一样；或来源是"仓库名-后缀"（取最长的那个）；
         或来源是某个仓库名的唯一前缀（acme-data 对 acme-data-pipeline）。"""
-        known = {**self._discovered, **self._repos}
+        known = {**self._discovered, **{norm_name(v): v for v in self._session_repos.values()}, **self._repos}
         n = norm_name(raw)
         if not n:
             return None
@@ -488,6 +497,20 @@ class Store:
             if d == self._discovered:
                 return
             self._discovered = d
+            self._bump()
+        self._emit_changed()
+
+    def sessions(self) -> set[str]:
+        with self.lock:
+            return {m["session"] for m in self.msgs.values() if m["session"]}
+
+    def set_session_repos(self, repos: dict[str, str]) -> None:
+        """后台按会话记录认出来的"会话 -> 仓库"（见 projects.session_repos）。"""
+        d = {str(k): str(v) for k, v in repos.items() if k and v}
+        with self.lock:
+            if d == self._session_repos:
+                return
+            self._session_repos = d
             self._bump()
         self._emit_changed()
 
@@ -538,14 +561,15 @@ class Store:
 
     def _thread_detail(self, m: dict, d: dict) -> None:
         """持锁调用：详情里加上追问这一串。followups：每条追问（delivered = 什么时候交给了会话、reply = 哪条消息回应了它）；
-        replies：所有回应它的消息；回应追问的消息另有 reply_ref = 原来那条（id、标题、类型、还在不在）和它回应的追问原文。"""
+        replies：所有回应它的消息（带正文）；回应追问的消息另有 reply_ref = 原来那条（id、标题、类型、还在不在）和它回应的追问原文。"""
         fus, reps, pairs = self._thread(m["id"])
         d["followups"] = [{"id": f["id"], "ts": f["_dt"].isoformat(), "text": f["text"], "delivered": self.fu_delivered(f["id"]),
                            "reply": {"id": pairs[f["id"]]["id"], "title": pairs[f["id"]]["title"]} if f["id"] in pairs else None}
                           for f in fus]
         paired = {r["id"] for r in pairs.values()}
-        d["replies"] = [{"id": r["id"], "title": r["title"], "ts": r["_dt"].isoformat(), "paired": r["id"] in paired}
-                        for r in reps]
+        # body：阅读页的追问记录里直接显示回答的正文（像对话），不用一条条点开
+        d["replies"] = [{"id": r["id"], "title": r["title"], "ts": r["_dt"].isoformat(), "paired": r["id"] in paired,
+                         "body": r["body"]} for r in reps]
         if m["reply_to"]:
             o = self.msgs.get(m["reply_to"])
             ok = o is not None and not self.hidden(o)
@@ -742,6 +766,30 @@ class Store:
             ids = [m["id"] for m in self.visible() if not self.is_unread(m) and not self.is_open(m) and not self.closed(m)
                    and (not project or self.project_info(m)[0] == project)]
         return self.archive(ids)
+
+    def auto_archive(self, now: dt.datetime | None = None) -> int:
+        """按设置（auto_archive）把很久没动静的已处理消息归档：已读、不是待决定、不在关掉的标签里、
+        没有还在等回答的追问，最后一次动静（收到 / 回复 / 打开）早于设置的时长。返回归档了几条。"""
+        age = AUTO_ARCHIVE.get(self.setting("auto_archive", AUTO_ARCHIVE_DEFAULT), AUTO_ARCHIVE[AUTO_ARCHIVE_DEFAULT])
+        if not age:
+            return 0
+        cut = (now or _now()) - dt.timedelta(seconds=age)
+        with self.lock:
+            ids = []
+            for m in self.visible():
+                if self.is_unread(m) or self.is_open(m) or self.closed(m) or self.last_active(m) > cut:
+                    continue
+                if m["id"] in self.followups and any(f["id"] not in self._thread(m["id"])[2] for f in self.followups[m["id"]]):
+                    continue  # 追问了还没回答：留在眼前
+                ids.append(m["id"])
+        return self.archive(ids) if ids else 0
+
+    def auto_archive_if_due(self) -> int:
+        now = time.monotonic()
+        if now < self._auto_at:
+            return 0
+        self._auto_at = now + AUTO_ARCHIVE_EVERY
+        return self.auto_archive()
 
     def hide_project(self, key: str) -> list[str]:
         """关掉一个项目标签（key：归类后的项目名，或 OTHER_TAB）。返回关着的全部标签。"""
