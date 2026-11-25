@@ -108,6 +108,11 @@ would only cost tokens. The decision is simply no longer open:
 | command | stdout | exit codes |
 |---|---|---|
 | `post … [--session S] [--body-from-chat] [--question-from-chat]` | message id | 0; 1 bad args / transcript text not found. stderr hints when this session has no `listen` running |
+| `answer [TITLE] [--reply-to FU] [--question Q \| --question-file F] [--body B \| --body-file F]` | message id | as `post --kind answer`. Without a body: `--body-from-chat`; without a question and `--reply-to`: `--question-from-chat`, and a question that can't be found is left out instead of failing; without a title: the first line of the question (or the body), cut to 30 characters |
+| `decide TITLE -o "label::description" … [--rec N] [--high] [--body-file F \| --body-from-chat]` | message id | as `post --kind decision` |
+| `info TITLE [--body B \| --body-file F]` | message id | as `post --kind info` |
+| `setup [--python P] [--config DIR] [--remove] [--dry-run] [--no-block-ask]` | what it changed | 0; 1 no Python 3.10+ found / `settings.json` is not valid JSON (nothing is written) |
+| `hook session-start\|ask\|stop` | hook JSON on stdout (Claude Code hook protocol) | always 0 |
 | `listen [--session S] [--timeout s]` | one event per line | 0 delivered; 2 timeout; **4 session process gone (prints nothing)**; **5 this session already has a listener** (one stderr line); 1 no session |
 | `close --id ID [--text T]` | the closing reply, or the user's existing reply | 0; **3 the user already replied in ClaudeDesk** (that reply is printed and marked delivered; a silent one is printed but not marked); 1 unknown id |
 | `close --mine [--text T]` | reply events for this session's decisions the user already answered, then `{"closed":[ids]}` | 0; 3 if any reply events were printed (silent replies are skipped) |
@@ -150,7 +155,7 @@ Transcript: `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/<session>.jsonl`, plus 
 (`last-prompt`, `ai-title`, `queue-operation`, …) and `attachment` records are ignored.
 
 1. Read the last 2 MB of each candidate transcript; the **anchor** is the newest assistant `tool_use` whose input
-   contains `-from-chat` (this very call; Claude Code writes it before running the tool). The transcript with the newest
+   contains `-from-chat` or is a `desk answer` call (this very call; Claude Code writes it before running the tool). The transcript with the newest
    anchor wins (main session vs. subagent).
 2. Walk `parentUuid` back from the anchor (only blocks before the anchor in its own record count) to the newest **real
    user message**: `type: user`, not `isMeta` / `isCompactSummary` / `isVisibleInTranscriptOnly`, `origin.kind` absent or
@@ -162,6 +167,33 @@ Transcript: `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/<session>.jsonl`, plus 
 4. **Question** = the real user message's text blocks, minus IDE context blocks (`<ide_…>`) and `<system-reminder>`.
 5. Empty or not found → exit 1 with `错误：--body-from-chat 没取到正文：<why>。改用 --body-file <文件>。`
    (or the `--question` equivalent). The lookup retries for ~1.2 s in case the record is not flushed yet.
+
+### Hooks (`desk.py setup`)
+
+`setup` writes `<config>/skills/claude-desk/SKILL.md` (the bundled skill with `desk` replaced by this machine's quoted
+Python and `desk.py` paths, plus `--data` when the data dir is not the default) and three entries in
+`<config>/settings.json`, each `{"type":"command","command":"<desk> hook <name>","timeout":30}`. The file is backed up
+once to `settings.json.claudedesk.bak` and written atomically; entries from an older install (any command running
+`desk.py … hook`) are replaced, nothing else is touched. Python is found from `--python`, `CLAUDEDESK_PYTHON`, `py -3`,
+`python`, `python3` (3.10+; the Microsoft Store stub under `WindowsApps` is skipped unless named explicitly).
+
+Hooks read the event JSON on stdin, never exit non-zero and never print anything but hook JSON:
+
+- **session-start** (`SessionStart`, also after `/compact`): `additionalContext` with the rules in short and this
+  session's `status` (open, undelivered, listen, orphaned).
+- **ask** (`PreToolUse`, matcher `AskUserQuestion`): when the app is running, `permissionDecision: "deny"` with a ready
+  `desk decide "…" -o "label::description" …` command built from the tool input. When the app is not running: no output,
+  the tool runs.
+- **stop** (`Stop`). "This turn" = everything after the last real user message in `transcript_path`. In order:
+  1. Follow-ups for this session delivered during the turn and still unanswered: exactly one, and the final assistant
+     text (`last_assistant_message`, else the transcript) is ≥ 20 characters → posted as its answer. More than one →
+     `{"decision":"block"}` listing `answer --reply-to <id>` for each (not when `stop_hook_active`).
+  2. Nothing was posted this turn (no message from this session since the turn started, no `desk post/answer/decide/info`
+     call), the user's message reads as a question and the final text is ≥ 200 characters → posted as an answer.
+  3. Open or undelivered items, no `listen` running, none started this turn, not `stop_hook_active` → block once telling
+     the session to start `listen`.
+
+  Messages posted by the hook carry `"auto": "stop-hook"`; the app marks them 自动补发.
 
 ## 5. Presence and session state (app)
 

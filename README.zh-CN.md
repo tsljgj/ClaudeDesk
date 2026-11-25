@@ -59,15 +59,19 @@ ClaudeDesk 是一个 Windows 托盘小程序，让 Claude Code 会话在终端�
 
 ## 快速上手：接入 Claude Code
 
-1. 把 [`skill/claude-desk/SKILL.md`](skill/claude-desk/SKILL.md) 复制到 `~/.claude/skills/claude-desk/SKILL.md`。
-2. 文件开头定义 `desk` 的那一行写的是 `python C:/path/to/ClaudeDesk/desk.py`，把它换成你的 Python（3.10+）和 `ClaudeDesk.exe` 旁边那个 `desk.py`。
-3. 想让每个会话都遵守，再在 `~/.claude/CLAUDE.md` 里加一段：
+**一键接入**：在程序里点设置 → **接入 Claude Code** → **一键接入**。它把 `claude-desk` skill 装到 `~/.claude/skills/`（命令换成这台电脑上 Python 和 `desk.py` 的真实路径），再往 `~/.claude/settings.json` 里加三个 hook（第一次改之前备份成 `settings.json.claudedesk.bak`，只动 ClaudeDesk 自己的那几条）。新开的 Claude Code 会话就会用上。**卸掉** 两样一起去掉。
 
-   ```markdown
-   ## 和用户沟通：ClaudeDesk
-   - 需要用户决定的事不用 AskUserQuestion，一律用 skill claude-desk 发 decision；回复由这个会话唯一的后台 `desk.py listen` 送回来。
-   - 回答用户的问题时，对话里照常回答，再用 `--question-from-chat --body-from-chat` 发一条 answer。
-   ```
+不用程序里的按钮，也可以在终端里运行同样的事（Python 3.10+）：
+
+```bash
+python C:/path/to/ClaudeDesk/desk.py setup            # --dry-run 先看看，--remove 卸掉，--no-block-ask 不拦 AskUserQuestion
+```
+
+三个 hook 做什么（它们不会让会话出错，只补充上下文，或者拦一次）：
+
+- **会话开始（SessionStart）**：提醒会话这些规则，以及有什么在等它（待决定、没送达的回复、listen 有没有在跑）。上下文压缩之后也会再提醒一次。
+- **AskUserQuestion 之前（PreToolUse）**：ClaudeDesk 在运行时把这个提问拦下来，交给 Claude 一条现成的 `desk decide …` 命令（选项照搬），决定一律到程序里来。程序没开时 AskUserQuestion 照常用。
+- **一轮结束（Stop）**：看刚结束的这一轮。你问了问题、Claude 在对话里答了却没发，就替它发一份（程序里标着 **自动补发**）。这一轮送到的追问只有一条、答了没发，也这样补发；好几条追问没回，就拦一次，把要跑的 `desk answer --reply-to <id>` 都列给它。有待决定却没有 `listen` 在跑，提醒它启动。
 
 skill 是用中文写的，和界面一致。英文会话里 Claude 一样照做，命令也完全相同。
 
@@ -75,7 +79,7 @@ skill 是用中文写的，和界面一致。英文会话里 Claude 一样照做
 
 - **每个会话不用单独设置。** `desk.py post` 自己记下它所在的 Claude Code 会话（Claude Code 给会话里的每条命令都设了 `CLAUDE_CODE_SESSION_ID` 和 `CLAUDE_PID`）和 git 仓库。回复、追问按会话送回去；`--source` 可以不写，只是显示用的名字。
 - **每个会话只挂一个后台 `listen`。** `post` 在 stderr 提示没有 listen 在跑时，会话在后台启动 `desk.py listen`，不设超时。它把这个会话收到的东西（你对它的决定的回复、对它的消息的追问）一次交出来，每件一行 JSON；会话处理完这一批，再启动一次 `listen`。同一个会话再开第二个 `listen` 会立刻退出。子 agent 和主会话共用会话 id，不跑 listen。
-- **回答只写一遍。** 会话在对话里写好回答，在同一条消息里紧接着运行 `desk.py post --kind answer --title "…" --question-from-chat --body-from-chat`。`desk.py` 从会话记录里取你的问题和这段回答，Claude 不用把回答再写一遍。
+- **回答只写一遍。** 会话在对话里写好回答，在同一条消息里紧接着运行 `desk.py answer`。`desk.py` 从会话记录里取你的问题和这段回答，标题从问题里取，Claude 不用把回答再写一遍。
 - **会话结束了也不丢。** 已经结束的会话的回复、追问都存着。同一个仓库里开的新会话用 `desk.py status` / `desk.py inbox` 能看到，用 `desk.py inbox --adopt` 接过来。
 
 ### 为什么省
@@ -122,7 +126,9 @@ skill 是用中文写的，和界面一致。英文会话里 Claude 一样照做
 - 列表左边的圆点：**实心 = 没读过**；**橙色实心 = 没看过的待决定**；**橙色空心环 = 看过、还没决定**；**外面再套一圈 = 紧急的待决定**。第二行写着状态（待决定、✓ 你选的选项、✓ 已处理、已跳过、已追问 · 等回答）。用 `↑` `↓` 扫过去不算读，停 0.8 秒才标为已读。
 - 鼠标移到一条上，右边会出现它自己的操作（已读 / 未读、标为已处理、归档、删除），左边出现勾选框。也可以右键。
 - **多选**：点勾选框（`Shift` 连选）、`Ctrl` + 点、`X` 勾当前这条、`Shift+↑↓`、`Ctrl+A`。勾上以后出现批量栏：全选、标为已处理、已读、归档、删除。
-- 搜索：`/` 或 `Ctrl+F`，在选中的仓库里按标题、正文、来源、原问题、选项搜。别的仓库里的结果在列表末尾按仓库各一个按钮（"其他项目：webapp 3 · …"），点了切到那个仓库、搜索词不变；被当前视图或关掉的标签挡住的结果也写在那里，点一下就能看到。
+- **按时间整理**（"⋯"菜单 → 按时间整理…）：选当前标签或全部标签、早于多久（1 小时 / 6 小时 / 12 小时 / 24 小时 / 7 天 / 不限）。**归档 N 条** 归档它们（`Z` 撤销）；**删除 N 条** 连归档里的一起删，先弹确认，默认按钮是取消。还在等你决定的不算在里面，除非打开那个开关。**待决定全部标为已处理** 把范围里所有待决定标为已处理，不通知会话（`Z` 撤销）。正在看的那条不动。
+- 在一条决定上点右键 → **这个会话的待决定都标为已处理**：一个 Claude Code 会话在等的全部处理掉。
+- 搜索：`/`，在选中的仓库里按标题、正文、来源、原问题、选项搜。别的仓库里的结果在列表末尾按仓库各一个按钮（"其他项目：webapp 3 · …"），点了切到那个仓库、搜索词不变；被当前视图或关掉的标签挡住的结果也写在那里，点一下就能看到。
 - 操作的确认、出错，以及撤销、重试按钮，都显示在列表底部，不会挡住正在看的消息。
 
 ### 决定
@@ -158,6 +164,10 @@ skill 是用中文写的，和界面一致。英文会话里 Claude 一样照做
 
 ### 阅读、复制和设置
 
+- **在这条里查找**：`Ctrl+F`（或工具栏的放大镜）。命中的字高亮，`Enter` / `Shift+Enter` 上一个下一个，旁边写着第几个。**搜全部**（或 `Ctrl+Shift+F`）拿同样的字去搜全部消息。
+- **缩放**：`Ctrl` + 鼠标滚轮，或 `Ctrl` + `=` / `-`，`Ctrl+0` 还原（80%–180%，记在这台电脑上），列表和阅读区一起变。
+- **阅读位置**：再打开一条消息，回到上次读到的地方，重开程序也记得。右下角的圆钮回到顶部 / 到底部，`Home` / `End` 也行。
+- 三种消息读起来不一样：标题上面一个小标签写着决定、回答或通知，通知排得紧一点；GitHub 风格的提示块（`> [!NOTE]`、`[!TIP]`、`[!IMPORTANT]`、`[!WARNING]`、`[!CAUTION]`）显示成带标题的彩色框。
 - 阅读区右上角：复制成 Markdown（`C`；旁边的小箭头可选富文本或纯文本），导出 PDF（`Ctrl+P`）。代码块顶上一条细栏写着语言，右边是复制按钮。
 - **链接**在默认浏览器里打开。网址到处都能点：正文里（`` `代码` `` 里的、紧挨着汉字的也行，网址到第一个汉字或全角标点为止）、选项说明、追问、回复和原问题里。链接是强调色、带一个小 ↗；悬停 `[文字](网址)` 能看到会打开哪里。
 - **右键**：复制选中的文字（带格式）、打开或复制链接、复制代码块、复制整条、全选正文；回复框和追问框里可以剪切、复制、粘贴、全选。列表行和标签还是它们自己的菜单。
@@ -188,7 +198,9 @@ skill 是用中文写的，和界面一致。英文会话里 Claude 一样照做
 | `↑` `↓` / `J` `K` | 上一条 / 下一条 | `1`–`9` | 选第 N 项 |
 | `N` / `Shift+N` | 下一条 / 上一条待决定 | `Ctrl+Enter` | 提交，或发追问 |
 | `Shift+↑` `↓` | 连续勾选 | `Enter` | 打开，或写补充说明 / 追问 |
-| `/`、`Ctrl+F` | 搜索 | `R` | 标为已处理 |
+| `/`、`Ctrl+Shift+F` | 搜全部消息 | `R` | 标为已处理 |
+| `Ctrl+F` | 在这条里查找 | | |
+| `Home` / `End` | 这条的顶部 / 底部 | | |
 | `[` `]` | 切换仓库标签 | | |
 | `F` | 只看未处理（开 / 关） | | |
 | `Esc` | 退一层：菜单或对话框 → 窄窗口的阅读页 → 搜索 → 勾选 → 仓库筛选 | | |
@@ -199,6 +211,8 @@ skill 是用中文写的，和界面一致。英文会话里 Claude 一样照做
 | `U` | 已读 / 未读 | `Ctrl+P` | 导出 PDF |
 | `X` | 勾选当前这条 | `Ctrl+,` | 设置 |
 | `Ctrl+A` | 全选 | `?` | 快捷键 |
+| | | `Ctrl` + 滚轮、`Ctrl+=` `-` | 放大 / 缩小 |
+| | | `Ctrl+0` | 还原缩放 |
 | `Delete` | 删除 | | |
 | `Z`、`Ctrl+Z` | 撤销（提示还在时） | | |
 
@@ -212,23 +226,28 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
 # 发一条决定；打印新消息的 id。正文放在 UTF-8 的 Markdown 文件里
 # 调用它的 Claude Code 会话、会话开在哪个 git 仓库都自动记下（不用给 --source / --repo）
-"$PY" "$DESK" post --kind decision --title "发布前先跑一轮完整回归测试吗？" \
-    --body-file plan.md --option "先跑回归测试::约 25 分钟，最稳妥" \
-    --option "直接发布::CI 已经跑过单元测试" --option "只跑冒烟测试::约 5 分钟" \
-    --recommended 1 [--priority high]
+"$PY" "$DESK" decide "发布前先跑一轮完整回归测试吗？" --body-file plan.md \
+    -o "先跑回归测试::约 25 分钟，最稳妥" -o "直接发布::CI 已经跑过单元测试" \
+    -o "只跑冒烟测试::约 5 分钟" --rec 1 [--high]
 
 # 这个会话唯一的监听。放在后台跑，不设超时。它把这个会话所有还没送达的回复和追问一次交出来，
 # 每件一行 JSON；全部处理完，再启动一次
 "$PY" "$DESK" listen
 
-# 发一条刚在对话里写好的回答：原问题和回答都从会话记录里取
-"$PY" "$DESK" post --kind answer --title "今天的 CI 为什么变慢了" --question-from-chat --body-from-chat
+# 发一条刚在对话里写好的回答：原问题、回答和标题都从会话记录里取
+"$PY" "$DESK" answer ["今天的 CI 为什么变慢了"]
 
 # 回答追问（id 是那条追问在 listen 输出里的 id）；原问题自动填追问原文
-"$PY" "$DESK" post --kind answer --reply-to <追问 id> --title "大约 25 分钟" --body-from-chat
+"$PY" "$DESK" answer --reply-to <追问 id>
 
 # 发一条通知。--body - 表示从 stdin 读正文
-"$PY" "$DESK" post --kind info --title "长任务跑完了" --body "结果在 ..."
+"$PY" "$DESK" info "长任务跑完了" --body "结果在 ..."
+
+# 长写法照样能用：post --kind decision|answer|info，配 --title、--option、--recommended、--priority、
+# --question-from-chat、--body-from-chat
+
+# 接入 Claude Code（skill + hooks）；程序里"一键接入"按钮跑的就是它
+"$PY" "$DESK" setup [--dry-run] [--remove] [--no-block-ask] [--python P] [--config DIR]
 
 # 用户直接在对话里答了：把一条决定标成已处理，或者这个会话所有还在等的
 "$PY" "$DESK" close --id <id> --text "用户在对话里选了 B"
