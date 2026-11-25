@@ -25,6 +25,13 @@
     python desk.py inbox [--repo R] [--adopt]                      # 已结束的会话留下、还没送达的回复 / 追问；--adopt 接过来
     python desk.py status                                          # 一行：这个会话的待决定、未送达、listen 在不在
 
+简写（agent 平时用这几个）：
+    python desk.py answer ["标题"] [--reply-to <追问 id>]           # 答完在同一条消息里调用：正文、原问题、标题都从会话记录取
+    python desk.py decide "问题" --body-file a.md -o "A::说明" -o "B::说明" --rec 1 [--high]
+    python desk.py info "标题" --body-file a.md
+    python desk.py setup [--remove]                                # 接入 Claude Code：装 skill 和兜底 hooks（会话开始提醒规则、
+                                                                  # 拦 AskUserQuestion、一轮结束时补发漏发的回答 / 追问、提醒 listen）
+
 数据目录默认是本文件旁边的 data/，可用环境变量 CLAUDEDESK_DATA 改。
 """
 from __future__ import annotations
@@ -881,7 +888,7 @@ def _gone_sessions(d: Path, sessions, msgs=None, led=None) -> set[str]:
 _WRAPPERS = ("<command-name>", "<command-message>", "<command-args>", "<local-command-stdout>", "<local-command-stderr>",
              "<local-command-caveat>", "<task-notification>", "<bash-input>", "<bash-stdout>", "<bash-stderr>",
              "<user-prompt-submit-hook>", "<system-reminder>", "Caveat:", "[Request interrupted",
-             "This session is being continued")
+             "This session is being continued", "Stop hook feedback")
 _SIDE_BLOCKS = ("<ide_", "<system-reminder>")  # 用户消息里 IDE 附带的"打开的文件 / 选中的文字"、系统提示：不是用户写的
 
 
@@ -960,15 +967,30 @@ def _user_text(r: dict) -> str | None:
     return text or None
 
 
+# desk.py answer（简写，默认从对话取正文）也算：引号、--data 之后跟着 answer
+_ANSWER_CALL = re.compile(r"""desk(?:\.py)?["']?(?:\s+--data(?:=|\s+)(?:"[^"]*"|'[^']*'|\S+))?\s+answer\b""")
+
+
 def _anchor(recs: list[dict]) -> tuple[dict, int] | None:
-    """调用 desk.py 的那个 tool_use（输入里有 -from-chat 的最新一个）：(记录, 它在记录里是第几块)。"""
+    """调用 desk.py 的那个 tool_use（输入里有 -from-chat、或者是 desk.py answer 的最新一个）：(记录, 它在记录里是第几块)。"""
     for r in reversed(recs):
         if r.get("type") != "assistant":
             continue
         for i, b in enumerate(_blocks(r)):
-            if b.get("type") == "tool_use" and "-from-chat" in json.dumps(b.get("input"), ensure_ascii=False):
+            if b.get("type") != "tool_use":
+                continue
+            inp = json.dumps(b.get("input"), ensure_ascii=False)
+            if "-from-chat" in inp or _ANSWER_CALL.search(_tool_cmd(b)):
                 return r, i
     return None
+
+
+def _tool_cmd(b: dict) -> str:
+    """tool_use 的命令行（Bash / PowerShell 的 command）；别的工具给整个输入。"""
+    inp = b.get("input")
+    if isinstance(inp, dict) and isinstance(inp.get("command"), str):
+        return inp["command"]
+    return json.dumps(inp, ensure_ascii=False)
 
 
 def _chat_from(recs: list[dict], anchor: tuple[dict, int] | None) -> tuple[str, str | None, bool]:
@@ -1115,6 +1137,17 @@ def _chat_or_fail(session, want: str) -> str:
     raise AssertionError  # pragma: no cover
 
 
+def derive_title(*texts, n: int = 30) -> str:
+    """没给标题时用：第一段非空文字的第一行，去掉 Markdown 记号，截到 n 字。"""
+    for t in texts:
+        for line in str(t or "").splitlines():
+            line = re.sub(r"^(?:[#>*+\-\s]|\d+[.)、]\s*)+", "", line)
+            line = re.sub(r"[*_`]+", "", line).strip()
+            if line:
+                return _clip(line, n)
+    return ""
+
+
 def cmd_post(a) -> int:
     session, spid = _session_arg(a)
     try:
@@ -1136,9 +1169,11 @@ def cmd_post(a) -> int:
         try:
             question = _chat_or_fail(session, "question")
         except ChatError as e:
-            print(f"错误：--question-from-chat 没取到用户的问题：{e}。改用 --question '<原文>' 或 --question-file <文件>。",
-                  file=sys.stderr)
-            return 1
+            if not getattr(a, "soft_question", False):
+                print(f"错误：--question-from-chat 没取到用户的问题：{e}。改用 --question '<原文>' 或 --question-file <文件>。",
+                      file=sys.stderr)
+                return 1
+            question = None  # answer 简写：原问题只是给用户对照的，取不到也照发
     reply_to = fu_id = None
     if a.reply_to:  # 回答 id；也认追问 id（wait --followups 输出里的 "id"），认得出就记下具体是哪条追问
         fus, _ = read_followups(a.data)
@@ -1159,9 +1194,13 @@ def cmd_post(a) -> int:
                   file=sys.stderr)
         elif not own:
             repo = a.repo
+    title = (a.title or "").strip() or derive_title(question, body)  # 简写命令可以不给标题：取问题（没有就取正文）第一行
+    if not title:
+        print("错误：没有标题（给一个 \"<概括，30 字内>\"）", file=sys.stderr)
+        return 1
     try:
         source = a.source or repo or Path.cwd().name or "unknown"  # 只是显示用的名字；送回复按会话
-        msg = make_message(a.kind, source, a.title, body, question, a.option,
+        msg = make_message(a.kind, source, title, body, question, a.option,
                            a.recommended, a.allow_text, a.priority, repo=repo or None,
                            reply_to=reply_to, followup_id=fu_id, session=session, session_pid=spid,
                            session_pid_start=proc_info(spid)[1] if spid else None)
@@ -1413,13 +1452,8 @@ def cmd_inbox(a) -> int:
     return 0
 
 
-def cmd_status(a) -> int:
-    """一行：这个会话还在等回复的决定、还没送达的事、listen 在不在；这个仓库有已结束的会话留下的事时加 orphaned=N。"""
-    d = data_dir(a.data)
-    me, _ = _session_arg(a)
-    if not me:
-        print("错误：不知道是哪个会话（没有 $CLAUDE_CODE_SESSION_ID，也没给 --session）", file=sys.stderr)
-        return 1
+def session_status(d: Path, me: str) -> dict:
+    """这个会话：还在等回复的决定、还没送达的事、listen 在不在、这个仓库里已结束的会话留下的事。"""
     msgs = read_all(d / INBOX)
     led = read_ledger(d)
     answered = {str(r.get("id")) for r in read_all(d / RESPONSES)}
@@ -1430,10 +1464,20 @@ def cmd_status(a) -> int:
     others = [e for e in evs if e["session"] != me and str(e["repo"]).lower() == repo
               and not (e["ev"]["ev"] == "reply" and (e["ev"].get("resolved") or e["ev"].get("dismissed")))]
     gone = _gone_sessions(d, {e["session"] for e in others}, msgs, led)
-    orphaned = sum(1 for e in others if e["session"] in gone)
-    on = me in presence(d, sessions=[me])[1]
-    print(f"open={n_open} undelivered={sum(1 for e in evs if e['session'] == me)} listen={'on' if on else 'off'}"
-          + (f" orphaned={orphaned}" if orphaned else ""))
+    return {"open": n_open, "undelivered": sum(1 for e in evs if e["session"] == me),
+            "listen": me in presence(d, sessions=[me])[1], "orphaned": sum(1 for e in others if e["session"] in gone)}
+
+
+def cmd_status(a) -> int:
+    """一行：这个会话还在等回复的决定、还没送达的事、listen 在不在；这个仓库有已结束的会话留下的事时加 orphaned=N。"""
+    d = data_dir(a.data)
+    me, _ = _session_arg(a)
+    if not me:
+        print("错误：不知道是哪个会话（没有 $CLAUDE_CODE_SESSION_ID，也没给 --session）", file=sys.stderr)
+        return 1
+    st = session_status(d, me)
+    print(f"open={st['open']} undelivered={st['undelivered']} listen={'on' if st['listen'] else 'off'}"
+          + (f" orphaned={st['orphaned']}" if st["orphaned"] else ""))
     return 0
 
 
@@ -1575,6 +1619,455 @@ def cmd_list(a) -> int:
     return 0
 
 
+# skill/claude-desk/SKILL.md 的原文（setup 把它装进 Claude Code；tests/test_hooks.py 检查两边一致）。
+SKILL_MD = """\
+---
+name: claude-desk
+description: 通过桌面程序 ClaudeDesk 和用户沟通。需要用户拍板时发 decide（不用 AskUserQuestion）；回答了用户的问题就紧接着 desk answer 发一份，免得被工具输出淹没；少量进展用 info。回复和追问由每个会话唯一的后台 listen 送回来。
+---
+
+# ClaudeDesk 速查
+
+命令里的 `desk` = `python C:/path/to/ClaudeDesk/desk.py`（在 ClaudeDesk 设置里点"接入 Claude Code"会换成真的路径；手动安装时换成 Python 3.10+ 和 desk.py 的路径）。
+desk.py 自己认得当前会话和它开在哪个仓库（cd 到别处也不变），不要给 `--source`、`--repo`。正文用文件或从对话里取，不要把多行 Markdown 塞进命令行；不写凭据。
+
+## 什么时候发什么
+- 用户问了问题 → 对话里照常答完，**在同一条消息里**紧接着 `desk answer`。下达任务、"好的 / 收到"不发。
+- 要用户拍板 → `desk decide`。一律用它，不用 AskUserQuestion。
+- `desk info` 少用：长任务完成、跑挂了要人管、机器或环境出了问题。
+- 子 agent 不发 decide、不跑 listen：要用户定的事交回主会话。
+
+## 回答
+`desk answer`：不用参数。正文是你刚写的那一段（最后一次工具调用之后的文字），原问题是用户最近一条消息，标题取问题第一行，都从会话记录里取。
+- 所以答完立刻调用，中间不要再写别的话。想自己定标题：`desk answer "<概括，30 字内>"`。
+- 报错（找不到会话记录 / 没取到文字）时改用 `desk answer "<标题>" --body-file <md> --question "<原文>"`。
+- 一轮里用户问了几个问题，答完合成一条发。
+
+## 决定
+1. Write 一个 .md：背景、各选项的后果和代价、推荐哪个和理由。要能单独看懂（用户可能几小时后才看）。
+2. `desk decide "<一个问题，30 字内>" --body-file <md> -o "短标签::一句说明" -o "…" --rec N`
+   卡住、不定就做不下去的加 `--high`。
+3. 对话里只说一句"已发到 ClaudeDesk：<标题>"，继续做不依赖它的事；没事可做就结束这一轮。
+4. 确保 listen 在跑（下一节）。
+
+## listen：每个会话只要一个
+- 发过 decide、或 desk 在 stderr 提示"没有 listen 在跑"时，用 Bash `run_in_background: true`、不设超时启动 `desk listen`。已经在跑就别再开（重复的立刻退出 5）。
+- 醒来（退出 0）时 stdout 每行一件事。**一次处理完这一批，再重启一次 listen。**
+  - `{"ev":"reply","id","title","choice","choice_index","text"}`：先在对话里复述一句"用户选了 X（补充：…），开始做"，再按 choice 做，text 里的补充也要遵守；只有 text 或和 choice 冲突时以 text 为准；看不懂就再发 decide，不要猜。选项同名时以 choice_index 为准。
+  - 用户在 ClaudeDesk 里标为已处理、跳过的决定不会送来，不用等。旧记录还可能带 `"resolved":true` / `"dismissed":true`：不按任何选项做，说一句就继续。
+  - `{"ev":"followup","id","msg","kind","title","question","text"}`（追问回复过的决定时还带 choice、reply_text）：在对话里回答，然后**在同一条消息里** `desk answer --reply-to <id>`（id 原样抄）。一批里有几条追问就一条一条答、一条一条发。
+- 退出 4（会话没了）、5（重复）不用处理。不要用 `list` / `responses` 轮询。
+
+## 用户在对话里答了决定
+- 一条：`desk close --id <id> --text "用户在对话里选了 B"`；本会话所有还在等的：`desk close --mine`。
+- 退出 3 = 用户也在 ClaudeDesk 里答了（stdout 有那条回复）：一致就照做，不一致就在对话里问清以哪个为准。那条带 `"resolved":true` 或 `"dismissed":true` = 用户在那边处理掉了，不用为它做什么。
+
+## 新会话、检查
+- `desk status`：一行，`open=待决定 undelivered=没送达 listen=on/off`；有 `orphaned=N` 表示这个仓库里已结束的会话留下了没送达的回复或追问。
+- 用户提到之前在 ClaudeDesk 里回复过、或 status 显示 orphaned 时：`desk inbox` 看一眼，`desk inbox --adopt` 接过来（输出和 listen 一样，照样处理，然后确保 listen 在跑）。
+
+## 兜底（装了 hooks 才有）
+会话开始时会提醒这些规则；AskUserQuestion 会被拦下，改用 decide；一轮结束时答了问题没发、追问没回，会自动补发或提醒你补上；有待决定但 listen 没在跑，会提醒你启动。兜底不是替代，照常自己发。
+
+## 出问题
+- 老写法 `desk post --kind answer|decision|info …` 照样能用。
+- post 提示"没有 ClaudeDesk 在看这个数据目录"：`desk` 指向了别处的 desk.py 副本，改成安装目录里的那个再发。
+- 程序没反应：看托盘图标；日志在 `<ClaudeDesk 目录>/data/claudedesk.log`。
+"""
+
+
+# ---------------------------------------------------------------- 简写命令：answer / decide / info
+
+def cmd_answer(a) -> int:
+    """desk answer：正文、原问题默认从会话记录取（回答追问时原问题就是追问原文），标题默认取问题第一行。"""
+    a.kind = "answer"
+    a.body_from_chat = not (a.body_file or a.body)
+    a.question_from_chat = not (a.question or a.question_file or a.reply_to)
+    a.soft_question = True
+    return cmd_post(a)
+
+
+def cmd_decide(a) -> int:
+    a.kind = "decision"
+    a.priority = "high" if a.high else "normal"
+    return cmd_post(a)
+
+
+def cmd_info(a) -> int:
+    a.kind = "info"
+    return cmd_post(a)
+
+
+# ---------------------------------------------------------------- 接入 Claude Code：skill + hooks（desk.py setup / hook）
+# 光靠 skill 里的规则，agent 常常忘了发、或者命令写不准。setup 把带真实路径的 skill 装进 Claude Code，再挂三个 hook 兜底：
+#   SessionStart：会话开始（含恢复、压缩之后）把规则和命令塞进上下文，压缩丢了也会再补上；
+#   PreToolUse(AskUserQuestion)：拦下来，告诉它用 decide（连选项都替它拼好）；
+#   Stop：一轮结束时检查——追问没回、答了问题没发、有待决定却没在 listen，能补发的自动补发，补不了的挡回去让它补。
+# hook 出任何错都静默退出 0：兜底坏了不能连累会话本身。
+
+SKILL_PLACEHOLDER = "python C:/path/to/ClaudeDesk/desk.py"
+HOOK_EVENTS = (("SessionStart", None, "session-start"), ("PreToolUse", "AskUserQuestion", "ask"), ("Stop", None, "stop"))
+_HOOK_CMD = re.compile(r"""desk\.py["']?(?:\s+--data(?:=|\s+)(?:"[^"]*"|'[^']*'|\S+))?\s+hook\s+(session-start|ask|stop)\b""")
+AUTO_ANSWER_MIN = 200  # 自动补发 answer：最后那段回答至少这么长（短的多半是"好的 / 改完了"，不值得发）
+_QUESTION_RE = re.compile(
+    r"[?？]|吗|么$|呢|什么|怎么|怎样|为什么|为啥|如何|哪[个里些儿种]|是否|是不是|能不能|可不可以|会不会|有没有|多少|几[个点天次]|啥"
+    r"|^(?:what|why|how|which|where|when|who|is|are|does|do|can|could|should|would|will)\b", re.I | re.M)
+
+
+class SetupError(RuntimeError):
+    pass
+
+
+def _fwd(path) -> str:
+    return str(path).replace("\\", "/")
+
+
+def desk_command(python, desk_path, data=None) -> str:
+    """装进 skill / hooks 里的命令：带引号（路径里常有空格），正斜杠（Git Bash、cmd、PowerShell 都认）。"""
+    cmd = f'"{_fwd(python)}" "{_fwd(desk_path)}"'
+    if data:
+        cmd += f' --data "{_fwd(Path(data).resolve())}"'
+    return cmd
+
+
+def skill_text(cmd: str) -> str:
+    """装进 Claude Code 的 skill：`desk` 换成真的命令。"""
+    out = []
+    for line in SKILL_MD.splitlines():
+        if line.startswith("命令里的 `desk` ="):
+            line = f"命令里的 `desk` = `{cmd}`（ClaudeDesk 设置里\"接入 Claude Code\"写的；换了 Python 或挪了 ClaudeDesk 就在那里重新接入）。"
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def _config_dir(config=None) -> Path:
+    return Path(config) if config else _config_dirs()[0]
+
+
+def _load_settings(p: Path) -> dict:
+    if not p.exists():
+        return {}
+    try:
+        raw = p.read_text(encoding="utf-8-sig")
+        st = json.loads(raw) if raw.strip() else {}
+    except (OSError, ValueError) as e:
+        raise SetupError(f"读不了 {p}：{e}（先把它改成合法的 JSON，免得覆盖掉你的设置）") from e
+    if not isinstance(st, dict) or not isinstance(st.get("hooks", {}), dict):
+        raise SetupError(f"{p} 的格式不认识（顶层或 hooks 不是对象），没有改它")
+    return st
+
+
+def _strip_desk_hooks(hooks: dict) -> None:
+    """去掉以前装的 ClaudeDesk hook（认 desk.py ... hook <名字>），别人的原样留着。"""
+    for ev in list(hooks):
+        groups = hooks.get(ev)
+        if not isinstance(groups, list):
+            continue
+        keep = []
+        for g in groups:
+            if isinstance(g, dict) and isinstance(g.get("hooks"), list):
+                hs = [h for h in g["hooks"] if not (isinstance(h, dict) and _HOOK_CMD.search(str(h.get("command") or "")))]
+                if not hs:
+                    continue
+                g = dict(g, hooks=hs)
+            keep.append(g)
+        if keep:
+            hooks[ev] = keep
+        else:
+            del hooks[ev]
+
+
+def _write_atomic(p: Path, text: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".claudedesk.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def setup_claude(python, desk_path, config=None, data=None, block_ask=True, remove=False, dry_run=False) -> dict:
+    """装（或 remove=True 卸掉）ClaudeDesk 的 skill 和 hooks。settings.json 第一次改之前备份成 settings.json.claudedesk.bak。"""
+    cfg = _config_dir(config)
+    sp, kp = cfg / "settings.json", cfg / "skills" / "claude-desk" / "SKILL.md"
+    cmd = desk_command(python, desk_path, data)
+    st = _load_settings(sp)
+    before = json.dumps(st, ensure_ascii=False, sort_keys=True)
+    hooks = st.setdefault("hooks", {})
+    _strip_desk_hooks(hooks)
+    if not remove:
+        for ev, matcher, name in HOOK_EVENTS:
+            if name == "ask" and not block_ask:
+                continue
+            h = {"type": "command", "command": f"{cmd} hook {name}", "timeout": 30}
+            g = {"matcher": matcher, "hooks": [h]} if matcher else {"hooks": [h]}
+            hooks.setdefault(ev, []).append(g)
+    if not hooks:
+        del st["hooks"]
+    changed = json.dumps(st, ensure_ascii=False, sort_keys=True) != before
+    skill_new = None if remove else skill_text(cmd)
+    try:
+        skill_old = kp.read_text(encoding="utf-8")
+    except OSError:
+        skill_old = None
+    if not dry_run:
+        if changed:
+            bak = sp.with_name(sp.name + ".claudedesk.bak")
+            if sp.exists() and not bak.exists():
+                bak.write_bytes(sp.read_bytes())
+            _write_atomic(sp, json.dumps(st, ensure_ascii=False, indent=2) + "\n")
+        if skill_new is not None and skill_new != skill_old:
+            _write_atomic(kp, skill_new)
+        elif remove and skill_old is not None and "name: claude-desk" in skill_old:
+            kp.unlink()
+            with contextlib.suppress(OSError):
+                kp.parent.rmdir()
+    return {"settings": str(sp), "skill": str(kp), "command": cmd, "settings_changed": changed,
+            "skill_changed": skill_new != skill_old if not remove else skill_old is not None}
+
+
+def setup_status(config=None) -> dict:
+    """装没装：skill 在不在、挂了哪几个 hook、hook 里用的命令（看路径对不对）。"""
+    cfg = _config_dir(config)
+    kp = cfg / "skills" / "claude-desk" / "SKILL.md"
+    out = {"config": str(cfg), "skill": kp.exists(), "hooks": [], "command": None}
+    try:
+        st = _load_settings(cfg / "settings.json")
+    except SetupError as e:
+        out["error"] = str(e)
+        return out
+    for groups in (st.get("hooks") or {}).values():
+        for g in groups if isinstance(groups, list) else []:
+            for h in (g.get("hooks") if isinstance(g, dict) else None) or []:
+                c = str(h.get("command") or "") if isinstance(h, dict) else ""
+                m = _HOOK_CMD.search(c)
+                if m:
+                    out["hooks"].append(m.group(1))
+                    out["command"] = out["command"] or c[: c.rfind(" hook ")].strip()
+    out["ok"] = out["skill"] and {"session-start", "stop"} <= set(out["hooks"])
+    return out
+
+
+def find_python() -> str | None:
+    """找一个 Python 3.10+（给 hooks、skill 用）：CLAUDEDESK_PYTHON、py -3、python、python3。
+    跳过 WindowsApps 里的占位程序（没装 Python 时它会打开应用商店）。"""
+    mine = [os.environ["CLAUDEDESK_PYTHON"]] if os.environ.get("CLAUDEDESK_PYTHON") else None
+    cands = ([mine] if mine else []) + [["py", "-3"], ["python"], ["python3"]]
+    import shutil
+    flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW：别闪黑框
+    for c in cands:
+        exe = c[0] if os.path.isabs(c[0]) else shutil.which(c[0])
+        if not exe or (c is not mine and "windowsapps" in exe.lower()):
+            continue
+        try:
+            r = subprocess.run([exe, *c[1:], "-c", "import sys;print(int(sys.version_info>=(3,10)));print(sys.executable)"],
+                               capture_output=True, text=True, timeout=15, creationflags=flags)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        lines = r.stdout.split()
+        if r.returncode == 0 and len(lines) >= 2 and lines[0] == "1":
+            return r.stdout.splitlines()[1].strip()
+    return None
+
+
+def cmd_setup(a) -> int:
+    python = a.python or sys.executable
+    try:
+        res = setup_claude(python, Path(__file__).resolve(), a.config, a.data, block_ask=not a.no_block_ask,
+                           remove=a.remove, dry_run=a.dry_run)
+    except SetupError as e:
+        print(f"错误：{e}", file=sys.stderr)
+        return 1
+    verb = "会" if a.dry_run else "已"
+    if a.remove:
+        print(f"{verb}卸掉 ClaudeDesk 的 hooks（{res['settings']}）和 skill（{res['skill']}）")
+    else:
+        print(f"{verb}装好：skill → {res['skill']}；hooks → {res['settings']}\n命令：{res['command']}")
+        if not a.dry_run:
+            print("新开的 Claude Code 会话生效（已经开着的要重开）", file=sys.stderr)
+    return 0
+
+
+def _self_cmd(data) -> str:
+    return desk_command(sys.executable, Path(__file__).resolve(), data)
+
+
+def _hook_ctx(cmd: str) -> str:
+    return (f"ClaudeDesk 已接入（桌面上给用户看的收件箱）。命令 desk = {cmd}\n"
+            "- 用户问了问题：对话里答完，同一条消息里紧接着 `desk answer`（正文、原问题、标题都从对话取，不用参数）。\n"
+            "- 要用户拍板：Write 一个 .md 写清背景和各选项代价，`desk decide \"<问题>\" --body-file <md> -o \"标签::说明\" … --rec N`；"
+            "不用 AskUserQuestion。然后 Bash run_in_background 启动 `desk listen`（每个会话一个）。\n"
+            "- listen 醒来每行一件事，处理完再启动一次。追问 {\"ev\":\"followup\",\"id\":…}：对话里答，同一条消息里 "
+            "`desk answer --reply-to <id>`。\n"
+            "- 长任务完成、出故障：`desk info \"<标题>\" --body-file <md>`（少用）。细节见 claude-desk skill。")
+
+
+def hook_session_start(inp: dict, data=None) -> dict | None:
+    d = data_dir(data)
+    me = str(inp.get("session_id") or "") or session_env()[0]
+    cmd = _self_cmd(data)
+    lines = [_hook_ctx(cmd)]
+    if me and (d / INBOX).exists():
+        st = session_status(d, me)
+        todo = []
+        if st["open"] or st["undelivered"]:
+            todo.append(f"这个会话有 {st['open']} 个待决定、{st['undelivered']} 件回复 / 追问没送达"
+                        + ("" if st["listen"] else "，listen 没在跑：现在就后台启动 `desk listen`"))
+        if st["orphaned"]:
+            todo.append(f"这个仓库里已结束的会话留下 {st['orphaned']} 件没送达：`desk inbox` 看一眼，需要就 `desk inbox --adopt`")
+        if todo:
+            lines.append("现在：" + "；".join(todo) + "。")
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n".join(lines)}}
+
+
+def _q(s) -> str:
+    return '"' + " ".join(str(s or "").replace('"', "'").split()) + '"'
+
+
+def hook_ask(inp: dict, data=None) -> dict | None:
+    """AskUserQuestion → 拦下，替它拼好 decide 命令。ClaudeDesk 没在运行就放行（用户这会儿多半在终端前）。"""
+    d = data_dir(data)
+    if not app_running(d):
+        return None
+    cmd = _self_cmd(data)
+    qs = ((inp.get("tool_input") or {}).get("questions") or []) if isinstance(inp.get("tool_input"), dict) else []
+    sugg = []
+    for q in qs[:4] if isinstance(qs, list) else []:
+        if not isinstance(q, dict):
+            continue
+        opts = " ".join("-o " + _q(f"{o.get('label', '')}::{o.get('description', '')}") for o in (q.get("options") or [])
+                        if isinstance(o, dict) and o.get("label"))
+        sugg.append(f"{cmd} decide {_q(_clip(q.get('question') or q.get('header') or '', 60))} --body-file <md> {opts}".strip())
+    reason = ("这个会话接入了 ClaudeDesk，用户在那里拍板：不要用 AskUserQuestion。先 Write 一个 .md（背景、各选项的后果和代价、"
+              "推荐哪个和理由），再发" + ("：\n" + "\n".join(sugg) if sugg else f" `{cmd} decide \"<问题>\" --body-file <md> -o \"标签::说明\" …`")
+              + f"\n可以加 --rec N 标推荐、--high 标紧急。发完对话里说一句，确保后台有 `{cmd} listen` 在跑（没有就 run_in_background 启动），"
+              "继续做不依赖它的事。")
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": reason}}
+
+
+def _turn(path, nbytes: int = 1 << 21) -> tuple[list[dict], str | None, _dt.datetime | None]:
+    """会话记录里最近一轮：(用户最后一条消息之后的记录, 那条消息的文字, 它的时间)。"""
+    recs, _ = _tail_records(Path(path), nbytes)
+    for i in range(len(recs) - 1, -1, -1):
+        q = _user_text(recs[i])
+        if q is not None:
+            return recs[i + 1:], q, parse_ts(recs[i].get("timestamp"))
+    return recs[-400:], None, None
+
+
+def _final_text(turn: list[dict]) -> str:
+    """这一轮最后那段连续的文字（最后一次工具调用之后写的）。"""
+    run: list[str] = []
+    for r in reversed(turn):
+        t = r.get("type")
+        if t == "user":
+            if run or any(b.get("type") == "tool_result" for b in _blocks(r)):
+                break
+            continue
+        if t != "assistant" or r.get("isApiErrorMessage") or (r.get("message") or {}).get("model") == "<synthetic>":
+            continue
+        for b in reversed(_blocks(r)):
+            if b.get("type") == "tool_use":
+                return "\n\n".join(run).strip()
+            if b.get("type") == "text" and str(b.get("text") or "").strip():
+                run.insert(0, str(b["text"]).strip())
+    return "\n\n".join(run).strip()
+
+
+def _desk_calls(turn: list[dict]) -> list[str]:
+    return [_tool_cmd(b) for r in turn if r.get("type") == "assistant" for b in _blocks(r)
+            if b.get("type") == "tool_use" and "desk" in _tool_cmd(b)]
+
+
+def _auto_post(d: Path, me: str, kind: str, title: str, body: str, question=None, reply_to=None, followup_id=None) -> dict:
+    repo, _ = home_repo(me)
+    msg = make_message(kind, repo or "unknown", title, body, question, repo=repo or None, reply_to=reply_to,
+                       followup_id=followup_id, session=me)
+    msg["auto"] = "stop-hook"  # 界面上标"自动补发"
+    post_message(msg, d)
+    return msg
+
+
+def hook_stop(inp: dict, data=None, flush_wait: float = 1.5) -> dict | None:
+    d = data_dir(data)
+    me = str(inp.get("session_id") or "") or session_env()[0]
+    tp = inp.get("transcript_path")
+    if not me or not tp or not (d / INBOX).exists():
+        return None  # 不知道是哪个会话、或者这个数据目录从来没用过
+    active = bool(inp.get("stop_hook_active"))
+    turn, question, start = _turn(tp)
+    final = str(inp.get("last_assistant_message") or "").strip() or _final_text(turn)
+    end = time.monotonic() + flush_wait
+    while not final and time.monotonic() < end:  # 最后那段可能还没写进记录
+        time.sleep(0.3)
+        turn, question, start = _turn(tp)
+        final = _final_text(turn)
+    calls = _desk_calls(turn)
+    msgs = read_all(d / INBOX)
+    led = read_ledger(d)
+    since = (start - _dt.timedelta(seconds=2)) if start else None
+    mine = [m for m in msgs if owner_of(m.get("session"), led["adopt"], m.get("repo")) == me
+            and (since is None or (parse_ts(m.get("ts")) or since) >= since)]
+    posted = bool(mine) or any(re.search(r"\b(?:post|answer|decide|info)\b", c) for c in calls)
+    notes, block = [], []
+    cmd = _self_cmd(data)
+
+    # 1) 这一轮交给它的追问，有没有回
+    fus = {f["id"]: f for f in read_followups(d)[0]}
+    got = [fid for fid, r in led["followup"].items() if fid in fus and r.get("session") == me
+           and (since is None or (parse_ts(r.get("ts")) or since) >= since)]
+    if got:
+        reps: dict[str, list[dict]] = {}
+        for m in msgs:
+            if m.get("reply_to"):
+                reps.setdefault(str(m["reply_to"]), []).append(m)
+        answered: set[str] = set()
+        for mid in {fus[f]["msg"] for f in got}:
+            answered.update(pair_followups([f for f in fus.values() if f["msg"] == mid], reps.get(mid, [])))
+        left = [fus[f] for f in got if f not in answered]
+        if len(left) == 1 and len(final) >= 20:
+            f = left[0]
+            _auto_post(d, me, "answer", derive_title(f.get("text")) or "回复追问", final, f.get("text"), f["msg"], f["id"])
+            notes.append("ClaudeDesk：追问的回答已自动补发")
+            posted = True
+        elif left and not active:
+            block.append("用户在 ClaudeDesk 的这些追问还没回（对话里答过也要发回去，用户在那边看）：\n" + "\n".join(
+                f"- {_q(_clip(f.get('text'), 60))}：答完在同一条消息里 `{cmd} answer --reply-to {f['id']}`" for f in left))
+
+    # 2) 答了用户的问题却没发 answer：把最后那段补发过去
+    if not posted and not got and question and len(final) >= AUTO_ANSWER_MIN and _QUESTION_RE.search(question):
+        _auto_post(d, me, "answer", derive_title(question) or derive_title(final), final, question)
+        notes.append("ClaudeDesk：这一轮的回答已自动补发")
+
+    # 3) 有待决定 / 没送达的事，却没有 listen 在跑
+    if not active:
+        st = session_status(d, me)
+        if (st["open"] or st["undelivered"]) and not st["listen"] and not any(re.search(r"\blisten\b", c) for c in calls):
+            block.append(f"这个会话在 ClaudeDesk 有 {st['open']} 个待决定、{st['undelivered']} 件没送达，但没有 listen 在跑，"
+                         f"用户回了也送不回来：用 Bash run_in_background: true 启动 `{cmd} listen`，然后结束这一轮。")
+    out: dict = {}
+    if block:
+        out.update(decision="block", reason="\n\n".join(block))
+    if notes:
+        out["systemMessage"] = "；".join(notes)
+    return out or None
+
+
+def cmd_hook(a) -> int:
+    """Claude Code 调的：从 stdin 读事件 JSON，往 stdout 写结果 JSON。出什么错都退出 0（不连累会话）。"""
+    try:
+        raw = sys.stdin.buffer.read().decode("utf-8", "replace") if sys.stdin and not sys.stdin.isatty() else ""
+        inp = json.loads(raw) if raw.strip() else {}
+        if not isinstance(inp, dict):
+            inp = {}
+        fn = {"session-start": hook_session_start, "ask": hook_ask, "stop": hook_stop}[a.event]
+        out = fn(inp, a.data)
+        if out:
+            print(json.dumps(out))  # \u 转义：Windows 上不管 Claude Code 按什么编码读 stdout 都不会乱码
+    except Exception as e:  # noqa: BLE001
+        print(f"ClaudeDesk hook {a.event} 出错（已忽略）：{e}", file=sys.stderr)
+    return 0
+
+
 def main(argv=None) -> int:
     for s in (sys.stdout, sys.stderr):
         try:
@@ -1606,6 +2099,50 @@ def main(argv=None) -> int:
     sp.add_argument("--priority", choices=("normal", "high"), default="normal")
     sp.add_argument("--no-launch", action="store_true", help="程序没在运行时不要自动启动")
     sp.set_defaults(func=cmd_post)
+
+    def body_args(sp):
+        sp.add_argument("--session", help="默认 $CLAUDE_CODE_SESSION_ID")
+        sp.add_argument("--body", help="正文 Markdown；写 - 表示从 stdin 读")
+        sp.add_argument("--body-file", help="正文 Markdown 文件（UTF-8）")
+        sp.add_argument("--no-launch", action="store_true", help="程序没在运行时不要自动启动")
+        sp.set_defaults(source=None, repo=None, question=None, question_file=None, question_from_chat=False,
+                        reply_to=None, option=[], recommended=None, allow_text=False, priority="normal")
+
+    sp = sub.add_parser("answer", help="回答（简写）：正文 = 刚在对话里写的那段，原问题 = 用户最近一条消息，标题取问题第一行；"
+                                       "答完在同一条消息里调用")
+    sp.add_argument("title", nargs="?", help="标题（默认取问题第一行）")
+    body_args(sp)
+    sp.add_argument("--question", help="原问题（默认从对话取）")
+    sp.add_argument("--question-file")
+    sp.add_argument("--reply-to", help="回答追问：listen 输出里追问的 id")
+    sp.set_defaults(func=cmd_answer, question=None, question_file=None, reply_to=None)
+
+    sp = sub.add_parser("decide", help="要用户拍板（简写 post --kind decision）")
+    sp.add_argument("title", help="一个问题，30 字内")
+    body_args(sp)
+    sp.add_argument("--body-from-chat", action="store_true", help="正文取自刚在对话里写的那段")
+    sp.add_argument("-o", "--option", action="append", default=[], help='选项 "短标签::一句说明"，可重复')
+    sp.add_argument("--rec", "--recommended", dest="recommended", type=int, help="推荐第几个（从 1 开始）")
+    sp.add_argument("--high", action="store_true", help="卡住了、不定做不下去")
+    sp.set_defaults(func=cmd_decide, body_from_chat=False)
+
+    sp = sub.add_parser("info", help="通知（简写 post --kind info）：长任务完成、跑挂了、环境出问题")
+    sp.add_argument("title")
+    body_args(sp)
+    sp.add_argument("--body-from-chat", action="store_true", help="正文取自刚在对话里写的那段")
+    sp.set_defaults(func=cmd_info, body_from_chat=False)
+
+    sp = sub.add_parser("setup", help="接入 Claude Code：装 skill（带真实命令）和兜底 hooks；--remove 卸掉")
+    sp.add_argument("--python", help="hooks 用哪个 Python（默认当前这个）")
+    sp.add_argument("--config", help="Claude Code 配置目录（默认 $CLAUDE_CONFIG_DIR 或 ~/.claude）")
+    sp.add_argument("--remove", action="store_true")
+    sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--no-block-ask", action="store_true", help="不拦 AskUserQuestion")
+    sp.set_defaults(func=cmd_setup)
+
+    sp = sub.add_parser("hook", help="（Claude Code 的 hooks 调用，见 setup）")
+    sp.add_argument("event", choices=("session-start", "ask", "stop"))
+    sp.set_defaults(func=cmd_hook)
 
     sp = sub.add_parser("wait", help="阻塞到出现对应回复（--followups：追问）；超时退出码 2")
     sp.add_argument("--followups", action="store_true",
