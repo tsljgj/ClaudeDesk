@@ -90,12 +90,12 @@ def test_follow_ups_and_answers_link_paths(env):
     a = post(d, kind="answer", title="回答", body="正文")
     store.poll()
     store.add_followup(a, "C:\\work\\report.md 是最新的吗？")
-    b = post(d, kind="answer", title="追问的回答", body="是的，另存在 C:/work/a b.md 之前的版本没了。", reply_to=a)
+    b = post(d, kind="answer", title="追问的回答", body="是的，旧版本在 C:/work/My Docs/old.md 里。", reply_to=a)
     store.poll()
     open_msg(page, server, a)
     page.wait_for_selector('.fu-q .path-link[data-st="file"]')
     page.wait_for_selector('.fu-ans .path-link[data-st]')
-    assert page.locator('.fu-ans .path-link[data-path="C:/work/a b.md"]').count() == 1  # 有空格、没引号：接上了
+    assert page.locator('.fu-ans .path-link[data-path="C:/work/My Docs/old.md"]').count() == 1  # 中间有空格、没引号：接上了
     with page.expect_response(lambda r: r.url.endswith("/api/action") and r.request.post_data_json.get("action") == "open_path"):
         page.click(".fu-q .path-link")
     assert calls == [("open", "C:\\work\\report.md")] and b

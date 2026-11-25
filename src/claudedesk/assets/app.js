@@ -2546,6 +2546,12 @@
     $("findClose").addEventListener("click", closeFind);
     $("findAll").addEventListener("click", function () { searchAll($("findText").value.trim()); });
     if (window.MutationObserver) new MutationObserver(refind).observe($("scroller"), { childList: true, subtree: true, characterData: true });
+    var pathsDue = false; // 选项、追问记录会各自重画：新冒出来的路径链接下一帧统一去查
+    if (window.MutationObserver) new MutationObserver(function () {
+      if (pathsDue) return;
+      pathsDue = true;
+      requestAnimationFrame(function () { pathsDue = false; checkPaths(); });
+    }).observe($("detail"), { childList: true, subtree: true });
     $("scroller").addEventListener("click", function (e) { // 正文和追问记录里的回答都有代码块
       var b = e.target.closest(".code-copy");
       if (!b) return;
