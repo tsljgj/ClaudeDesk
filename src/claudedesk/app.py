@@ -32,6 +32,7 @@ import desk  # noqa: E402
 
 from . import __version__, update, winapi  # noqa: E402
 from ._build import BUILD  # noqa: E402
+from .localfiles import Opener  # noqa: E402
 from .server import TOKEN_HEADER, ActionError, DeskServer, external_url  # noqa: E402
 from .store import Store, plain_summary  # noqa: E402
 
@@ -229,7 +230,9 @@ class TrayApp:
         ea = server.extra_actions
         ea["show"] = lambda body: (threading.Thread(target=self.show, args=(body.get("id"),), daemon=True).start(), "ok")[1]
         ea["export_pdf"] = self.export_pdf
-        ea["open_path"] = lambda body: winapi.open_path(Path(str(body.get("path"))))
+        files = Opener(winapi.open_path, winapi.reveal, winapi.remote_drive)  # 回复里的本机路径：点了打开
+        ea["open_path"] = files.open_path
+        ea["path_info"] = files.path_info
         ea["open_data"] = lambda body: winapi.open_path(ddir)
         ea["open_url"] = self.open_url
         ea["clipboard_text"] = lambda body: winapi.clipboard_text()

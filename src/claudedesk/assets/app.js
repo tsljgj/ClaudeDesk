@@ -917,12 +917,14 @@
       $("toolbar").classList.toggle("scrolled", restorePos(d.id) > 4);
     }
     refind();
+    checkPaths();
   }
   function renderBody(d) { // 设置（字号 / 字体）变了只重画正文，选项和没写完的回复不动
     var body = $("body");
     if ((d.body || "").trim()) {
       body.innerHTML = MD.toHtml(d.body);
       MD.hydrate(body);
+      checkPaths();
     } else {
       body.innerHTML = '<p class="no-body">（没有正文）</p>';
     }
@@ -1148,6 +1150,7 @@
         ph.parentNode.replaceChild(n, ph);
       });
       ansNodes = keep; // 只留眼前这条的：换一条就放掉，内存不越攒越多
+      checkPaths();
     }
     $("thread").hidden = list.hidden = !html;
     if (fuSent[d.id] != null && (d.followups || []).length > fuSent[d.id]) {
@@ -2477,7 +2480,7 @@
       searchFirst();
     });
     $("options").addEventListener("click", function (e) {
-      if (e.target.closest("a[href]")) return; // 选项说明里的链接：打开它，不算选这一项
+      if (e.target.closest("a[href], .path-link")) return; // 选项说明里的链接、路径：打开它，不算选这一项
       var b = e.target.closest(".opt");
       if (b && !b.disabled) pick(+b.dataset.idx);
     });
@@ -2554,12 +2557,16 @@
     });
     // 链接一律在系统浏览器里打开。桌面程序里交给本机程序去开（窗口里 target=_blank 靠的是 pywebview，版本不同不一定靠得住）
     document.addEventListener("click", function (e) {
+      var pl = pathOf(e.target);
+      if (pl && !e.defaultPrevented) { e.preventDefault(); return openLocal(pl, e.ctrlKey || e.metaKey); } // Ctrl + 点：打开所在文件夹
       var u = linkOf(e.target);
       if (!u || e.defaultPrevented || !BOOT.app) return;
       e.preventDefault();
       openUrl(u);
     });
-    document.addEventListener("auxclick", function (e) { // 中键点链接：也是在浏览器里打开
+    document.addEventListener("auxclick", function (e) { // 中键点链接：也是在浏览器里打开；点路径：打开所在文件夹
+      var pl = e.button === 1 && pathOf(e.target);
+      if (pl) { e.preventDefault(); return openLocal(pl, true); }
       var u = e.button === 1 && linkOf(e.target);
       if (!u || !BOOT.app) return;
       e.preventDefault();
@@ -2589,6 +2596,62 @@
     act({ action: "open_url", url: u }).catch(function (e) { toast("打不开链接：" + e.message, { bad: true }); });
   }
 
+  // ---- 回复里的本机路径（markdown.js 认出来的 .path-link）：点了用默认程序打开，Ctrl + 点 / 中键 / 右键菜单打开所在文件夹。
+  // 只有电脑上的程序窗口能开；浏览器、手机里点了就复制路径
+  function pathOf(el) {
+    var a = el && el.closest && el.closest(".path-link[data-path]");
+    return a ? a.getAttribute("data-path") : null;
+  }
+  function openLocal(p, reveal) {
+    if (!BOOT.app) {
+      writeClipboard(p).then(function () { toast("已复制路径（在电脑上的 Claude Desk 里点能直接打开）"); })
+        .catch(function (e) { toast("复制失败：" + e.message, { bad: true }); });
+      return;
+    }
+    act({ action: "open_path", path: p, reveal: !!reveal }).then(function (r) {
+      if (r && r.runs) toast("这类文件一打开就会运行，已在文件夹里选中它");
+    }).catch(function (e) { toast("打不开：" + e.message, { bad: true }); });
+  }
+  // 先问程序这些路径在不在、是文件还是文件夹：不在的不像链接（多半是认错了，或者文件已经删了），
+  // 文件名后面粘着的汉字（"report.md里面"）程序找到真文件后挪出链接。查过的记 30 秒
+  var pathSeen = {};
+  function checkPaths() {
+    if (!BOOT.app) {
+      document.querySelectorAll("#detail .path-link:not([data-st])").forEach(function (a) {
+        a.setAttribute("data-st", "copy");
+        a.title = "点击复制路径：" + a.getAttribute("data-path");
+      });
+      return;
+    }
+    var now = Date.now(), ask = [], links = [].slice.call(document.querySelectorAll("#detail .path-link:not([data-st])"));
+    links.forEach(function (a) {
+      var p = a.getAttribute("data-path"), c = pathSeen[p];
+      if ((!c || now - c.at > 30000) && ask.indexOf(p) < 0) ask.push(p);
+    });
+    var apply = function () {
+      links.forEach(function (a) { var c = pathSeen[a.getAttribute("data-path")]; if (c && document.contains(a)) markPath(a, c); });
+    };
+    if (!ask.length) return apply();
+    act({ action: "path_info", paths: ask.slice(0, 100) }).then(function (res) {
+      Object.keys(res || {}).forEach(function (p) { pathSeen[p] = { at: Date.now(), kind: res[p].kind, path: res[p].path }; });
+      apply();
+    }).catch(function () { /* 老版本程序没有 path_info：照常能点 */ });
+  }
+  function markPath(a, c) {
+    var p = a.getAttribute("data-path");
+    a.setAttribute("data-st", c.kind);
+    if (c.path && c.path !== p && c.kind !== "gone") {
+      var cut = p.length - c.path.length, t = a.lastChild; // 找到的比写的短：只会是末尾去掉了几个汉字
+      if (cut > 0 && t && t.nodeType === 3 && t.nodeValue.slice(-cut) === p.slice(-cut)) {
+        a.parentNode.insertBefore(document.createTextNode(p.slice(-cut)), a.nextSibling);
+        t.nodeValue = t.nodeValue.slice(0, -cut);
+      }
+      a.setAttribute("data-path", c.path);
+    }
+    a.title = c.kind === "gone" ? "这台电脑上找不到：" + (c.path || p) :
+      (c.kind === "dir" ? "点击打开文件夹：" : "点击打开：") + (c.path || p) + "\nCtrl + 点击或右键：打开所在文件夹";
+  }
+
   // ---- 右键菜单。桌面程序里 WebView2 自带的右键菜单被 pywebview 关掉了（只有调试模式才有），这里补上常用的几项；
   // 列表行、标签有自己的菜单（它们先 preventDefault）；浏览器、手机里用它们自己的菜单
   function ctxMenu(e) {
@@ -2604,13 +2667,15 @@
       div.querySelectorAll(".code-copy").forEach(function (b) { b.remove(); });
       rich = '<meta charset="utf-8">' + div.innerHTML;
     }
-    var link = !field && linkOf(t), code = !field && t.closest(".codeblock"), reading = !field && t.closest("#detail") && currentDetail();
+    var link = !field && linkOf(t), lpath = !field && pathOf(t), code = !field && t.closest(".codeblock"), reading = !field && t.closest("#detail") && currentDetail();
     var it = [];
     if (field) {
       it.push(["cut", "scissors", "剪切", "Ctrl+X", !text || field.readOnly], ["copy", "copy", "复制", "Ctrl+C", !text],
         ["paste", "paste", "粘贴", "Ctrl+V", field.readOnly], ["sep"], ["field_all", "selectAll", "全选", "Ctrl+A", !field.value]);
     } else {
       if (link) it.push(["open", "external", "在浏览器中打开"], ["copy_link", "link", "复制链接地址"], ["sep"]);
+      if (lpath && BOOT.app) it.push(["open_file", "external", "打开"], ["open_dir", "folder", "打开所在文件夹"]);
+      if (lpath) it.push(["copy_path", "copy", "复制路径"], ["sep"]);
       if (text) it.push(["copy", "copy", "复制", "Ctrl+C"]);
       if (code) it.push(["copy_code", "copy", "复制这段代码"]);
       if (reading) it.push(["sep"], ["copy_md", "copy", "复制整条（Markdown）", "C"], ["read_all", "selectAll", "全选正文"]);
@@ -2636,7 +2701,7 @@
       var b = ev.target.closest("[data-ctx]");
       if (!b || b.disabled) return;
       closePopover();
-      ctxDo(b.dataset.ctx, { field: field, ss: ss, se: se, text: text, rich: rich, link: link, code: code });
+      ctxDo(b.dataset.ctx, { field: field, ss: ss, se: se, text: text, rich: rich, link: link, path: lpath, code: code });
     });
   }
   function ctxDo(what, c) {
@@ -2651,6 +2716,9 @@
     };
     if (what === "open") return openUrl(c.link);
     if (what === "copy_link") return copied(writeClipboard(c.link), "已复制链接");
+    if (what === "open_file") return openLocal(c.path, false);
+    if (what === "open_dir") return openLocal(c.path, true);
+    if (what === "copy_path") return copied(writeClipboard(c.path), "已复制路径");
     if (what === "copy_code") return copied(writeClipboard(c.code.querySelector("code").innerText), "已复制代码");
     if (what === "copy_md") return copy("md");
     if (what === "read_all") {

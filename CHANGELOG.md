@@ -17,6 +17,7 @@ The version is the one shown in the window footer (`v2.2.0 · build N`). Every g
 - **Tidy by age** ("⋯" → 按时间整理): archive or delete everything older than 1 h / 6 h / 12 h / 24 h / 7 days (or any age) in this tab or all tabs; delete confirms with Cancel focused. Mark every waiting decision handled in the tab or everywhere. The archive-handled menu gains 6 h and 12 h.
 - Right-click a decision → **这个会话的待决定都标为已处理**.
 - GitHub-style callouts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`).
+- **Local file paths open in one click.** Paths in a message (`C:\work\report.md`, `C:/…`, Git Bash `/c/…`, `file:///C:/…`, quoted paths or a whole `` `code` `` span with spaces, `[text](C:\…)` links) get a file or folder icon; click opens the file with its default app, `Ctrl` + click, middle click or right-click → 打开所在文件夹 shows it selected in Explorer, right-click → 复制路径. The app checks the paths first: ones that don't exist look like plain text, and Chinese stuck to the end (`…\data下面`) is left out. Files that run when opened (`.exe`, `.bat`, `.ps1`, `.py`, `.lnk`…) are only selected in Explorer, and network paths (`\\server\…`) are never opened. In a browser or on the phone a click copies the path.
 
 ### Changed
 

@@ -17,6 +17,8 @@
   --read-w: 920px;   /* 阅读区正文（和决定、追问卡片）最宽多少；设置里可以换 */
   --read-pad: 32px;  /* 正文左右留白 */
   --ext-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M4.5 2H10v5.5M10 2 2.5 9.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); /* 外链小箭头 */
+  --file-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6' fill='none' stroke='black' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E"); /* 本机文件 */
+  --folder-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z' fill='none' stroke='black' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E"); /* 本机文件夹 */
 
   /* 浅色 */
   --bg: #FFFFFF;
@@ -432,6 +434,21 @@ i[data-icon] svg { width: 100%; height: 100%; }
   -webkit-mask: var(--ext-icon) center/contain no-repeat; mask: var(--ext-icon) center/contain no-repeat;
 }
 .md a code { color: inherit; }
+/* 本机路径（回复里的 C:\…）：前面一个文件 / 文件夹小图标，和网址分开；点了用默认程序打开。
+   程序查过不在的（多半认错了，或者文件已经删了）不像链接，只留一条虚线 */
+.path-link { word-break: break-all; }
+.path-link::before {
+  content: ""; display: inline-block; width: .78em; height: .78em; margin-right: .22em; vertical-align: -.06em;
+  background: currentColor; opacity: .75;
+  -webkit-mask: var(--file-icon) center/contain no-repeat; mask: var(--file-icon) center/contain no-repeat;
+}
+.path-link[data-st="dir"]::before { -webkit-mask-image: var(--folder-icon); mask-image: var(--folder-icon); }
+.path-link[data-st="gone"] {
+  color: inherit; font-weight: inherit; cursor: default;
+  text-decoration-style: dotted; text-decoration-color: var(--line-2);
+}
+.path-link[data-st="gone"]::before { display: none; }
+.path-link[data-st="gone"]:hover { background: none; }
 .md ul, .md ol { padding-left: 1.5em; }
 .md li { margin: .3em 0; }
 .md li > ul, .md li > ol { margin: .3em 0 .2em; }

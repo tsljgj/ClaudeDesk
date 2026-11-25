@@ -1629,7 +1629,7 @@ description: 通过桌面程序 ClaudeDesk 和用户沟通。需要用户拍板�
 # ClaudeDesk 速查
 
 命令里的 `desk` = `python C:/path/to/ClaudeDesk/desk.py`（在 ClaudeDesk 设置里点"接入 Claude Code"会换成真的路径；手动安装时换成 Python 3.10+ 和 desk.py 的路径）。
-desk.py 自己认得当前会话和它开在哪个仓库（cd 到别处也不变），不要给 `--source`、`--repo`。正文用文件或从对话里取，不要把多行 Markdown 塞进命令行；不写凭据。
+desk.py 自己认得当前会话和它开在哪个仓库（cd 到别处也不变），不要给 `--source`、`--repo`。正文用文件或从对话里取，不要把多行 Markdown 塞进命令行；不写凭据。提到本机文件写绝对路径（`C:\\work\\report.md`；带空格的放进 `` `…` ``），用户在 ClaudeDesk 里点一下就能打开。
 
 ## 什么时候发什么
 - 用户问了问题 → 对话里照常答完，**在同一条消息里**紧接着 `desk answer`。下达任务、"好的 / 收到"不发。
