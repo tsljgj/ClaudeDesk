@@ -35,7 +35,7 @@ ClaudeDesk is a small Windows tray app that gives Claude Code sessions a place t
 ## Features
 
 - **Decisions with a reply box.** Options with descriptions and a recommended pick, plus a free-text note on every decision. The waiting session gets your choice as one line of JSON.
-- **Answers and follow-ups.** Answers keep your original question. Ask a follow-up on any answer, notice or handled decision from the box at the top of the page; a session that is listening answers it and the reply is linked back, newest first.
+- **Answers and follow-ups.** Answers keep your original question. Ask a follow-up on any answer, notice or handled decision from the box docked at the bottom of the page, like a chat; a session that is listening answers it and the answer shows right under your question.
 - **Knows where each session is.** Every message remembers the Claude Code session that posted it. Cards say whether that session is waiting, still open but not listening, or ended, and when your reply reached it. One background listener per session brings replies and follow-ups back in a single batch.
 - **On your phone too.** Turn on 手机访问 (phone access) and the inbox is also a web page your phone can open: read, answer decisions and ask follow-ups away from your desk. It works on the same Wi-Fi, or anywhere through Tailscale, and nothing leaves your PC. Optional push notifications through [ntfy](https://ntfy.sh).
 - **One tab per repo.** Messages are grouped by the git repo the session was started in, wherever it `cd`s later. Tabs can be closed and reopened; a closed tab comes back by itself when that repo posts again.
@@ -100,7 +100,7 @@ Every time a background command finishes, Claude Code wakes the session, and eac
 | Tray icon | Red number = unread messages; red dot = nothing unread but a decision is still open; flashing = a decision or urgent message you haven't seen |
 | Taskbar button | While the window is open or minimized it carries the same red badge. When a message arrives with the window in the tray, a minimized button appears with the badge and flashes: decisions and urgent messages until you look or they are handled elsewhere, others three times |
 
-New messages also raise a Windows notification; clicking it opens that message.
+New messages also raise a Windows notification; clicking it opens that message. Notifications are silent unless you turn on **提醒时有声音** (notification sound) in Settings or the tray menu.
 
 ### Repo tabs
 
@@ -118,6 +118,7 @@ New messages also raise a Windows notification; clicking it opens that message.
 - **Waiting-decisions strip:** while decisions are waiting, a strip under the search box reads "N 条待决定 · M 条紧急 · 最久已等 X". Click it or press `N` for the next waiting decision in the selected repos (urgent first, then the longest-waiting; `Shift+N` goes back); when none are left there, `N` switches to the repo with the longest-waiting decision and opens it. Waiting rows show how long the session has been waiting instead of a clock time. When a new decision or urgent message arrives somewhere you can't see, a notice at the bottom of the list says so and `N` opens it.
 - **只看未处理** (unhandled only, `F`) next to the search box hides everything except waiting decisions and unread messages. The message you are reading stays until you move on. The setting is remembered.
 - **Archive handled** (the box icon next to it) archives what in the selected repos is read and no longer needs a decision, like clearing browser history: pick **早于 1 小时 / 早于 24 小时 / 早于 7 天 / 全部** (older than 1 hour / 24 hours / 7 days / all), each with its count. Age counts from the message's last activity: when it arrived, when you replied, or when you last opened it. The message you are reading is never archived, the last choice is remembered, and `Z` undoes exactly that batch. The "⋯" menu has the same plus "mark all read".
+- **Auto-archive** (Settings → **自动归档已处理的**): 关 / 1 小时后 / 1 天后 / 7 天后 (off / after 1 hour (default) / 1 day / 7 days). Once a minute the app archives what is read, isn't a waiting decision, has no follow-up still waiting for an answer and hasn't had any activity for that long. Nothing is deleted; it is all in **归档**.
 - Marks: a solid dot is unread; an orange dot is a decision you haven't opened; an orange ring is a decision you've seen but not answered; an extra outer ring marks an urgent decision. The second line shows the status (待决定, ✓ your choice, ✓ 已处理, 已跳过, 已追问 · 等回答). Moving through the list with `↑`/`↓` marks a message read only after it stays open for 0.8 s.
 - Hover a row for its own actions (read/unread, mark handled, archive, delete) and a checkbox. Right-click works too.
 - **Select several:** tick checkboxes (`Shift` for a range), `Ctrl`-click, `X` for the current message, `Shift+↑↓`, `Ctrl+A`. The batch bar offers select all, mark handled, read, archive and delete.
@@ -144,24 +145,24 @@ New messages also raise a Windows notification; clicking it opens that message.
 
 ### Follow-up questions
 
-- Answers, notices and decisions that already have a reply (picked, handled, skipped or closed in chat) have a **追问** (follow-up) box right under the title. It is one line until you click into it. `Enter` jumps into it and `Ctrl+Enter` sends.
-- Every page reads newest first: the box (or an open decision's card) at the top, then your follow-ups with their answers, newest first, then your reply to the decision, and the original question and body at the bottom.
-- The line under the follow-up box says where the session that posted the message is, as on decisions:
+- Answers, notices and decisions that already have a reply (picked, handled, skipped or closed in chat) have a **追问** (follow-up) box docked at the bottom of the reader, like the Claude chat box. It stays put while you scroll, so you can read and type at the same time, and typing never scrolls the page back to it. It grows with what you write. `Enter` jumps into it and `Ctrl+Enter` sends.
+- Every page reads top to bottom like a conversation: the title, an open decision's card (or your reply to it), the original question and body, then your follow-ups in the order you sent them, each with the session's answer shown in full right under it. The answer's title opens it on its own page.
+- The line in the follow-up box says where the session that posted the message is, as on decisions:
   - **会话在等，发出后马上收到。** Its `listen` is running; the follow-up is delivered at once.
   - **会话还开着，但现在没在听：追问会存着，它下次查看时收到。** It gets the follow-up the next time it starts `listen`.
   - **会话收到了你的追问，正在回答。** It has just taken your follow-up and is writing the answer.
   - **这个会话已经结束：追问会存着；在同一个仓库开新会话时，可以用 desk.py inbox 找回，也可以复制下来粘到对话里。**
-- Each follow-up waiting for an answer shows **等待回答… · 已送达会话 · HH:MM**, or **等待回答… · 还没送达** with the reason. The session's answer is linked under your question and shows in the list as "回应追问", with a link back to the original.
+- Each follow-up waiting for an answer shows **等待回答… · 已送达会话 · HH:MM**, or **等待回答… · 还没送达** with the reason. The session's answer appears under your question and also shows in the list as "回应追问", with a link back to the original.
 - While the session isn't listening, **复制追问** copies the waiting follow-ups, with the original title and message id, for pasting into the Claude chat. The row shows "已追问 · 等回答" until an answer arrives.
 - Older messages that don't record their session keep the old wording: the box says the session is online while a `desk.py wait --followups` for that source is running.
 
 ### Reading, copying and settings
 
-- The reader toolbar copies the message as Markdown (`C`; the arrow offers rich text or plain text) and exports it to PDF (`Ctrl+P`). Code blocks have their own copy button.
-- **Links** open in your default browser. Web addresses are clickable everywhere: in the body (also inside `` `code` `` and right next to Chinese text, where the address ends at the first Chinese character or full-width punctuation), in option descriptions, follow-ups, replies and the original question. Hover a `[text](url)` link to see where it goes.
+- The reader toolbar copies the message as Markdown (`C`; the arrow offers rich text or plain text) and exports it to PDF (`Ctrl+P`). Code blocks have a header with their language and a copy button.
+- **Links** open in your default browser. Web addresses are clickable everywhere: in the body (also inside `` `code` `` and right next to Chinese text, where the address ends at the first Chinese character or full-width punctuation), in option descriptions, follow-ups, replies and the original question. Links are in the accent color with a small ↗; hover a `[text](url)` link to see where it goes.
 - **Right-click** in the window: copy the selection (with formatting), open or copy a link, copy a code block, copy the whole message or select its text; in the reply and follow-up boxes, cut, copy, paste and select all. List rows and tabs keep their own menus.
 - Narrow windows (720 px or less) show the list and the reader one at a time: `↑`/`↓` move a cursor in the list, `Enter` opens, `Esc` or `Backspace` goes back.
-- **Settings** (slider icon, top right, or `Ctrl+,`): theme (system, light, dark), accent color, reading font (sans: Inter + Noto Sans SC; serif: Source Serif + Noto Serif SC), text size, **正文宽度** (reading width: 适中 720 px, 宽 920 px (default), 铺满 full width), list density, start with Windows, auto-update, check for updates, open the data folder, repo filing and closed tabs.
+- **Settings** (slider icon, top right, or `Ctrl+,`): theme (system, light, dark), accent color, reading font (sans: Inter + Noto Sans SC; serif: Source Serif + Noto Serif SC), text size, **正文宽度** (reading width: 适中 720 px, 宽 920 px (default), 铺满 full width), list density, auto-archive, notification sound, start with Windows, auto-update, check for updates, open the data folder, repo filing and closed tabs.
 
 ### On your phone
 

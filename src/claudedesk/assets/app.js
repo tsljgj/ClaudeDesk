@@ -704,10 +704,19 @@
     });
   }
 
+  // 列表只画前面一段（LIST_PAGE 条），滑到底再接着画：历史上千条时不用每次都把整张表写进页面（又慢又占内存）。
+  // 换了视图 / 项目 / 搜索就回到第一段；选中的、键盘光标所在的那条总在画出来的这段里
+  var LIST_PAGE = 150, listLimit = LIST_PAGE, listKey = null;
   function renderList() {
     var v = VIEWS.filter(function (x) { return x.id === S.view; })[0] || VIEWS[0];
-    var items = viewItems();
-    S.visible = items.map(function (m) { return m.id; });
+    var all = viewItems(), items = all;
+    S.visible = all.map(function (m) { return m.id; });
+    var key = [S.view, Array.from(S.projects).join(","), S.query, todoOn(), grouped()].join("|");
+    if (key !== listKey) { listKey = key; listLimit = LIST_PAGE; }
+    [S.current, S.cursor].forEach(function (id) { var i = id ? S.visible.indexOf(id) : -1; if (i >= listLimit) listLimit = i + 40; });
+    var rest = Math.max(0, all.length - listLimit);
+    if (rest) items = all.slice(0, listLimit);
+    var tail = rest ? '<button class="list-more" data-load-more>还有 ' + rest + " 条 · 往下滑继续显示</button>" : "";
     var vis = new Set(S.visible); // 勾选只留看得见的（在别处归档了、被搜索筛掉的不留）：批量操作只作用在眼前这些
     S.multi.forEach(function (id) { if (!vis.has(id)) S.multi.delete(id); });
     var more = searchMore(); // 搜索命中但被视图 / 项目挡住的："另有 N 条…"、"其他项目：…"，和列表一起写
@@ -732,9 +741,9 @@
         }
         html += itemHtml(m);
       });
-      setList(html + more);
+      setList(html + tail + more);
     } else {
-      setList(items.map(itemHtml).join("") + more);
+      setList(items.map(itemHtml).join("") + tail + more);
     }
     renderBulk();
   }
@@ -744,6 +753,11 @@
     if (html === lastListHtml) return;
     $("list").innerHTML = html;
     lastListHtml = html;
+  }
+  function loadMoreRows() { // 滑到列表底部 / 点"还有 N 条"：再画一段
+    if (!$("list").querySelector("[data-load-more]")) return;
+    listLimit += LIST_PAGE;
+    renderList();
   }
   function rowEl(id) { return id ? $("list").querySelector('.item[data-id="' + cssEsc(id) + '"]') : null; }
   function renderRow(id) { // 只重画一行（选中 / 已读变了）；DOM 和上次整份写的不一样了，下次整份重画不能跳过
@@ -846,13 +860,13 @@
     }, function () { if (detailLoading === key) detailLoading = null; });
   }
   var detailLoading = null; // 正在拿详情的那条（id|answered）
-  // 详情缓存：最近用过的排在最后，最多留 60 条；有了"已回复"版就丢掉旧的"未回复"版
+  // 详情缓存：最近用过的排在最后，最多留 30 条；有了"已回复"版就丢掉旧的"未回复"版
   function keepDetail(key, d) {
     delete S.details[key];
     S.details[key] = d;
     if (/\|true$/.test(key)) delete S.details[key.replace(/\|true$/, "|false")];
     var ks = Object.keys(S.details);
-    for (var i = 0; i < ks.length - 60; i++) delete S.details[ks[i]];
+    for (var i = 0; i < ks.length - 30; i++) delete S.details[ks[i]];
     return d;
   }
 
@@ -1077,23 +1091,66 @@
     return "等待回答… · " + (f.delivered ? "已送达会话 · " + hhmm(f.delivered) : "还没送达 · " + notYet(sessOf(d)));
   }
   function fuStored(d) { return (d.followups || []).filter(function (f) { return !f.reply && !fuAnswering(f); }); } // 可以复制到对话里的
+  // 回答的正文按 id 记住渲染好的节点：长轮询重画追问记录时直接搬回去，不重新解析 Markdown / 公式（也不会闪、不会跳）
+  var ansNodes = {}, fuSent = {};
+  function ansNode(r) {
+    var n = ansNodes[r.id];
+    if (n && n._src === (r.body || "")) return n;
+    n = document.createElement("div");
+    n.className = "fu-ans md";
+    n._src = r.body || "";
+    if (n._src.trim()) { n.innerHTML = MD.toHtml(n._src); MD.hydrate(n); }
+    else n.innerHTML = '<p class="no-body">（没有正文）</p>';
+    ansNodes[r.id] = n;
+    return n;
+  }
+  function nearBottom() { var s = $("scroller"); return s.scrollHeight - s.scrollTop - s.clientHeight < 48; }
+  // 往来记录按时间从上往下，像对话：你的追问（右边的气泡）→ Claude 的回答（正文直接显示，标题点了单独打开）；
+  // 还没回答就"等待回答…"。配不上追问的回应单独一条，按时间插进去。追问框在底部，不在这里
   function renderFollowup(d, reset) {
-    var box = $("followup");
-    if (!canFollow(d)) { box.hidden = true; return; }
+    var box = $("followup"), list = $("fuList");
+    if (!canFollow(d)) { box.hidden = true; $("thread").hidden = true; list.hidden = true; return; }
     box.hidden = false;
-    var busy = !!fuSending[d.id], link = function (r) { return '<button class="fu-a" data-open="' + esc(r.id) + '">Claude 的回答：' + esc(r.title) + " →</button>"; };
-    // 往来记录新的在上（紧挨着追问框，刚发的一眼看得到）：每条追问下面是回应它的那条回答（点了打开），还没有就"等待回答…"；
-    // 配不上追问的回应单独一行，按时间插进去
+    var busy = !!fuSending[d.id], reps = {};
+    (d.replies || []).forEach(function (r) { reps[r.id] = r; });
+    var ans = function (r) {
+      return '<div class="fu-reply"><button class="fu-a" data-open="' + esc(r.id) + '" title="单独打开这条回答">Claude 的回答：' + esc(r.title) + " →</button>" +
+        '<div data-ans="' + esc(r.id) + '"></div></div>';
+    };
     var rows = (d.followups || []).map(function (f, i) {
-      return { ts: f.ts, i: i, html: '<div class="fu-item"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
-        '<div class="fu-q">' + MD.linkText(f.text) + "</div>" + (f.reply ? link(f.reply) :
+      var r = f.reply && (reps[f.reply.id] || f.reply);
+      return { ts: f.ts, i: i, html: '<div class="fu-item"><div class="fu-me"><div class="fu-when" title="' + fmtTime(f.ts, true) + '">你的追问 · ' + fmtRel(f.ts).split(" · ")[0] + "</div>" +
+        '<div class="fu-q">' + MD.linkText(f.text) + "</div></div>" + (r ? ans(r) :
         '<div class="fu-wait" data-fid="' + esc(f.id) + '">' + fuWait(d, f) + "</div>") + "</div>" };
-    }).concat((d.replies || []).filter(function (r) { return !r.paired; }).map(function (r, i) { return { ts: r.ts, i: 1e6 + i, html: link(r) }; }));
-    rows.sort(function (a, b) { return (new Date(b.ts) - new Date(a.ts)) || b.i - a.i; }); // 同一毫秒的：后来的在上
+    }).concat((d.replies || []).filter(function (r) { return !r.paired; }).map(function (r, i) {
+      return { ts: r.ts, i: 1e6 + i, html: '<div class="fu-loose">' + ans(r) + "</div>" };
+    }));
+    rows.sort(function (a, b) { return (new Date(a.ts) - new Date(b.ts)) || a.i - b.i; }); // 旧的在上，新的在下（挨着底部的追问框）
     var html = rows.map(function (x) { return x.html; }).join("");
+    var stick = !reset && !list.hidden && nearBottom(), before = list.querySelectorAll("[data-ans]").length; // 正读到底：新回答来了跟着往下；在上面读就不动
+    if (list.dataset.html !== html || list.dataset.id !== d.id) {
+      list.innerHTML = html;
+      list.dataset.html = html;
+      list.dataset.id = d.id;
+      var keep = {};
+      list.querySelectorAll("[data-ans]").forEach(function (ph) {
+        var r = reps[ph.dataset.ans] || { id: ph.dataset.ans, body: "" };
+        var n = ansNode(r);
+        keep[r.id] = n;
+        ph.parentNode.replaceChild(n, ph);
+      });
+      ansNodes = keep; // 只留眼前这条的：换一条就放掉，内存不越攒越多
+    }
+    $("thread").hidden = list.hidden = !html;
+    if (fuSent[d.id] != null && (d.followups || []).length > fuSent[d.id]) {
+      delete fuSent[d.id];
+      var sc = $("scroller");
+      sc.scrollTo({ top: sc.scrollHeight, behavior: reduced() ? "auto" : "smooth" });
+    } else if (stick && list.querySelectorAll(".fu-ans").length > before) {
+      var all = list.querySelectorAll(".fu-reply");
+      if (all.length) all[all.length - 1].scrollIntoView({ block: "start", behavior: reduced() ? "auto" : "smooth" });
+    }
     var ta = $("fuText"), dr = S.drafts[d.id];
-    $("fuList").innerHTML = html;
-    $("fuList").hidden = !html;
     if (reset || ta.dataset.id !== d.id) ta.value = dr && dr.fu ? dr.text : ""; // 每条各记各的草稿（决定没回复时写的补充说明不算）；决定刚回复、卡片刚出现时也换成它自己的
     ta.dataset.id = d.id;
     ta.readOnly = busy;
@@ -1143,6 +1200,7 @@
       var cd = currentDetail();
       if (cd && cd.id === d.id) { $("fuText").value = ""; renderFollowup(cd, false); }
       else toast("已追问「" + d.title + "」");
+      fuSent[d.id] = (d.followups || []).length; // 刚发的那条出现在记录最下面时滚过去看一眼（只这一次，之后往上翻不会被拽回来）
       return refreshNow(true);
     }).catch(function (e) {
       delete fuSending[d.id];
@@ -1218,7 +1276,7 @@
     if (!ids.length) return;
     if (narrow() && !S.current && !extend) { // 窄窗口列表页：↑↓ 只挪光标，不打开（Enter 才打开）
       var c = ids.indexOf(S.cursor), k = c < 0 ? 0 : Math.max(0, Math.min(ids.length - 1, c + delta)), prev = S.cursor;
-      S.cursor = ids[k]; renderRow(prev); renderRow(S.cursor);
+      S.cursor = ids[k]; renderRow(prev); if (rowEl(S.cursor)) renderRow(S.cursor); else renderList();
       var ce = rowEl(S.cursor); if (ce) ce.scrollIntoView({ block: "nearest" });
       return;
     }
@@ -1719,9 +1777,13 @@
       '<div class="set-row"><div class="menu-label">字号</div>' + seg("size", [["s", "小"], ["m", "中"], ["l", "大"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">正文宽度</div>' + seg("width", [["m", "适中"], ["l", "宽"], ["full", "铺满"]]) + "</div>" +
       '<div class="set-row"><div class="menu-label">列表密度</div>' + seg("density", [["cozy", "舒展"], ["compact", "紧凑"]]) + "</div>";
+    // 自动归档：已读、不用再处理的消息多久没动静就收进"归档"（随时能找回）。存在电脑上，手机上不显示
+    if (!BOOT.remote) h += '<div class="set-row"><div class="menu-label">自动归档已处理的</div>' +
+      seg("auto_archive", [["off", "关"], ["1h", "1 小时后"], ["1d", "1 天后"], ["7d", "7 天后"]]) + "</div>";
     if (BOOT.app) {
       var m = S.meta;
       h += '<div class="menu-sep"></div>' +
+        '<button class="toggle-row" data-app="notify_sound" title="新消息弹窗时放不放系统提示音">提醒时有声音<span class="switch' + (m.notify_sound ? " on" : "") + '"></span></button>' +
         '<button class="toggle-row" data-app="autostart">开机自启<span class="switch' + (m.autostart ? " on" : "") + '"></span></button>' +
         '<button class="toggle-row" data-app="auto_update">自动更新<span class="switch' + (m.auto_update ? " on" : "") + '"></span></button>' +
         '<button class="menu-item" data-app="check_update">' + icon("refresh") + "检查更新<span class=\"sub\">" + (BOOT.build ? "build " + BOOT.build : "源码运行") + "</span></button>" +
@@ -1763,6 +1825,7 @@
         var vals = {}; vals[b.dataset.set] = b.dataset.val;
         var s = Object.assign({}, S.settings, vals);
         applySettings(s);
+        if (b.dataset.set === "auto_archive") { act({ action: "settings", values: vals }).then(function () { return refreshNow(); }).catch(function () {}); repaintSettings(); return; }
         if (BOOT.remote) save("prefs", JSON.stringify(Object.assign(localPrefs(), vals))); // 手机上改的只管手机
         else act({ action: "settings", values: vals }).catch(function () {});
         repaintSettings();
@@ -1779,7 +1842,7 @@
       var a = b.dataset.app;
       if (a === "shortcuts") { closePopover(); return showShortcuts(); }
       if (a === "remote") { closePopover(); return openRemote(); }
-      if (a === "autostart" || a === "auto_update") {
+      if (a === "autostart" || a === "auto_update" || a === "notify_sound") {
         act({ action: a, on: !S.meta[a] }).then(function (r) {
           S.meta[a] = !!r;
           repaintSettings();
@@ -1977,7 +2040,12 @@
       var b = e.target.closest(".tab");
       if (b) setView(b.dataset.view);
     });
+    $("list").addEventListener("scroll", function () {
+      var l = $("list");
+      if (l.scrollHeight - l.scrollTop - l.clientHeight < 600) loadMoreRows();
+    }, { passive: true });
     $("list").addEventListener("click", function (e) {
+      if (e.target.closest("[data-load-more]")) { loadMoreRows(); return; }
       var more = e.target.closest("[data-more]"); // "另有 N 条在其他视图里"：项目不动，只换视图
       if (more) {
         if (more.dataset.more === "all" && S.todo) { S.todo = false; save("todo", ""); } // 查看全部结果：已处理的也要露出来
@@ -2115,7 +2183,7 @@
     });
     $("fuSend").addEventListener("click", sendFollowup);
     $("fuCopy").addEventListener("click", copyFollowup);
-    [$("followup"), $("threadRef")].forEach(function (box) { // "Claude 的回答 →" / "原回答（原决定…）"：打开那一条
+    [$("thread"), $("threadRef")].forEach(function (box) { // "Claude 的回答 →" / "原回答（原决定…）"：打开那一条
       box.addEventListener("click", function (e) { // 点的按钮跟着换掉 / 藏起来：焦点交给列表，不留在看不见的按钮上
         var b = e.target.closest("[data-open]");
         if (b) { window.deskOpen(b.dataset.open); $("list").focus(); }
@@ -2147,7 +2215,7 @@
     $("scroller").addEventListener("scroll", function () {
       $("toolbar").classList.toggle("scrolled", $("scroller").scrollTop > 4);
     });
-    $("body").addEventListener("click", function (e) {
+    $("scroller").addEventListener("click", function (e) { // 正文和追问记录里的回答都有代码块
       var b = e.target.closest(".code-copy");
       if (!b) return;
       var code = b.closest(".codeblock").querySelector("code").innerText;

@@ -42,7 +42,7 @@
     while ((m = URL_RE.exec(s))) {
       var u = tidyUrl(m[0]);
       if (!okUrl(u)) continue;
-      out += escapeHtml(s.slice(last, m.index)) + '<a href="' + escapeHtml(hrefOf(u)) + '" target="_blank" rel="noopener noreferrer">' +
+      out += escapeHtml(s.slice(last, m.index)) + '<a href="' + escapeHtml(hrefOf(u)) + '" target="_blank" rel="noopener noreferrer" title="点击在浏览器中打开">' +
         escapeHtml(u) + "</a>";
       last = m.index + u.length;
       URL_RE.lastIndex = last;
@@ -383,7 +383,7 @@
       a.setAttribute("target", "_blank");
       a.setAttribute("rel", "noopener noreferrer");
       // 程序窗口没有状态栏：[文字](网址) 悬停时看得到会打开哪里
-      if (!a.title && a.textContent.trim() !== a.getAttribute("href")) a.title = a.href;
+      if (!a.title) a.title = a.textContent.trim() !== a.getAttribute("href") ? a.href : "点击在浏览器中打开";
     });
   }
 

@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import __version__
 from ._build import BUILD
-from .store import Store
+from .store import AUTO_ARCHIVE, AUTO_ARCHIVE_DEFAULT, Store
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 TOKEN_HEADER = "X-Desk-Token"
@@ -41,8 +41,10 @@ SETTINGS = {  # 界面设置：键 -> 允许的值
     "size": ("s", "m", "l"),
     "density": ("cozy", "compact"),
     "width": ("m", "l", "full"),
+    "auto_archive": tuple(AUTO_ARCHIVE),  # 自动归档已处理的（只在电脑上改：手机不能发 settings）
 }
-SETTING_DEFAULTS = {"theme": "system", "accent": "ember", "font": "sans", "size": "m", "density": "cozy", "width": "l"}
+SETTING_DEFAULTS = {"theme": "system", "accent": "ember", "font": "sans", "size": "m", "density": "cozy", "width": "l",
+                    "auto_archive": AUTO_ARCHIVE_DEFAULT}
 GONE = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)  # 客户端自己断开了（长轮询被放弃、页面刷新）
 log = logging.getLogger("claudedesk")
 
@@ -107,6 +109,7 @@ class DeskServer:
         self.token = secrets.token_urlsafe(24)
         self.extra_actions: dict[str, Callable[[dict], object]] = {}  # 托盘程序注册的动作（导出 PDF、更新…）
         self.meta: dict = {"build": BUILD, "version": __version__, "update": None, "app": False}
+        self._snap: tuple = (None, None, [])  # (版本, store, 摘要列表)：见 snapshot
         self.httpd = _HTTPServer((host, port), self._handler())
         self.host = host
         self.port = self.httpd.server_address[1]
@@ -192,7 +195,10 @@ class DeskServer:
         st = self.store
         meta = {"build": BUILD, "version": __version__} if remote else self.meta  # 手机上不给托盘程序的状态（更新、手机访问设置）
         with st.lock:
-            return {"version": st.version, "messages": st.summaries(), "counts": st.counts(), "aliases": dict(st.aliases),
+            # 同一版本只算一次全部摘要：长轮询醒来、操作后的刷新、手机一起来拿时不用每次都把上千条重算一遍
+            if self._snap[0] != st.version or self._snap[1] is not st:
+                self._snap = (st.version, st, st.summaries())
+            return {"version": st.version, "messages": self._snap[2], "counts": st.counts(), "aliases": dict(st.aliases),
                     "hidden_projects": sorted(st.hidden_projects), "settings": self.settings(), "meta": meta}
 
     def action(self, body: dict, remote: bool = False):
@@ -239,6 +245,8 @@ class DeskServer:
             for k, v in (body.get("values") or {}).items():
                 if k in SETTINGS and v in SETTINGS[k]:
                     st.set_setting(k, v)
+                    if k == "auto_archive":
+                        st._auto_at = 0.0  # 改了档：下一轮就按新的归档，不用等一分钟
             return self.settings()
         if name in self.extra_actions:
             return self.extra_actions[name](body)

@@ -94,18 +94,6 @@
           <div class="eyebrow" id="eyebrow"></div>
           <h1 class="title" id="title"></h1>
         </header>
-        <section class="followup" id="followup" hidden>
-          <div class="fu-compose">
-            <textarea id="fuText" rows="1" placeholder="追问 Claude…（Ctrl+Enter 发送）" aria-label="追问"></textarea>
-            <div class="fu-bar">
-              <p class="fu-state" id="fuState"></p>
-              <span class="hint" id="fuHint"></span>
-              <button class="ghost" id="fuCopy" hidden title="复制追问（带上原消息的标题），粘到 Claude 对话里">复制追问</button>
-              <button class="primary" id="fuSend" disabled>发送</button>
-            </div>
-          </div>
-          <div class="fu-list" id="fuList" hidden></div>
-        </section>
         <section class="decide" id="decide" hidden>
           <div class="decide-card">
           <div class="decide-head">
@@ -127,7 +115,23 @@
           <blockquote class="question" id="question" hidden><div class="q-text" id="questionText"></div></blockquote>
           <div class="md" id="body"></div>
         </article>
+        <!-- 往来记录：按时间从上往下（像对话），每条追问下面直接是 Claude 的回答 -->
+        <section class="thread" id="thread" hidden>
+          <div class="fu-list" id="fuList" hidden></div>
+        </section>
       </div>
+      <!-- 追问框固定在底部（不在滚动区里）：往上翻着读，随时能在下面写；打字时也不会把你拽回框那里 -->
+      <footer class="followup" id="followup" hidden>
+        <div class="fu-compose"><div class="fu-box">
+          <textarea id="fuText" rows="1" placeholder="追问 Claude…（Ctrl+Enter 发送）" aria-label="追问"></textarea>
+          <div class="fu-bar">
+            <p class="fu-state" id="fuState"></p>
+            <span class="hint" id="fuHint"></span>
+            <button class="ghost" id="fuCopy" hidden title="复制追问（带上原消息的标题），粘到 Claude 对话里">复制追问</button>
+            <button class="primary" id="fuSend" disabled title="发送（Ctrl+Enter）">发送</button>
+          </div>
+        </div></div>
+      </footer>
     </div>
   </main>
 </div>

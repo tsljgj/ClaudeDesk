@@ -247,7 +247,7 @@ def test_store_followups_detail_links_and_listening(tmp_path):
     store.poll()
     det = store.detail(a)
     assert det["followups"][0]["reply"] == {"id": rep, "title": "B 也行"}
-    assert det["replies"] == [{"id": rep, "title": "B 也行", "ts": det["replies"][0]["ts"], "paired": True}]
+    assert det["replies"] == [{"id": rep, "title": "B 也行", "ts": det["replies"][0]["ts"], "paired": True, "body": "因为……"}]
     s = {m["id"]: m for m in store.summaries()}
     assert s[a]["followup_pending"] is False and s[a]["fstate"] == "1.1.1" and s[rep]["reply_to"] == a
     assert store.detail(rep)["reply_ref"] == {"id": a, "title": "原回答", "kind": "answer", "exists": True, "text": "那 B 呢？"}

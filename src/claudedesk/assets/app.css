@@ -16,6 +16,7 @@
   --item-pad: 12px;
   --read-w: 920px;   /* 阅读区正文（和决定、追问卡片）最宽多少；设置里可以换 */
   --read-pad: 32px;  /* 正文左右留白 */
+  --ext-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M4.5 2H10v5.5M10 2 2.5 9.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); /* 外链小箭头 */
 
   /* 浅色 */
   --bg: #FFFFFF;
@@ -360,6 +361,8 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .item.selected .time, .item.selected .st.skip, .item.selected .st.kind { color: var(--ink-3); } /* 选中行底色深一点，小字跟着深一档 */
 .item .time.wait.long { color: var(--accent-ink); font-weight: 600; } /* 待决定已经等了 30 分钟以上 */
 .list-empty { padding: 64px 24px; text-align: center; color: var(--ink-4); font-size: 13px; }
+.list-more { display: block; width: 100%; padding: 14px 16px 18px; text-align: center; font-size: 12.5px; color: var(--ink-4); }
+.list-more:hover { color: var(--ink-2); background: var(--hover); }
 .list-empty b { display: block; color: var(--ink-3); font-weight: 550; margin-bottom: 4px; font-size: 13.5px; }
 .list-foot { display: flex; align-items: center; gap: 8px; padding: 8px 16px 10px; min-height: 34px; }
 .ver { font-size: 11px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
@@ -387,14 +390,12 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .icon-btn.caret i[data-icon] { width: 13px; height: 13px; }
 
 .scroller { flex: 1; overflow-y: auto; scrollbar-gutter: stable; }
-/* 阅读页从上到下：标题 → 要你做的（待决定的卡片 / 追问框）→ 往来记录（新的在上）→ 原消息（原问题、正文）。每块一样宽、一样的留白 */
-.head, .followup, .decide, .article { max-width: var(--read-w); margin: 0 auto; padding-left: var(--read-pad); padding-right: var(--read-pad); }
+/* 阅读页从上到下：标题 →（待决定的卡片 / 你的回复）→ 原消息（原问题、正文）→ 往来记录（按时间，像对话）；追问框固定在最底下。每块一样宽、一样的留白 */
+.head, .decide, .article, .thread, .fu-compose { max-width: var(--read-w); margin: 0 auto; padding-left: var(--read-pad); padding-right: var(--read-pad); }
 .head { padding-top: 20px; }
 .article { padding-bottom: 40px; }
-/* 原消息上面一道细线：和上面的卡片、往来记录分开，往下读就是原来那条 */
-.followup:not([hidden]) ~ .article::before, .decide:not([hidden]) ~ .article::before {
-  content: ""; display: block; height: 1px; margin-bottom: 26px; background: var(--line);
-}
+/* 原消息上面一道细线：和上面的卡片分开，往下读就是原来那条 */
+.decide:not([hidden]) ~ .article::before { content: ""; display: block; height: 1px; margin-bottom: 26px; background: var(--line); }
 .eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--ink-4); font-size: 12.5px; margin-bottom: 10px; }
 .eyebrow .eb + .eb::before { content: "·"; margin-right: 6px; } /* 分隔点跟着后面那一段走：折行时不会挂在上一行末尾 */
 .eyebrow .src { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-weight: 550; }
@@ -405,19 +406,35 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .q-text { white-space: pre-wrap; color: var(--ink-2); font-size: calc(var(--read-size) - 1px); line-height: 1.7; }
 
 /* ------------------------------------------------------------------ Markdown 正文 */
-.md { font-family: var(--font-read); font-size: var(--read-size); line-height: 1.78; color: var(--ink); overflow-wrap: anywhere; }
+.md { font-family: var(--font-read); font-size: var(--read-size); line-height: 1.75; color: var(--ink); overflow-wrap: break-word; text-rendering: optimizeLegibility; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p, .md ul, .md ol, .md blockquote, .md .table-wrap, .md .codeblock, .md details, .md .math-display { margin: 0 0 1em; }
-.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { font-family: var(--font-ui); line-height: 1.35; letter-spacing: -.015em; margin: 1.8em 0 .6em; }
-.md h1 { font-size: 1.45em; font-weight: 680; }
-.md h2 { font-size: 1.24em; font-weight: 660; }
-.md h3 { font-size: 1.08em; font-weight: 650; }
+.md p, .md ul, .md ol, .md blockquote, .md .table-wrap, .md .codeblock, .md details, .md .math-display { margin: 0 0 1.05em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { font-family: var(--font-ui); line-height: 1.35; letter-spacing: -.015em; margin: 1.9em 0 .65em; color: var(--ink); text-wrap: balance; }
+.md h1 { font-size: 1.42em; font-weight: 680; }
+/* 二级标题带一道细线：长回答里一眼分得清几大块 */
+.md h2 { font-size: 1.2em; font-weight: 660; padding-bottom: .35em; border-bottom: 1px solid var(--line); }
+.md h3 { font-size: 1.07em; font-weight: 650; }
 .md h4, .md h5, .md h6 { font-size: 1em; font-weight: 650; color: var(--ink-2); }
-.md strong { font-weight: 650; }
-.md a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
-.md ul, .md ol { padding-left: 1.4em; }
-.md li { margin: .25em 0; }
+.md strong { font-weight: 650; color: var(--ink); }
+.md mark { background: var(--accent-soft); color: inherit; padding: 0 .15em; border-radius: 3px; }
+.md kbd { font: 500 .82em/1 var(--font-mono); padding: .2em .45em; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px; background: var(--surface-2); }
+/* 链接：强调色的字 + 下划线，外链后面一个小箭头，一看就知道点了会在浏览器里打开 */
+.md a, .fu-q a, .q-text a, .opt .desc a, .reply-text a {
+  color: var(--accent-ink); font-weight: 550; text-decoration: underline; text-decoration-color: var(--accent-line);
+  text-decoration-thickness: 1.5px; text-underline-offset: 3px; border-radius: 3px; cursor: pointer;
+  transition: color .1s, text-decoration-color .1s, background-color .1s;
+}
+.md a:hover, .fu-q a:hover, .q-text a:hover, .opt .desc a:hover, .reply-text a:hover { text-decoration-color: currentColor; background: var(--accent-soft); }
+.md a[href^="http"]::after, .fu-q a[href^="http"]::after, .q-text a[href^="http"]::after, .opt .desc a[href^="http"]::after, .reply-text a[href^="http"]::after {
+  content: ""; display: inline-block; width: .62em; height: .62em; margin-left: .18em; vertical-align: .02em;
+  background: currentColor; opacity: .7;
+  -webkit-mask: var(--ext-icon) center/contain no-repeat; mask: var(--ext-icon) center/contain no-repeat;
+}
+.md a code { color: inherit; }
+.md ul, .md ol { padding-left: 1.5em; }
+.md li { margin: .3em 0; }
+.md li > ul, .md li > ol { margin: .3em 0 .2em; }
 .md li::marker { color: var(--ink-5); } /* 圆点只是装饰 */
 .md ol li::marker { font-variant-numeric: tabular-nums; font-family: var(--font-ui); font-size: .9em; color: var(--ink-4); } /* 序号是字 */
 .md li > p { margin: .3em 0; }
@@ -425,26 +442,30 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .md .task { display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px; border: 1.5px solid var(--line-2); border-radius: 4px; }
 .md .task.done { background: var(--accent-btn) center/10px no-repeat; border-color: var(--accent-btn); /* 白勾放在强调色上：深色主题里 --ink 是近白，勾会看不见 */
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E"); }
-.md blockquote { padding: 0 0 0 16px; color: var(--ink-2); border-left: 2px solid var(--line-2); }
+.md blockquote { padding: .15em 0 .15em 16px; color: var(--ink-2); border-left: 3px solid var(--line-2); }
+.md blockquote > :last-child { margin-bottom: 0; }
 .md hr { border: 0; height: 1px; background: var(--line); margin: 2.2em 0; }
 .md img { max-width: 100%; border-radius: 6px; }
-.md code { font-family: var(--font-mono); font-size: .86em; padding: .12em .36em; border-radius: 4px; background: var(--sunken); color: var(--code-ink); }
-.md .codeblock { position: relative; border-radius: 8px; background: var(--sunken); }
-.md .code-head { position: absolute; top: 6px; right: 6px; display: flex; gap: 6px; align-items: center; opacity: 0; transition: opacity .12s; }
-.md .codeblock:hover .code-head { opacity: 1; }
-.md .code-lang { font: 500 11px/1 var(--font-mono); color: var(--ink-4); }
-.md .code-copy { min-width: 52px; height: 24px; padding: 0 8px; border-radius: 5px; font-size: 11.5px; font-weight: 600; color: var(--ink-3); background: var(--bg); }
-.md .code-copy:hover { color: var(--ink); }
+.md code { font-family: var(--font-mono); font-size: .86em; padding: .12em .38em; border-radius: 5px; background: var(--inline-code-bg); color: var(--code-ink); }
+/* 代码块：顶上一条细栏写语言、右边是"复制"（一直看得见，不用先悬停） */
+.md .codeblock { position: relative; border-radius: 10px; background: var(--code-bg); border: 1px solid var(--line); overflow: hidden; }
+.md .code-head { display: flex; gap: 6px; align-items: center; justify-content: space-between; height: 32px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.md .code-lang { font: 500 11.5px/1 var(--font-mono); color: var(--ink-4); }
+.md .code-copy { min-width: 52px; height: 24px; padding: 0 8px; border-radius: 6px; font: 600 11.5px/1 var(--font-ui); color: var(--ink-3); }
+.md .code-copy:hover { color: var(--ink); background: var(--hover); }
 .md .code-copy.ok { color: var(--ok-ink); }
-.md pre { margin: 0; padding: 14px 16px; overflow-x: auto; line-height: 1.6; }
+.md pre { margin: 0; padding: 12px 16px 14px; overflow-x: auto; line-height: 1.6; }
 .md pre code { padding: 0; background: none; font-size: 13px; border-radius: 0; white-space: pre; }
 .md .table-wrap { overflow-x: auto; }
+.md .table-wrap { border: 1px solid var(--line); border-radius: 10px; }
 .md table { border-collapse: collapse; width: 100%; font-size: .92em; line-height: 1.55; font-variant-numeric: tabular-nums; }
-.md th, .md td { padding: 8px 14px 8px 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-.md th:last-child, .md td:last-child { padding-right: 0; }
-.md thead th { font-family: var(--font-ui); font-weight: 600; color: var(--ink-3); font-size: .9em; border-bottom: 1px solid var(--line-2); }
+.md th, .md td { padding: 8px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+.md tr:last-child td { border-bottom: 0; }
+.md tbody tr:nth-child(even) { background: var(--surface-2); }
+.md thead th { font-family: var(--font-ui); font-weight: 600; color: var(--ink-2); font-size: .9em; background: var(--surface-2); border-bottom: 1px solid var(--line-2); }
 .md th[style*="right"], .md td[style*="right"] { text-align: right; }
-.md details { border-left: 2px solid var(--line-2); padding-left: 16px; }
+.md details { border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; }
+.md details[open] > summary { margin-bottom: .6em; }
 .md summary { cursor: pointer; font-weight: 600; }
 .md .math-display { display: block; overflow-x: auto; overflow-y: hidden; padding: .2em 0; }
 .md .katex { font-size: 1.07em; }
@@ -480,8 +501,6 @@ i[data-icon] svg { width: 100%; height: 100%; }
 
 /* ------------------------------------------------------------------ 决定 */
 .decide { padding-bottom: 28px; scroll-margin-top: 12px; }
-/* 回复过的决定排在追问记录下面（是更早的事）：一道细线隔开 */
-.followup:not([hidden]) + .decide .decide-card { border-top: 1px solid var(--line); padding-top: 20px; }
 .decide-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
 .decide-title { font-weight: 650; font-size: 14px; }
 .decide-state { font-size: 12.5px; color: var(--ink-4); }
@@ -535,35 +554,46 @@ i[data-icon] svg { width: 100%; height: 100%; }
 .reply-done .undeliv { color: var(--ink-2); font-weight: 600; } /* 还没送达：比"已送达"显眼一点，但不用强调色（等的是会话，不是你） */
 .reply-done .deliv-hint { margin-top: 2px; color: var(--ink-4); font-size: 12.5px; }
 
-/* ------------------------------------------------------------------ 追问（标题下面一个小小的追问框，框下是往来记录，新的在上；回应追问的那条顶上写出处） */
-.followup { padding-bottom: 28px; }
-/* 追问框平时只有一行，不把正文往下推；点进去或写了字才长高（写多了跟着字长，最高 40% 屏幕）。
-   收起晚 0.25 秒：点框下面的链接时，鼠标还没抬起，东西先别挪走 */
+/* ------------------------------------------------------------------ 追问：往来记录在原消息下面（按时间，像对话）；追问框固定在阅读页最底下 */
+.thread { padding-bottom: 32px; }
+.thread::before { content: "追问"; display: block; margin-bottom: 18px; padding-top: 22px; border-top: 1px solid var(--line); font: 600 12px/1 var(--font-ui); color: var(--ink-4); letter-spacing: .04em; }
+.fu-list { display: flex; flex-direction: column; gap: 22px; }
+.fu-item { display: flex; flex-direction: column; gap: 12px; }
+/* 你的追问：右边的气泡 */
+.fu-me { align-self: flex-end; max-width: min(80%, 640px); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.fu-when { font-size: 11.5px; color: var(--ink-4); }
+.fu-q { padding: 9px 14px; border-radius: 16px 16px 4px 16px; background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); font-size: 14px; line-height: 1.65; }
+.fu-wait { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-4); }
+.fu-wait::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-5); animation: fu-pulse 1.4s ease-in-out infinite; }
+@keyframes fu-pulse { 50% { opacity: .3; } }
+/* Claude 的回答：正文直接显示，左边一道淡淡的强调色竖线；标题那行点了单独打开 */
+.fu-reply { padding-left: 16px; border-left: 2px solid var(--accent-line); }
+.fu-a { display: inline-block; margin-bottom: 6px; text-align: left; font-size: 12.5px; font-weight: 600; color: var(--ink-3); border-radius: 4px; }
+.fu-a:hover { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 3px; }
+.fu-ans { font-size: calc(var(--read-size) - .5px); }
+.fu-ans h1, .fu-ans h2 { font-size: 1.1em; }
+
+/* 底部的追问框：和 Claude 的对话框一样，圆角卡片里一个输入框、下面一行状态和发送。写多了往上长，最高 40% 屏幕。
+   它不在滚动区里：往上翻着读也一直在，打字时浏览器也不会把滚动区拽回输入框 */
+.followup { flex: none; position: relative; padding: 8px 0 14px; background: var(--bg); }
+.followup::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 18px; pointer-events: none; background: linear-gradient(to bottom, transparent, var(--bg)); } /* 正文滚到框后面时淡出，不是一刀切 */
+.fu-box { border: 1px solid var(--line-2); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-sm); transition: border-color .12s, box-shadow .12s; }
+.fu-box:focus-within { border-color: var(--ink-4); box-shadow: var(--shadow); }
 #fuText {
-  display: block; width: 100%; padding: 8px 12px; resize: none; min-height: 40px; max-height: 40vh; field-sizing: content;
-  border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); outline: none; line-height: 1.6; font-size: 13.5px;
-  transition: min-height .15s ease .25s;
+  display: block; width: 100%; padding: 12px 16px 4px; resize: none; min-height: 46px; max-height: 40vh; field-sizing: content; overflow-y: auto;
+  border: 0; border-radius: 16px 16px 0 0; background: transparent; outline: none; line-height: 1.6; font-size: 14px;
 }
-.fu-compose:focus-within #fuText, #fuText:not(:placeholder-shown) { min-height: 84px; transition-delay: 0s; }
 #fuText::placeholder { color: var(--ink-4); }
-#fuText:focus { border-color: var(--ink-3); box-shadow: 0 0 0 3px var(--hover); }
-/* 框下一行：会话在不在（小字带圆点）、提示，右边是小号按钮 */
-.fu-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 8px; }
-.fu-state { flex: 1 1 240px; min-width: 0; display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 12px; line-height: 1.55; color: var(--ink-3); }
-.fu-state::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-5); transform: translateY(-1px); } /* 在线绿点，没在听灰点 */
+/* 框里最下面一行：会话在不在（小字带圆点）、提示，右边是按钮 */
+.fu-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 4px 8px 8px 16px; }
+.fu-state { flex: 1 1 200px; min-width: 0; display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--ink-4); }
+.fu-state::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-5); transform: translateY(-1px); } /* 在线绿点，没在听灰点 */
+.fu-state.on { color: var(--ink-3); }
 .fu-state.on::before { background: var(--ok); }
-.fu-bar .primary, .fu-bar .ghost { flex: none; height: 28px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; }
+.fu-bar .primary, .fu-bar .ghost { flex: none; height: 30px; padding: 0 14px; border-radius: 9px; font-size: 12.5px; }
 .fu-bar .ghost { box-shadow: inset 0 0 0 1px var(--line-2); }
-#fuHint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fuHint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
 #fuHint:empty { display: none; }
-.fu-list { display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
-.fu-item { padding: 1px 0 1px 14px; border-left: 2px solid var(--line-2); } /* 和正文上面"原问题"一样的竖线 */
-.fu-when { font-size: 12px; color: var(--ink-4); }
-.fu-q { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); font-size: 13.5px; line-height: 1.65; }
-.fu-wait { margin-top: 4px; font-size: 12.5px; color: var(--ink-4); }
-.fu-a { display: block; margin-top: 4px; text-align: left; font-size: 13px; font-weight: 600; color: var(--ok-ink); }
-.fu-a:hover { text-decoration: underline; text-underline-offset: 3px; }
-.fu-list > .fu-a { margin-top: 0; } /* 配不上追问的回应单独一行 */
 .item .st.fu { color: var(--ink-2); } /* 等的是 Claude，不是你：不用强调色 */
 .item .st.gone { color: var(--ink-4); font-weight: 500; } /* 待决定的会话已经结束：淡淡标一下，用户可以标为已处理清掉 */
 .item.selected .st.gone { color: var(--ink-3); }
@@ -681,7 +711,7 @@ a.rp-sub { text-decoration: underline; text-underline-offset: 3px; }
 /* ------------------------------------------------------------------ 窄窗口 */
 @media (max-width: 960px) {
   :root { --list-w: 320px; }
-  .head, .article, .decide, .followup, .thread-ref { padding-left: min(var(--read-pad), 28px); padding-right: min(var(--read-pad), 28px); }
+  .head, .article, .decide, .thread, .fu-compose, .thread-ref { padding-left: min(var(--read-pad), 28px); padding-right: min(var(--read-pad), 28px); }
 }
 @media (min-width: 721px) and (max-width: 960px) { /* 列表 320px：批量栏放下"标为已处理"和四个图标 */
   .bulk-count .pre { display: none; }
@@ -693,7 +723,8 @@ a.rp-sub { text-decoration: underline; text-underline-offset: 3px; }
   .reader { position: fixed; inset: 0; z-index: 10; transform: translateX(100%); transition: transform .2s ease; }
   .app.reading .reader { transform: none; }
   .toolbar .back { display: inline-grid; }
-  .head, .article, .decide, .followup, .thread-ref { padding-left: 20px; padding-right: 20px; }
+  .head, .article, .decide, .thread, .fu-compose, .thread-ref { padding-left: 16px; padding-right: 16px; }
+  .fu-me { max-width: 88%; }
   .tab { padding: 0 7px; }
   .ptab-closed .lbl { display: none; } /* 窄窗口：只留图标和数 */
 }
