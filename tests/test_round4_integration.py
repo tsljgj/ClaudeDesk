@@ -91,7 +91,6 @@ def test_todo_kept_row_leaves_once_you_leave_it_by_closing_its_tab_or_switching_
     d, store, server, page, errors = env
     a = post(d, kind="answer", title="甲的回答", body="x", repo="alpha")
     b = post(d, kind="answer", title="乙的回答", body="x", repo="beta")
-    time.sleep(0.01)  # 同一毫秒里发的两条先后不定：列表顺序要稳
     c = post(d, kind="answer", title="乙的另一条", body="x", repo="beta")
     store.poll()
     start(page, server)
