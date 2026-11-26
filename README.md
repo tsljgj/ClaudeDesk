@@ -59,15 +59,19 @@ Upgrading from 1.x: quit the old app from the tray and drop the new `ClaudeDesk.
 
 ## Quick start: connect Claude Code
 
-1. Copy [`skill/claude-desk/SKILL.md`](skill/claude-desk/SKILL.md) to `~/.claude/skills/claude-desk/SKILL.md`.
-2. Near the top of that file, the line that defines `desk` reads `python C:/path/to/ClaudeDesk/desk.py`. Replace it with your Python 3.10+ and the `desk.py` next to your `ClaudeDesk.exe`.
-3. Optionally make it a standing rule for every session in `~/.claude/CLAUDE.md`:
+**One click:** in the app, Settings → **接入 Claude Code** → **一键接入**. It installs the `claude-desk` skill into `~/.claude/skills/` with the real paths of this machine's Python and `desk.py`, and adds three hooks to `~/.claude/settings.json` (backed up once as `settings.json.claudedesk.bak`; only ClaudeDesk's own entries are touched). New Claude Code sessions pick it up. **卸掉** removes both again.
 
-   ```markdown
-   ## Talking to the user: ClaudeDesk
-   - For anything the user must decide, don't use AskUserQuestion: post a decision with skill claude-desk. The session's one background `desk.py listen` brings the reply back.
-   - When answering a user's question, answer in the chat, then post it to ClaudeDesk as an answer with `--question-from-chat --body-from-chat`.
-   ```
+Without the app's button, run the same from a terminal (Python 3.10+):
+
+```bash
+python C:/path/to/ClaudeDesk/desk.py setup            # --dry-run to preview, --remove to undo, --no-block-ask to keep AskUserQuestion
+```
+
+What the hooks do (they never fail a session; they only add context or block once):
+
+- **SessionStart** reminds the session of the rules, and of anything waiting for it (open decisions, undelivered replies, whether `listen` runs). This also runs after a context compaction.
+- **PreToolUse on AskUserQuestion** turns the question away while ClaudeDesk is running and hands Claude a ready `desk decide …` command with the same options, so decisions always land in the app. When the app isn't running, AskUserQuestion works as usual.
+- **Stop** checks the turn that just ended. If you asked a question and Claude answered in the chat but never posted it, the answer is posted for it (marked **自动补发** in the app). A single follow-up that was delivered this turn and answered in the chat is posted the same way; several unanswered follow-ups block the stop once with the exact `desk answer --reply-to <id>` commands. If decisions are waiting but no `listen` runs, Claude is told to start it.
 
 The skill is written in Chinese, to match the UI. Claude follows it either way, and the commands are the same.
 
@@ -75,7 +79,7 @@ The skill is written in Chinese, to match the UI. Claude follows it either way, 
 
 - **No setup per session.** `desk.py post` records the Claude Code session it runs in (Claude Code sets `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` for every command) and the git repo. Replies and follow-ups are routed back to that session; `--source` is optional and only a display name.
 - **One background `listen` per session.** When `post` reports on stderr that no listener is running, the session starts `desk.py listen` in the background with no timeout. It returns once with everything that has arrived for the session (your replies to its decisions, your follow-ups on its messages), one JSON line each. The session handles the whole batch and starts `listen` again. A second `listen` for the same session exits at once. Subagents share their session's id and don't run one.
-- **Answers are written once.** The session writes the answer in the chat and, in the same message, runs `desk.py post --kind answer --title "…" --question-from-chat --body-from-chat`. `desk.py` copies your question and the answer from the session's transcript, so Claude never writes the answer a second time.
+- **Answers are written once.** The session writes the answer in the chat and, in the same message, runs `desk.py answer`. `desk.py` copies your question and the answer from the session's transcript and makes a title from the question, so Claude never writes the answer a second time.
 - **Ended sessions don't lose anything.** Replies and follow-ups for a session that has ended are kept. A new session in the same repo sees them with `desk.py status` / `desk.py inbox` and takes them over with `desk.py inbox --adopt`.
 
 ### Why it's efficient
@@ -122,7 +126,9 @@ New messages also raise a Windows notification; clicking it opens that message. 
 - Marks: a solid dot is unread; an orange dot is a decision you haven't opened; an orange ring is a decision you've seen but not answered; an extra outer ring marks an urgent decision. The second line shows the status (待决定, ✓ your choice, ✓ 已处理, 已跳过, 已追问 · 等回答). Moving through the list with `↑`/`↓` marks a message read only after it stays open for 0.8 s.
 - Hover a row for its own actions (read/unread, mark handled, archive, delete) and a checkbox. Right-click works too.
 - **Select several:** tick checkboxes (`Shift` for a range), `Ctrl`-click, `X` for the current message, `Shift+↑↓`, `Ctrl+A`. The batch bar offers select all, mark handled, read, archive and delete.
-- Search with `/` or `Ctrl+F` across titles, bodies, sources, questions and options, in the selected repos. Matches in other repos show at the end of the list as one button per repo ("其他项目：webapp 3 · …"), which switches to that repo and keeps the query; matches hidden by the current view or a closed tab are counted there too, one click away.
+- **按时间整理** ("⋯" menu → Tidy by age): pick this tab or all tabs and an age (older than 1 h / 6 h / 12 h / 24 h / 7 days / any). **归档 N 条** archives them (undo with `Z`); **删除 N 条** deletes them, including archived ones, after a confirmation whose default button is Cancel. Waiting decisions are left out unless you switch them in. **待决定全部标为已处理** marks every waiting decision in the scope handled without messaging the sessions (undo with `Z`). The message you are reading is never touched.
+- Right-click a decision and pick **这个会话的待决定都标为已处理** to mark everything one Claude Code session is waiting on as handled.
+- Search with `/` across titles, bodies, sources, questions and options, in the selected repos. Matches in other repos show at the end of the list as one button per repo ("其他项目：webapp 3 · …"), which switches to that repo and keeps the query; matches hidden by the current view or a closed tab are counted there too, one click away.
 - Confirmations, errors and their undo or retry buttons appear at the bottom of the list, never over the message you are reading.
 
 ### Decisions
@@ -158,8 +164,13 @@ New messages also raise a Windows notification; clicking it opens that message. 
 
 ### Reading, copying and settings
 
+- **Find in the message** with `Ctrl+F` (or the magnifier in the toolbar): matches are highlighted, `Enter` / `Shift+Enter` step through them and the count shows where you are. **搜全部** (or `Ctrl+Shift+F`) takes the same words to the search over all messages.
+- **Zoom** the list and the reader with `Ctrl` + mouse wheel or `Ctrl` + `=` / `-`, and `Ctrl+0` to reset (80–180 %, remembered on this PC).
+- **Reading position:** reopening a message returns to where you left it, also after a restart. Round buttons at the bottom right jump to the top or the end; `Home` / `End` do the same.
+- Message types read differently: a small chip says 决定, 回答 or 通知, notices are set a little tighter, and GitHub-style callouts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) show as colored boxes with a title.
 - The reader toolbar copies the message as Markdown (`C`; the arrow offers rich text or plain text) and exports it to PDF (`Ctrl+P`). Code blocks have a header with their language and a copy button.
 - **Links** open in your default browser. Web addresses are clickable everywhere: in the body (also inside `` `code` `` and right next to Chinese text, where the address ends at the first Chinese character or full-width punctuation), in option descriptions, follow-ups, replies and the original question. Links are in the accent color with a small ↗; hover a `[text](url)` link to see where it goes.
+- **Local file paths** in a message (`C:\work\report.md`, `C:/…`, `/c/…`, `file:///C:/…`, quoted or in `` `code` `` when they have spaces) are links with a file or folder icon. Click opens the file with its default app; `Ctrl` + click or middle click opens the folder with the file selected (also in the right-click menu, with 复制路径). Paths that don't exist on this PC look like plain text. Files that would run (`.exe`, `.bat`, `.ps1`, `.py`, `.lnk`…) are only selected in Explorer, never opened, and network paths are not opened at all. On the phone or in a browser, a click copies the path.
 - **Right-click** in the window: copy the selection (with formatting), open or copy a link, copy a code block, copy the whole message or select its text; in the reply and follow-up boxes, cut, copy, paste and select all. List rows and tabs keep their own menus.
 - Narrow windows (720 px or less) show the list and the reader one at a time: `↑`/`↓` move a cursor in the list, `Enter` opens, `Esc` or `Backspace` goes back.
 - **Settings** (slider icon, top right, or `Ctrl+,`): theme (system, light, dark), accent color, reading font (sans: Inter + Noto Sans SC; serif: Source Serif + Noto Serif SC), text size, **正文宽度** (reading width: 适中 720 px, 宽 920 px (default), 铺满 full width), list density, auto-archive, notification sound, start with Windows, auto-update, check for updates, open the data folder, repo filing and closed tabs.
@@ -188,7 +199,9 @@ Press `?` in the app for the same sheet.
 | `↑` `↓` / `J` `K` | previous / next message | `1`–`9` | pick option N |
 | `N` / `Shift+N` | next / previous waiting decision | `Ctrl+Enter` | submit, or send a follow-up |
 | `Shift+↑` `↓` | extend the selection | `Enter` | open, or write a note / follow-up |
-| `/`, `Ctrl+F` | search | `R` | mark handled |
+| `/`, `Ctrl+Shift+F` | search all messages | `R` | mark handled |
+| `Ctrl+F` | find in the open message | | |
+| `Home` / `End` | top / end of the message | | |
 | `[` `]` | previous / next repo tab | | |
 | `F` | unhandled only, on / off | | |
 | `Esc` | back one layer: menu or dialog → narrow reader → search → ticks → repo filter | | |
@@ -199,6 +212,8 @@ Press `?` in the app for the same sheet.
 | `U` | read / unread | `Ctrl+P` | export PDF |
 | `X` | tick the current message | `Ctrl+,` | settings |
 | `Ctrl+A` | select all | `?` | shortcuts |
+| | | `Ctrl` + wheel, `Ctrl+=` `-` | zoom in / out |
+| | | `Ctrl+0` | reset zoom |
 | `Delete` | delete | | |
 | `Z`, `Ctrl+Z` | undo (while its notice is showing) | | |
 
@@ -212,23 +227,28 @@ DESK=C:/path/to/ClaudeDesk/desk.py
 
 # Post a decision; prints the new message id. The body is a UTF-8 Markdown file.
 # The calling Claude Code session and the git repo it was started in are recorded automatically (no --source / --repo).
-"$PY" "$DESK" post --kind decision --title "Run the full regression suite before releasing?" \
-    --body-file plan.md --option "Full regression::about 25 minutes, safest" \
-    --option "Release now::CI already ran the unit tests" --option "Smoke test only::about 5 minutes" \
-    --recommended 1 [--priority high]
+"$PY" "$DESK" decide "Run the full regression suite before releasing?" --body-file plan.md \
+    -o "Full regression::about 25 minutes, safest" -o "Release now::CI already ran the unit tests" \
+    -o "Smoke test only::about 5 minutes" --rec 1 [--high]
 
 # The session's one listener. Run it in the background with no timeout. It returns once with every pending
 # reply and follow-up for this session, one JSON line each; handle them all, then start it again.
 "$PY" "$DESK" listen
 
-# Post an answer just written in the chat: the question and the answer come from the session transcript.
-"$PY" "$DESK" post --kind answer --title "Why is CI slower today?" --question-from-chat --body-from-chat
+# Post an answer just written in the chat: the question, the answer and the title come from the session transcript.
+"$PY" "$DESK" answer ["Why is CI slower today?"]
 
 # Answer a follow-up (the id from its listen line); the question is filled in from the follow-up.
-"$PY" "$DESK" post --kind answer --reply-to <follow-up id> --title "About 25 minutes" --body-from-chat
+"$PY" "$DESK" answer --reply-to <follow-up id>
 
 # Post a notice. --body - reads the body from stdin.
-"$PY" "$DESK" post --kind info --title "Long run finished" --body "Results in ..."
+"$PY" "$DESK" info "Long run finished" --body "Results in ..."
+
+# The long form still works: post --kind decision|answer|info with --title, --option, --recommended, --priority,
+# --question-from-chat, --body-from-chat.
+
+# Connect Claude Code (skill + hooks); what the app's 一键接入 button runs.
+"$PY" "$DESK" setup [--dry-run] [--remove] [--no-block-ask] [--python P] [--config DIR]
 
 # The user answered in the chat instead: mark one decision handled, or all of this session's waiting ones.
 "$PY" "$DESK" close --id <id> --text "User answered in chat: B"

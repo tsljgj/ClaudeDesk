@@ -4,6 +4,27 @@ All notable changes to ClaudeDesk are listed here. The format is based on [Keep 
 
 The version is the one shown in the window footer (`v2.2.0 · build N`). Every green build on `main` is also published as a release tagged `build-<N>`; installed copies update to the newest build, so one version usually spans several builds.
 
+## [2.4.0] - 2026-11-25
+
+### Added
+
+- **Connect Claude Code in one click.** Settings → 接入 Claude Code installs the skill with this machine's real paths and three hooks in `~/.claude/settings.json` (backed up first; only ClaudeDesk's own entries are touched). Also `desk.py setup [--dry-run] [--remove]`.
+- **Hooks that catch what sessions forget.** At session start the rules and what's waiting are injected; `AskUserQuestion` is turned into a ready `desk decide` command while the app runs; at the end of a turn an answer written in the chat but never posted is posted for the session (marked **自动补发**), a single forgotten follow-up answer too, several unanswered follow-ups block once with the exact commands, and a session with waiting decisions but no `listen` is told to start one.
+- **Short commands.** `desk answer` (no arguments needed: body, question and title come from the transcript), `desk answer --reply-to <id>`, `desk decide "…" -o "label::desc" --rec N --high`, `desk info "…"`. `post --kind …` still works.
+- **Find in the message** (`Ctrl+F`, toolbar magnifier): highlights, count, `Enter` / `Shift+Enter`; **搜全部** / `Ctrl+Shift+F` searches all messages.
+- **Zoom** with `Ctrl` + wheel or `Ctrl` + `=` / `-` / `0` (80–180 %), list and reader together, remembered.
+- **Reading position** is remembered per message (also across restarts); jump-to-top / jump-to-end buttons and `Home` / `End`.
+- **Tidy by age** ("⋯" → 按时间整理): archive or delete everything older than 1 h / 6 h / 12 h / 24 h / 7 days (or any age) in this tab or all tabs; delete confirms with Cancel focused. Mark every waiting decision handled in the tab or everywhere. The archive-handled menu gains 6 h and 12 h.
+- Right-click a decision → **这个会话的待决定都标为已处理**.
+- GitHub-style callouts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`).
+- **Local file paths open in one click.** Paths in a message (`C:\work\report.md`, `C:/…`, Git Bash `/c/…`, `file:///C:/…`, quoted paths or a whole `` `code` `` span with spaces, `[text](C:\…)` links) get a file or folder icon; click opens the file with its default app, `Ctrl` + click, middle click or right-click → 打开所在文件夹 shows it selected in Explorer, right-click → 复制路径. The app checks the paths first: ones that don't exist look like plain text, and Chinese stuck to the end (`…\data下面`) is left out. Files that run when opened (`.exe`, `.bat`, `.ps1`, `.py`, `.lnk`…) are only selected in Explorer, and network paths (`\\server\…`) are never opened. In a browser or on the phone a click copies the path.
+
+### Changed
+
+- Buttons ease on hover and press in when clicked; option cards tint on hover; danger and disabled buttons read clearly.
+- Tighter reading rhythm: a smaller title, less space between paragraphs and list items, quotes on a soft background. A chip in the header says 决定 / 回答 / 通知, and notices are set a little tighter.
+- `Ctrl+F` now finds in the open message; searching all messages moved to `/` and `Ctrl+Shift+F` (and `Ctrl+F` when nothing is open).
+
 ## [2.3.0] - 2026-11-25
 
 ### Added

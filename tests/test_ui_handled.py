@@ -287,7 +287,7 @@ def ages(page):  # 菜单里每一档：[档, 读屏念的"早于 N · M 条", �
 
 
 def test_archive_handled_by_age(env):
-    """按时间归档已处理的：#handledBtn 和"⋯"菜单打开同一个菜单（早于 1 小时 / 24 小时 / 7 天 / 全部，各写条数，0 条的按不了）。
+    """按时间归档已处理的：#handledBtn 和"⋯"菜单打开同一个菜单（早于 1 / 6 / 12 / 24 小时、7 天、全部，各写条数，0 条的按不了）。
     "早于"按最后一次动静算（收到、回复、在界面里打开）；正在看的那条永远不动；只动当前项目；记住上次选的那档；能用键盘；
     撤销恰好放回这一批。"""
     d, store, server, page, errors = env
@@ -312,13 +312,14 @@ def test_archive_handled_by_age(env):
     h = page.locator("#handledBtn")
     page.wait_for_function("document.getElementById('handledBtn').title === '归档已处理的…：选早于多久（alpha · 共 5 条已读、不用再决定）'")
 
-    # 点按钮：先出菜单，不直接归档；焦点在第一档，↓ 回车选"早于 24 小时"
+    # 点按钮：先出菜单，不直接归档；焦点在第一档，↓↓↓ 回车选"早于 24 小时"
     h.click()
     page.wait_for_selector("#popover:not([hidden])")
-    assert ages(page) == [["1h", "早于 1 小时 · 3 条", True], ["24h", "早于 24 小时 · 2 条", True],
-                          ["7d", "早于 7 天 · 1 条", True], ["all", "全部 · 5 条", True]]
+    assert ages(page) == [["1h", "早于 1 小时 · 3 条", True], ["6h", "早于 6 小时 · 2 条", True], ["12h", "早于 12 小时 · 2 条", True],
+                          ["24h", "早于 24 小时 · 2 条", True], ["7d", "早于 7 天 · 1 条", True], ["all", "全部 · 5 条", True]]
     assert store.archived == set() and page.evaluate("document.activeElement.dataset.age") == "1h"
-    page.keyboard.press("ArrowDown")
+    for _ in range(3):
+        page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     wait_toast(page, "已归档 2 条（早于 24 小时）")
     assert store.archived == {d2, w2}  # 三天前发的那条刚看过：不算旧
@@ -341,15 +342,15 @@ def test_archive_handled_by_age(env):
     # 0 条的那档按不了，键盘跳过它；Esc 关掉菜单，焦点回到按钮，回车再打开
     h.click()
     page.wait_for_selector("#popover:not([hidden])")
-    assert ages(page) == [["1h", "早于 1 小时 · 2 条", True], ["24h", "早于 24 小时 · 1 条", True],
-                          ["7d", "早于 7 天 · 0 条", False], ["all", "全部 · 4 条", True]]
+    assert ages(page) == [["1h", "早于 1 小时 · 2 条", True], ["6h", "早于 6 小时 · 1 条", True], ["12h", "早于 12 小时 · 1 条", True],
+                          ["24h", "早于 24 小时 · 1 条", True], ["7d", "早于 7 天 · 0 条", False], ["all", "全部 · 4 条", True]]
     assert page.evaluate("document.activeElement.dataset.age") == "1h"  # 上次选的那档现在是 0 条：焦点在第一档
     page.keyboard.press("Escape")
     assert page.is_hidden("#popover") and page.evaluate("document.activeElement.id") == "handledBtn"
     page.keyboard.press("Enter")
     page.wait_for_selector("#popover:not([hidden])")
-    page.keyboard.press("ArrowDown")
-    page.keyboard.press("ArrowDown")
+    for _ in range(4):  # 6h、12h、24h，跳过 0 条的 7d
+        page.keyboard.press("ArrowDown")
     assert page.evaluate("document.activeElement.dataset.age") == "all"
     page.keyboard.press("Enter")
     wait_toast(page, "已归档 4 条")

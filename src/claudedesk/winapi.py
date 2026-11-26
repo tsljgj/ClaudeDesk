@@ -332,6 +332,49 @@ def open_path(path) -> None:
         subprocess.Popen(["xdg-open", p])
 
 
+def reveal(path) -> None:
+    """在资源管理器里打开所在文件夹并选中它。用 SHOpenFolderAndSelectItems：
+    不走 explorer /select 的命令行（带逗号、空格的路径要靠引号，各版本解析不一样）；失败了再退回命令行。"""
+    p = str(path)
+    if not WIN:
+        open_path(os.path.dirname(p.rstrip("/\\")) or p)
+        return
+    try:
+        ole, sh = ctypes.WinDLL("ole32"), ctypes.WinDLL("shell32")
+        ole.CoInitializeEx.restype = ctypes.c_long
+        ole.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        sh.ILCreateFromPathW.restype = ctypes.c_void_p
+        sh.ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
+        sh.SHOpenFolderAndSelectItems.restype = ctypes.c_long
+        sh.SHOpenFolderAndSelectItems.argtypes = [ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p, wintypes.DWORD]
+        sh.ILFree.argtypes = [ctypes.c_void_p]
+        hr = ole.CoInitializeEx(None, 2)  # 单线程套间；这个线程已经初始化过也照样能用
+        try:
+            pidl = sh.ILCreateFromPathW(p)
+            if pidl:
+                try:
+                    if sh.SHOpenFolderAndSelectItems(pidl, 0, None, 0) == 0:
+                        return
+                finally:
+                    sh.ILFree(pidl)
+        finally:
+            if hr in (0, 1):  # S_OK / S_FALSE 才要配对 CoUninitialize
+                ole.CoUninitialize()
+    except (OSError, AttributeError):
+        pass
+    subprocess.Popen(f'explorer.exe /select,"{p}"')  # noqa: S603 - 路径已经过 localfiles.local_path，不含引号
+
+
+def remote_drive(path) -> bool:
+    """路径在网络映射盘上：查它在不在可能卡好几秒（服务器连不上时），界面上就不先查了。"""
+    if not WIN:
+        return False
+    try:
+        return ctypes.WinDLL("kernel32").GetDriveTypeW(ctypes.c_wchar_p(str(path)[:3])) == 4  # DRIVE_REMOTE
+    except OSError:
+        return False
+
+
 # ------------------------------------------------------------------ 开机自启（HKCU\...\Run，不需要管理员）
 def _old_startup_link() -> Path:
     return Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs/Startup/ClaudeDesk.lnk"

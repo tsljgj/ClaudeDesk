@@ -34,19 +34,75 @@
   }
   function okUrl(u) { return /^(https?:\/\/[^\/?#\s.]+[^\/?#\s]*|www\.[^\/?#\s.]+\.[^\/?#\s]+)/i.test(u); } // 至少有个主机名
   function hrefOf(u) { return /^www\./i.test(u) ? "http://" + u : u; }
-  // 纯文本（选项说明、追问、回复、原问题）转义后把网址变成链接
+  // ---------------------------------------------------------------- 本机路径
+  // Claude 常在回复里写文件路径：C:\work\report.md、C:/work/a.py、Git Bash 的 /c/work/a.py、file:///C:/work/a.py，
+  // 有空格的会用引号括起来（"C:\Program Files\x\a.txt"）。认出来的变成 <a class="path-link" data-path>（没有 href，
+  // 不会被当成网址），点了交给程序打开；能不能打开、该不该直接打开由程序再判断（localfiles.py）
+  var CJK_PUNCT = "\u2018-\u201f\u2026\u3000-\u303f\uff00-\uffef";
+  var PATH_HEAD = "(?:file:\\/\\/(?:localhost)?\\/?[A-Za-z]:[\\\\\\/]?|[A-Za-z]:[\\\\\\/]|\\/[A-Za-z]\\/)";
+  var PATH_BODY = "[^\\s<>\"'`|?*:" + CJK_PUNCT + "]*";
+  var PATH_RE = new RegExp('"(' + PATH_HEAD + '[^"<>|?*\\r\\n]*)"|\u201c(' + PATH_HEAD + '[^\u201d<>|?*\\r\\n]*)\u201d|\'(' +
+    PATH_HEAD + "[^'<>|?*\\r\\n]*)'|(" + PATH_HEAD + PATH_BODY + ")", "g");
+  var PATH_HEAD_RE = new RegExp("^" + PATH_HEAD);
+  function isPath(s) { return PATH_HEAD_RE.test(s) && s.replace(PATH_HEAD_RE, "").length > 0 && !/[\r\n<>|?*"]/.test(s); }
+  // 没引号的路径遇到空格就断了；"C:\Program Files\App\a.txt" 这种空格后面还接着一段带分隔符的，接上
+  function stretchPath(s, end, sep) {
+    var more = new RegExp("^ [^\\s<>\"'`|?*:\\\\\\/" + CJK_PUNCT + "]+\\" + sep + PATH_BODY);
+    for (;;) {
+      var m = more.exec(s.slice(end));
+      if (!m) return end;
+      end += m[0].length;
+    }
+  }
+  function tidyPath(p) {
+    p = tidyUrl(p);
+    var m = /^(.*\.[A-Za-z0-9]{1,10})[\u3400-\u4dbf\u4e00-\u9fff]+$/.exec(p); // "C:\a\report.md里面"：文件名到扩展名为止
+    return m ? m[1] : p;
+  }
+  function findPaths(s, taken) {
+    var hits = [], m;
+    PATH_RE.lastIndex = 0;
+    while ((m = PATH_RE.exec(s))) {
+      var quoted = m[1] || m[2] || m[3], at = m.index, text, i, j;
+      if (quoted != null) { text = quoted; i = at + 1; j = i + text.length; }
+      else {
+        if (at > 0 && /[\w\/\\.:~\-]/.test(s.charAt(at - 1))) { PATH_RE.lastIndex = at + 1; continue; } // abc:\、x/c/d 里的不算
+        var sep = /[\\\/]/.exec(m[4].replace(/^file:\/+/i, "").slice(2)) || /[\\\/]/.exec(m[4]);
+        j = stretchPath(s, at + m[4].length, sep ? sep[0] : "\\");
+        text = tidyPath(s.slice(at, j));
+        i = at; j = at + text.length;
+        PATH_RE.lastIndex = Math.max(j, at + 1);
+      }
+      if (!isPath(text) || taken(i, j)) continue;
+      hits.push({ i: i, j: j, text: text, path: text });
+    }
+    return hits;
+  }
+  function pathTag(path, text) {
+    return '<a class="path-link" data-path="' + escapeHtml(path) + '">' + escapeHtml(text) + "</a>";
+  }
+
+  // 纯文本（选项说明、追问、回复、原问题）转义后把网址、本机路径变成链接
   function linkText(s) {
     s = String(s == null ? "" : s);
-    var out = "", last = 0, m;
+    var hits = [], m;
     URL_RE.lastIndex = 0;
     while ((m = URL_RE.exec(s))) {
       var u = tidyUrl(m[0]);
       if (!okUrl(u)) continue;
-      out += escapeHtml(s.slice(last, m.index)) + '<a href="' + escapeHtml(hrefOf(u)) + '" target="_blank" rel="noopener noreferrer" title="点击在浏览器中打开">' +
-        escapeHtml(u) + "</a>";
-      last = m.index + u.length;
-      URL_RE.lastIndex = last;
+      hits.push({ i: m.index, j: m.index + u.length, text: u, url: hrefOf(u) });
+      URL_RE.lastIndex = m.index + u.length;
     }
+    var urls = hits.slice();
+    hits = hits.concat(findPaths(s, function (i, j) {
+      return urls.some(function (h) { return i < h.j && j > h.i; });
+    })).sort(function (a, b) { return a.i - b.i; });
+    var out = "", last = 0;
+    hits.forEach(function (h) {
+      out += escapeHtml(s.slice(last, h.i)) + (h.url ? '<a href="' + escapeHtml(h.url) +
+        '" target="_blank" rel="noopener noreferrer" title="点击在浏览器中打开">' + escapeHtml(h.text) + "</a>" : pathTag(h.path, h.text));
+      last = h.j;
+    });
     return out + escapeHtml(s.slice(last));
   }
   // markdown-it 的自动链接会把紧跟着的汉字也算进网址：截到第一个汉字 / 全角标点为止
@@ -64,9 +120,18 @@
   function autolink(root) {
     var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), hits = [], n;
     while ((n = w.nextNode())) {
-      if (/https?:\/\/|www\./i.test(n.nodeValue) && !n.parentNode.closest("a, pre, .math, .katex, button, textarea")) hits.push(n);
+      if (/https?:\/\/|www\.|[A-Za-z]:[\\\/]|\/[A-Za-z]\//i.test(n.nodeValue) && !n.parentNode.closest("a, pre, .math, .katex, button, textarea")) hits.push(n);
     }
     hits.forEach(function (t) {
+      var c = t.parentNode, code = c.nodeName === "CODE" && c.childNodes.length === 1 ? t.nodeValue.trim().replace(/^(["'])(.*)\1$/, "$2") : "";
+      if (code && isPath(code)) { // `C:\Program Files\x\a.txt`：整段行内代码就是一个路径，空格也算
+        var a = document.createElement("a");
+        a.className = "path-link";
+        a.setAttribute("data-path", code);
+        c.parentNode.insertBefore(a, c);
+        a.appendChild(c);
+        return;
+      }
       var html = linkText(t.nodeValue);
       if (html.indexOf("<a ") < 0) return;
       var box = document.createElement("span"), frag = document.createDocumentFragment();
@@ -200,6 +265,26 @@
     return true;
   }
 
+  // ---------------------------------------------------------------- 提示块：> [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]
+  // GitHub 的写法；agent 常用它标"注意 / 风险"。引用块第一行是标记就整块换成带标题的彩色提示框
+  var CALLOUT = { note: "说明", tip: "提示", important: "重要", warning: "注意", caution: "警告" };
+  var CALLOUT_RE = /^\[!(note|tip|important|warning|caution)\][ \t]*(?:\n|$)/i;
+  function callouts(state) {
+    var t = state.tokens;
+    for (var i = 0; i + 3 < t.length; i++) {
+      if (t[i].type !== "blockquote_open" || t[i + 1].type !== "paragraph_open" || t[i + 2].type !== "inline") continue;
+      var inl = t[i + 2], m = CALLOUT_RE.exec(inl.content);
+      if (!m) continue;
+      t[i].meta = t[i].meta || {};
+      t[i].meta.callout = m[1].toLowerCase();
+      var rest = inl.content.slice(m[0].length);
+      inl.content = rest;
+      inl.children = [];
+      if (rest.trim()) state.md.inline.parse(rest, state.md, state.env, inl.children);
+      else { t[i + 1].hidden = true; t[i + 3].hidden = true; } // 标记单独一行：不留空段落
+    }
+  }
+
   // ---------------------------------------------------------------- 任务列表 [ ] / [x]
   function taskLists(state) {
     var tokens = state.tokens;
@@ -262,6 +347,12 @@
     md.inline.ruler.before("escape", "math_inline", mathInline);
     md.block.ruler.after("blockquote", "math_block", mathBlock, { alt: ["paragraph", "reference", "blockquote", "list"] });
     md.core.ruler.after("inline", "task_lists", taskLists);
+    md.core.ruler.after("inline", "callouts", callouts);
+    md.renderer.rules.blockquote_open = function (tokens, idx, options, env, self) {
+      var c = tokens[idx].meta && tokens[idx].meta.callout;
+      if (!c) return self.renderToken(tokens, idx, options);
+      return '<blockquote class="callout callout-' + c + '"><p class="callout-title">' + CALLOUT[c] + "</p>\n";
+    };
     md.renderer.rules.math_inline = function (tokens, idx) {
       return mathTag(tokens[idx].content, !!(tokens[idx].meta && tokens[idx].meta.display));
     };
@@ -285,8 +376,16 @@
     var defaultLink = md.renderer.rules.link_open || function (tokens, idx, options, env, self) {
       return self.renderToken(tokens, idx, options);
     };
+    var validate = md.validateLink;
+    md.validateLink = function (url) { return /^file:\/\//i.test(url) || validate(url); }; // [报告](file:///C:/…) 也算链接，下面换成本机路径
     md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
-      tokens[idx].attrSet("target", "_blank");
+      var t = tokens[idx], href = t.attrGet("href") || "", p = href;
+      try { p = decodeURIComponent(href); } catch (e) { /* 不是合法的 % 编码：按原样看 */ }
+      if (isPath(p)) { // [报告](C:\work\report.md)：本机路径，不当网址
+        t.attrs = [["class", "path-link"], ["data-path", p]];
+        return self.renderToken(tokens, idx, options);
+      }
+      t.attrSet("target", "_blank");
       tokens[idx].attrSet("rel", "noopener noreferrer");
       return defaultLink(tokens, idx, options, env, self);
     };
@@ -313,7 +412,7 @@
   // 正文里的原始 HTML 不能跳出正文：style 只留排版用的几项（position、z-index、inset、transform 能盖住整个界面），
   // class 只留本文件自己生成的（否则 class="modal-back" 之类会套上界面自己的浮层样式）
   var STYLE_OK = /^(text-align|vertical-align|color|background-color|font-weight|font-style|text-decoration(-[a-z]+)?|white-space|(min-|max-)?(width|height))$/;
-  var CLASS_OK = /^(math|math-inline|math-display|codeblock|code-head|code-lang|hljs|hljs-[\w-]+|language-[\w+#.-]+|[\w-]+_|task|done|task-item|table-wrap)$/;
+  var CLASS_OK = /^(math|math-inline|math-display|codeblock|code-head|code-lang|hljs|hljs-[\w-]+|language-[\w+#.-]+|[\w-]+_|task|done|task-item|table-wrap|path-link|callout|callout-(?:note|tip|important|warning|caution|title))$/;
   function cleanAttr(node, data) {
     var kept;
     if (data.attrName === "style") {
@@ -338,8 +437,8 @@
     html = html.split(PIPE).join("|");
     if (global.DOMPurify) {
       html = global.DOMPurify.sanitize(html, {
-        ADD_ATTR: ["target", "data-tex"],
-        ADD_URI_SAFE_ATTR: ["data-tex"], // 否则 "f: X \to Y" 像个未知协议的网址，data-tex 会被删掉，公式出不来
+        ADD_ATTR: ["target", "data-tex", "data-path"],
+        ADD_URI_SAFE_ATTR: ["data-tex", "data-path"], // 否则 "f: X \to Y" 像个未知协议的网址，data-tex 会被删掉，公式出不来
         FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "iframe", "object", "embed"],
         ALLOW_DATA_ATTR: false,
         SANITIZE_NAMED_PROPS: true, // id="modal" 之类加前缀 user-content-，不会和界面自己的 id 撞上
@@ -387,5 +486,5 @@
     });
   }
 
-  global.DeskMarkdown = { toHtml: toHtml, hydrate: hydrate, escapeHtml: escapeHtml, linkText: linkText };
+  global.DeskMarkdown = { toHtml: toHtml, hydrate: hydrate, escapeHtml: escapeHtml, linkText: linkText, isPath: isPath };
 })(typeof window !== "undefined" ? window : globalThis);

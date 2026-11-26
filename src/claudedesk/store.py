@@ -527,6 +527,11 @@ class Store:
             "resolved": bool((resp or {}).get("resolved")),
             "last_active": self.last_active(m, resp).isoformat(),
         }
+        own = self.owner(m)
+        if own:  # 哪个会话的（接管过的按接管后的）：界面上"这个会话的待决定全部标为已处理"用
+            s["session"] = own
+        if m.get("auto"):  # Stop hook 替会话补发的（会话答了 / 回了追问却忘了发）
+            s["auto"] = True
         if resp is not None and resp.get("silent"):  # 标为已处理 / 跳过时没有通知会话（旧记录没有这个标记：当时通知了）
             s["silent"] = True
         # 追问（除了还没回复的决定，每条都能追问）：listening = 它的会话现在在不在听；有追问 / 回应的带
