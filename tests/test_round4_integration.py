@@ -1,10 +1,26 @@
 """第四轮集成测试（浏览器）：关掉的标签、只看未处理、标为已处理、归档已处理、追问、正文宽度这几样功能互相之间的配合。"""
+import datetime as dt
 import threading
 import time
 
 import desk
-from test_ui import env, post  # noqa: F401（env 是 fixture）
+from test_ui import env  # noqa: F401（env 是 fixture）
 from test_ui_state import wait_until
+
+_last_ts = [None]
+
+
+def post(d, **kw):
+    """发一条消息，时间比上一条至少晚 1 毫秒。同一毫秒里发的几条在列表里先后不定，断言列表顺序的测试会偶尔挂。"""
+    kw.setdefault("source", "proj")
+    m = desk.make_message(**kw)
+    t = dt.datetime.now().astimezone()
+    t = t.replace(microsecond=t.microsecond // 1000 * 1000)
+    if _last_ts[0] is not None and t <= _last_ts[0]:
+        t = _last_ts[0] + dt.timedelta(milliseconds=1)
+    _last_ts[0] = t
+    m["ts"] = t.isoformat(timespec="milliseconds")
+    return desk.post_message(m, d)
 
 
 def start(page, server):
